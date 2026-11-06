@@ -172,6 +172,7 @@ class WebDashboard:
         self.app.router.add_post('/api/resume', self.handle_resume_entries)
         self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
         self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
+        self.app.router.add_post('/api/test-notification', self.handle_test_notification)
 
     async def handle_terms(self, request):
         """Serve the terms and glossary page."""
@@ -420,6 +421,12 @@ class WebDashboard:
             "strategy_name": self.config.strategy.name.upper(),
             "timeframe": self.config.strategy.timeframe,
             "trades": trades,
+            "notifications": {
+                "enabled": self.config.enable_notifications,
+                "telegram": bool(self.config.telegram_bot_token and self.config.telegram_chat_id),
+                "email": bool(self.config.smtp_host and self.config.alert_email),
+                "discord": bool(self.config.discord_webhook_url),
+            },
         }
 
     async def handle_status(self, request):
@@ -517,6 +524,43 @@ class WebDashboard:
         except Exception as exc:
             logger.error("Testnet smoke trade did not complete (%s)", type(exc).__name__)
             return web.json_response({"error": f"Smoke trade did not complete ({type(exc).__name__}); inspect the service logs."}, status=409)
+
+    async def handle_test_notification(self, request):
+        if not self._is_valid_origin(request):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+
+        channels = []
+        if self.config.telegram_bot_token and self.config.telegram_chat_id:
+            channels.append("Telegram")
+        if self.config.smtp_host and self.config.alert_email:
+            channels.append("Email/SMS")
+        if self.config.discord_webhook_url:
+            channels.append("Discord")
+
+        if not channels:
+            return web.json_response({
+                "success": False,
+                "message": "No notification channels configured. Add Telegram, SMTP/Email, or Discord settings in Railway variables."
+            }, status=400)
+
+        loop = asyncio.get_event_loop()
+        test_msg = (
+            "🔔 *Trading Bot Alert Test*\n"
+            "This is a test notification from your Trading Lab surveillance dashboard.\n"
+            f"Active channels: {', '.join(channels)}"
+        )
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: self.bot.send_notification(test_msg, subject="🔔 Trading Bot Alert Test")
+            )
+            return web.json_response({
+                "success": True,
+                "message": f"Test alert dispatched to: {', '.join(channels)}",
+                "channels": channels
+            })
+        except Exception as exc:
+            return web.json_response({"success": False, "message": str(exc)}, status=500)
 
     def run(self):
         print(f"\n🚀 Trading Bot Web Dashboard launching on port {self.port}...")

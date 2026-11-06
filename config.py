@@ -63,6 +63,12 @@ class BotConfig:
     enable_notifications: bool = os.getenv("ENABLE_NOTIFICATIONS", "true").lower() == "true"
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    smtp_host: str = os.getenv("SMTP_HOST", "")
+    smtp_port: int = int(os.getenv("SMTP_PORT", "587")) if os.getenv("SMTP_PORT", "587").strip().isdigit() else 587
+    smtp_user: str = os.getenv("SMTP_USER", "")
+    smtp_password: str = os.getenv("SMTP_PASSWORD", "")
+    alert_email: str = os.getenv("ALERT_EMAIL", "")
+    discord_webhook_url: str = os.getenv("DISCORD_WEBHOOK_URL", "")
     dashboard_token: str = os.getenv("DASHBOARD_TOKEN", "")
     data_dir: str = os.getenv("DATA_DIR", "data")
     max_spread_bps: float = float(os.getenv("MAX_SPREAD_BPS", "20"))
@@ -164,6 +170,8 @@ class BotConfig:
             errors.append("MIN_TREND_ADX must be a finite value between 0 and 100")
         if not math.isfinite(self.strategy.max_atr_pct) or self.strategy.max_atr_pct <= 0:
             errors.append("MAX_ATR_PCT must be a finite value greater than 0")
+        if self.smtp_host and not (1 <= self.smtp_port <= 65535):
+            errors.append("SMTP_PORT must be an integer between 1 and 65535")
 
         return errors
 

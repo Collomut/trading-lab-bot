@@ -20,7 +20,7 @@ from strategies import (
     ohlcv_to_dataframe
 )
 from risk_manager import RiskManager, Position
-from config import ExchangeConfig, RiskConfig
+from config import BotConfig, ExchangeConfig, RiskConfig
 from exchange import ExchangeConnector, filter_closed_ohlcv
 from bot_engine import TradingBot
 
@@ -440,6 +440,97 @@ class TestTradingBot(unittest.TestCase):
         snapshot, orders = connector.fetch_account_snapshot()
         self.assertTrue(connector.is_fallback_simulated)
         self.assertIn("USDT", snapshot["total"])
+
+    def test_telegram_notification_dispatch(self):
+        from unittest.mock import patch, MagicMock
+        from bot_engine import TradingBot
+        config = BotConfig(
+            telegram_bot_token="fake_bot_token",
+            telegram_chat_id="fake_chat_id",
+            dashboard_token="test_token",
+        )
+        with patch.object(TradingBot, "_setup_logging"), \
+             patch.object(TradingBot, "_setup_trade_log"), \
+             patch("exchange.ExchangeConnector"), \
+             patch("bot_engine.urllib.request.urlopen") as mock_urlopen:
+            bot = TradingBot(config)
+            bot.send_notification("Test telegram alert")
+            self.assertTrue(mock_urlopen.called)
+            req = mock_urlopen.call_args[0][0]
+            self.assertIn("api.telegram.org", req.full_url)
+            self.assertIn("fake_bot_token", req.full_url)
+
+    def test_email_notification_dispatch(self):
+        from unittest.mock import patch, MagicMock
+        from bot_engine import TradingBot
+        config = BotConfig(
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_user="alerts@example.com",
+            smtp_password="secretpassword",
+            alert_email="trader@example.com",
+            dashboard_token="test_token",
+        )
+        with patch.object(TradingBot, "_setup_logging"), \
+             patch.object(TradingBot, "_setup_trade_log"), \
+             patch("exchange.ExchangeConnector"), \
+             patch("smtplib.SMTP") as mock_smtp:
+            server_instance = MagicMock()
+            mock_smtp.return_value = server_instance
+
+            bot = TradingBot(config)
+            bot.send_notification("Test email body", subject="Test Subject")
+
+            mock_smtp.assert_called_with("smtp.example.com", 587, timeout=10)
+            server_instance.starttls.assert_called_once()
+            server_instance.login.assert_called_with("alerts@example.com", "secretpassword")
+            server_instance.sendmail.assert_called_once()
+            args = server_instance.sendmail.call_args[0]
+            self.assertEqual(args[0], "alerts@example.com")
+            self.assertEqual(args[1], ["trader@example.com"])
+            self.assertIn("Test Subject", args[2])
+
+    def test_discord_notification_dispatch(self):
+        import json
+        from unittest.mock import patch
+        from bot_engine import TradingBot
+        config = BotConfig(
+            discord_webhook_url="https://discord.com/api/webhooks/123/xyz",
+            dashboard_token="test_token",
+        )
+        with patch.object(TradingBot, "_setup_logging"), \
+             patch.object(TradingBot, "_setup_trade_log"), \
+             patch("exchange.ExchangeConnector"), \
+             patch("bot_engine.urllib.request.urlopen") as mock_urlopen:
+            bot = TradingBot(config)
+            bot.send_notification("Test discord alert")
+            self.assertTrue(mock_urlopen.called)
+            req = mock_urlopen.call_args[0][0]
+            self.assertEqual(req.full_url, "https://discord.com/api/webhooks/123/xyz")
+            body = json.loads(req.data.decode("utf-8"))
+            self.assertIn("Test discord alert", body["content"])
+
+    def test_notification_disabled(self):
+        from unittest.mock import patch
+        from bot_engine import TradingBot
+        config = BotConfig(
+            enable_notifications=False,
+            telegram_bot_token="fake_bot_token",
+            telegram_chat_id="fake_chat_id",
+            smtp_host="smtp.example.com",
+            alert_email="trader@example.com",
+            discord_webhook_url="https://discord.com/api/webhooks/123/xyz",
+            dashboard_token="test_token",
+        )
+        with patch.object(TradingBot, "_setup_logging"), \
+             patch.object(TradingBot, "_setup_trade_log"), \
+             patch("exchange.ExchangeConnector"), \
+             patch("bot_engine.urllib.request.urlopen") as mock_urlopen, \
+             patch("smtplib.SMTP") as mock_smtp:
+            bot = TradingBot(config)
+            bot.send_notification("Should not be sent")
+            self.assertFalse(mock_urlopen.called)
+            self.assertFalse(mock_smtp.called)
 
 
 if __name__ == "__main__":

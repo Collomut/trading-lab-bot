@@ -101,25 +101,89 @@ class TradingBot:
         with open(self.trade_log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(trade_data) + "\n")
 
-    def send_notification(self, message: str):
-        """Send notifications to console and optional Telegram bot."""
+    def _send_telegram_notification(self, message: str):
+        """Send notification to Telegram bot."""
+        if not (self.config.telegram_bot_token and self.config.telegram_chat_id):
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage"
+            payload = {
+                "chat_id": self.config.telegram_chat_id,
+                "text": message,
+                "parse_mode": "Markdown",
+            }
+            data = urllib.parse.urlencode(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data)
+            urllib.request.urlopen(req, timeout=5)
+            logger.info("Telegram notification dispatched successfully")
+        except Exception:
+            logger.debug("Telegram notification delivery failed (details suppressed)")
+
+    def _send_email_notification(self, subject: str, message: str):
+        """Send an email or carrier SMS notification via SMTP."""
+        if not (self.config.smtp_host and self.config.alert_email):
+            return
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+
+            clean_message = (
+                message.replace("*", "")
+                .replace("`", "")
+            )
+
+            msg = MIMEText(clean_message, "plain", "utf-8")
+            sender = self.config.smtp_user or "trading-bot@railway.internal"
+            msg["Subject"] = subject
+            msg["From"] = sender
+            msg["To"] = self.config.alert_email
+
+            recipients = [addr.strip() for addr in self.config.alert_email.split(",") if addr.strip()]
+            if not recipients:
+                return
+
+            if self.config.smtp_port == 465:
+                server = smtplib.SMTP_SSL(self.config.smtp_host, self.config.smtp_port, timeout=10)
+            else:
+                server = smtplib.SMTP(self.config.smtp_host, self.config.smtp_port, timeout=10)
+                try:
+                    server.starttls()
+                except Exception:
+                    pass
+
+            if self.config.smtp_user and self.config.smtp_password:
+                server.login(self.config.smtp_user, self.config.smtp_password)
+
+            server.sendmail(sender, recipients, msg.as_string())
+            server.quit()
+            logger.info("Email alert dispatched to %s", self.config.alert_email)
+        except Exception as e:
+            logger.warning("Failed to send email notification: %s", str(e))
+
+    def _send_discord_notification(self, message: str):
+        """Send a notification to Discord webhook for instant push notifications."""
+        if not self.config.discord_webhook_url:
+            return
+        try:
+            payload = json.dumps({"content": message}).encode("utf-8")
+            req = urllib.request.Request(
+                self.config.discord_webhook_url,
+                data=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "CryptoTradingBot/1.0"}
+            )
+            urllib.request.urlopen(req, timeout=5)
+            logger.info("Discord webhook notification dispatched")
+        except Exception as e:
+            logger.warning("Failed to send Discord webhook notification: %s", str(e))
+
+    def send_notification(self, message: str, subject: str = "Trading Bot Alert"):
+        """Send notifications to all configured channels (Telegram, Email/SMS, Discord)."""
         if not self.config.enable_notifications:
             return
 
-        # Optional Telegram notification
-        if self.config.telegram_bot_token and self.config.telegram_chat_id:
-            try:
-                url = f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage"
-                payload = {
-                    "chat_id": self.config.telegram_chat_id,
-                    "text": message,
-                    "parse_mode": "Markdown",
-                }
-                data = urllib.parse.urlencode(payload).encode("utf-8")
-                req = urllib.request.Request(url, data=data)
-                urllib.request.urlopen(req, timeout=5)
-            except Exception as e:
-                logger.debug("Telegram notification delivery failed (details suppressed)")
+        self._send_telegram_notification(message)
+        self._send_email_notification(subject, message)
+        self._send_discord_notification(message)
 
     def analyze_market(self, symbol: str):
         """
@@ -626,14 +690,20 @@ class TradingBot:
                     "protected_amount": str(net_filled),
                 })
 
+            pos = self.risk_manager.positions.get(symbol)
+            sl_text = f"${pos.stop_loss_price:,.2f}" if pos else "N/A"
+            tp_text = f"${pos.take_profit_price:,.2f}" if pos else "N/A"
+
             msg = (
                 f"🟢 *BOT BUY EXECUTED*\n"
                 f"Pair: `{symbol}`\n"
                 f"Amount: `{fill_amount:.6f}`\n"
-                f"Price: `${fill_price:,.2f}`\n"
+                f"Entry Price: `${fill_price:,.2f}`\n"
+                f"Stop Loss: `{sl_text}`\n"
+                f"Take Profit: `{tp_text}`\n"
                 f"Reason: {signal.reason}"
             )
-            self.send_notification(msg)
+            self.send_notification(msg, subject=f"🟢 Bot BUY: {symbol} @ ${fill_price:,.2f}")
 
             self._log_trade({
                 "action": "BUY",
@@ -700,7 +770,7 @@ class TradingBot:
                     f"P&L: `${record.pnl:+,.2f}` ({record.pnl_pct:+.2f}%)\n"
                     f"Reason: {record.reason}"
                 )
-                self.send_notification(msg)
+                self.send_notification(msg, subject=f"🔴 Bot SELL: {symbol} (P&L: ${record.pnl:+,.2f})")
 
                 self._log_trade({
                     "action": "SELL",
@@ -757,7 +827,7 @@ class TradingBot:
                         f"Exit Price: `${fill_price:,.2f}`\n"
                         f"P&L: `${record.pnl:+,.2f}` ({record.pnl_pct:+.2f}%)"
                     )
-                    self.send_notification(msg)
+                    self.send_notification(msg, subject=f"🛡️ Position Closed: {symbol} ({reason})")
 
                     self._log_trade({
                         "action": "SELL",
