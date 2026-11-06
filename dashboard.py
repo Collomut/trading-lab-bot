@@ -126,7 +126,16 @@ async def dashboard_auth(request, handler):
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Basic "):
             raise web.HTTPUnauthorized(headers={"WWW-Authenticate": 'Basic realm="Trading Bot", charset="UTF-8"'})
-        return web.Response(text=LOGIN_HTML, content_type="text/html", status=200)
+        return web.Response(
+            text=LOGIN_HTML,
+            content_type="text/html",
+            status=200,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+        )
 
     response = await handler(request)
     if used_query_token:
