@@ -39,8 +39,18 @@ class WebDashboard:
 
     def _setup_routes(self):
         self.app.router.add_get('/', self.handle_index)
+        self.app.router.add_get('/terms', self.handle_terms)
         self.app.router.add_get('/api/status', self.handle_status)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
+
+    async def handle_terms(self, request):
+        """Serve the terms and glossary page."""
+        html_path = Path(__file__).parent / "templates" / "terms.html"
+        if not html_path.exists():
+            return web.Response(text="<h1>Terms template not found</h1>", content_type="text/html")
+        with open(html_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.Response(text=content, content_type="text/html")
 
     def _setup_lifecycle(self):
         self.app.on_startup.append(self.start_background_tasks)
