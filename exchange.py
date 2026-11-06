@@ -42,7 +42,11 @@ def account_access_message(exc: Exception) -> str:
     if isinstance(exc, ccxt.NetworkError):
         return "Binance Testnet could not be reached. Check service networking and retry after it recovers."
     suffix = f" (Binance error {code})" if code else ""
-    return f"Binance Testnet rejected an account request{suffix}. Check the service logs and confirm the Testnet key permissions."
+    return (
+        f"Binance Testnet rejected the authenticated account request{suffix}. In Railway, verify that API_KEY and "
+        "API_SECRET are the matching, active Spot Testnet pair, with Spot permission and any required IP access. "
+        "Demo or live credentials will not work on this endpoint."
+    )
 
 
 def filter_closed_ohlcv(candles: list, timeframe_seconds: float, now_ms: int | None = None) -> list:

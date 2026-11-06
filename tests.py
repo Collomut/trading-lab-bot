@@ -289,6 +289,7 @@ class TestTradingBot(unittest.TestCase):
         self.assertIn("API_SECRET does not match", account_access_message(ccxt.ExchangeError('{"code":-1022,"msg":"signature invalid"}')))
         self.assertIn("API key, IP, or permissions", account_access_message(ccxt.ExchangeError('{"code":-2015,"msg":"key rejected"}')))
         self.assertIn("API key, IP, or permissions", account_access_message(ccxt.ExchangeError("Invalid API-key, IP, or permissions for action.")))
+        self.assertIn("API_KEY and API_SECRET", account_access_message(ccxt.ExchangeError("Private account request failed.")))
 
     def test_resume_entries_requires_clean_reconciliation(self):
         import threading
