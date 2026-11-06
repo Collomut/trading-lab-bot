@@ -1,17 +1,23 @@
 # 🤖 Automated Crypto Trading Bot
 
-A disciplined, low-risk cryptocurrency trading bot built in Python. Designed for capital preservation, multi-indicator consensus, and automated trade management.
+A cryptocurrency trading research and paper-trading project written in Python.
 
 > ⚠️ **DISCLAIMER:** Trading cryptocurrency involves financial risk. No trading bot can guarantee profits. Past backtest performance does not guarantee future results. Start with **paper trading** to verify real-time performance.
 
 ---
 
-## 🌟 Upgraded Production Features
+## Safety status
+
+This repository is an educational paper-trading project. It is **not ready to place real orders**. Live order placement is deliberately blocked in this build; do not enable real exchange keys. The rules-based strategy and the short sample backtest have not established a profitable edge.
+
+Before exposing the Railway service, set `DASHBOARD_TOKEN` to a long random secret and mount a Railway Volume at `/app/data` with `DATA_DIR=/app/data`. All dashboard routes require HTTP Basic authentication (username `operator`, password the token). Without the token the dashboard returns 503 and the bot configuration validation prevents trading.
+
+Railway files outside a mounted volume are ephemeral, so open-position and risk state can disappear on a redeploy. The volume is required for restart persistence, but it does not make local JSON state transactional or reconcile it with the exchange. Do not treat persistence as proof that positions are safely managed.
+
+## Implemented features (paper trading only)
 
 1. **Macro Trend Regime Filter**: Automatically vetoes BUY signals during downtrends (checks against 50/200-period EMA).
-2. **Break-Even & Trailing Stop-Loss**:
-   - Once a position gains **+1.5%**, the stop-loss automatically moves up to the entry price (Zero downside risk).
-   - As price continues upwards, a trailing stop locks in accrued profits.
+2. **Process-monitored exit thresholds**: The worker checks break-even and trailing thresholds, but these are not exchange-side orders and can fail during downtime or network errors.
 3. **ATR-Aware Sizing**: Calculates Average True Range (ATR) to avoid getting shaken out by normal market wicks.
 4. **Volume Confirmation**: Rejects fakeout signals during low-volume market dead zones.
 5. **Disk Persistence**: Actively writes open positions to `data/open_positions.json`. If your computer restarts, the bot restores its tracking automatically.
@@ -20,9 +26,11 @@ A disciplined, low-risk cryptocurrency trading bot built in Python. Designed for
 
 ---
 
-## 📊 Backtest Verification
+## Backtest (exploratory only)
 
-In backtests across the 500 most recent candles for `BTC/USDT`, `ETH/USDT`, and `SOL/USDT`:
+The existing quick backtest is exploratory only. It uses a short recent sample and does not model exchange fees, slippage, partial fills, latency, or out-of-sample walk-forward validation. Its printed returns and win rates are not evidence of a tradable edge and must not be used to justify live trading.
+
+Previous headline values below are retained only as historical project notes; they are not independently verified or suitable for investment decisions:
 
 | Timeframe | Strategy | Win Rate | Net P&L | Key Observation |
 |---|---|---|---|---|
@@ -95,12 +103,11 @@ TELEGRAM_CHAT_ID=
 
 ---
 
-## 🔒 Pre-Flight Checklist for Going Live
+## Live trading
 
-When you decide to switch from paper trading to live trading:
+This build intentionally blocks live trading even if `PAPER_TRADING=false`. Do not bypass that guard. A future live-capable version would first need exchange-side protective orders, order/fill reconciliation, durable transactional storage, reliable kill switches, robust out-of-sample evaluation, and a separately reviewed operational runbook. Testnet and paper trading do not guarantee live execution behavior.
 
-- [ ] Run paper trading for at least **1 to 2 weeks** to see real fill behavior.
-- [ ] Confirm your Binance account has **2FA enabled** and API keys with **Spot Trading ONLY** (disable Withdrawal permissions!).
-- [ ] Deposit only what you are willing to risk.
-- [ ] In `.env`, set `PAPER_TRADING=false` and insert your live API keys.
-- [ ] Run `python main.py --once` first to check live balance and connectivity before starting continuous loop.
+- The dashboard requires a high-entropy `DASHBOARD_TOKEN` in Railway; without it, requests fail closed.
+- Mount a Railway Volume at `/app/data` and set `DATA_DIR=/app/data`; otherwise local JSON state and logs can be lost on redeploy.
+- Use testnet keys only. The app does not reconcile positions with the exchange and does not place exchange-side stop orders.
+- Do not grant withdrawal permission to exchange API keys.

@@ -12,6 +12,8 @@ import os
 import json
 import asyncio
 import logging
+import base64
+import hmac
 from pathlib import Path
 from aiohttp import web
 
@@ -24,13 +26,31 @@ from bot_engine import TradingBot
 logger = logging.getLogger("bot.dashboard")
 
 
+@web.middleware
+async def dashboard_auth(request, handler):
+    """Protect all dashboard data and controls with HTTP Basic auth."""
+    token = os.getenv("DASHBOARD_TOKEN", "")
+    if not token:
+        return web.Response(status=503, text="Dashboard disabled: configure DASHBOARD_TOKEN")
+    header = request.headers.get("Authorization", "")
+    try:
+        scheme, value = header.split(" ", 1)
+        user, password = base64.b64decode(value, validate=True).decode("utf-8").split(":", 1)
+    except Exception:
+        scheme, user, password = "", "", ""
+    if (scheme.lower() != "basic" or user != "operator" or
+            not hmac.compare_digest(password, token)):
+        raise web.HTTPUnauthorized(headers={"WWW-Authenticate": 'Basic realm="Trading Bot", charset="UTF-8"'})
+    return await handler(request)
+
+
 class WebDashboard:
     def __init__(self, port: int = None):
         self.port = port or int(os.getenv("PORT", 5000))
         self.config = BotConfig()
         self.bot = TradingBot(self.config)
         self.initial_balance = float(os.getenv("INITIAL_BALANCE", "10000.0"))
-        self.app = web.Application()
+        self.app = web.Application(middlewares=[dashboard_auth])
         self.app["bot"] = self.bot
         self.app["config"] = self.config
         self.bg_task = None
@@ -111,8 +131,6 @@ class WebDashboard:
 
         # 1. Fetch available cash
         usdt_balance = await loop.run_in_executor(None, exchange.get_usdt_balance)
-        if usdt_balance <= 0 and self.config.exchange.paper_trading:
-            usdt_balance = 10000.0
 
         # 2. Fetch live prices
         prices = {}
@@ -139,9 +157,10 @@ class WebDashboard:
             positions[sym] = pos_dict
 
         # 4. Total portfolio net worth = Cash + Open Position Values
-        total_net_worth = usdt_balance + sum(p["amount"] * p["current_price"] for p in positions.values())
-        if not positions:
-            total_net_worth = usdt_balance
+        # If the exchange balance call failed, report unavailable instead of inventing equity.
+        total_net_worth = None if usdt_balance <= 0 else usdt_balance + sum(
+            p["amount"] * p["current_price"] for p in positions.values()
+        )
 
         # 5. Read completed trade history
         trades = []
@@ -167,14 +186,14 @@ class WebDashboard:
 
         # Beginner explanation summary
         if len(positions) == 0:
-            market_summary = "All funds safe in cash. The bot is actively watching Bitcoin, Ethereum, and Solana for a safe, low-risk entry."
+            market_summary = "No positions are currently tracked. Strategy signals do not establish that an entry is safe or profitable."
         else:
-            market_summary = f"The bot has {len(positions)} active safe trade(s) with protective stop-loss shields enabled."
+            market_summary = f"The bot is tracking {len(positions)} open position(s). Stops are monitored by this process and are not guaranteed exchange-side protection."
 
         return {
             "paper_trading": self.config.exchange.paper_trading,
             "exchange": self.config.exchange.name,
-            "net_worth": round(total_net_worth, 2),
+            "net_worth": round(total_net_worth, 2) if total_net_worth is not None else None,
             "cash_balance": round(usdt_balance, 2),
             "initial_balance": self.initial_balance,
             "total_gain_loss": round(total_gain_loss, 2),

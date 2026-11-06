@@ -105,6 +105,41 @@ class RiskManager:
 
         # Load persisted positions if available
         self._load_positions()
+        self._load_daily_state()
+
+    @property
+    def daily_state_path(self) -> Path:
+        return self.persistence_path.parent / "daily_risk_state.json"
+
+    def _load_daily_state(self):
+        """Restore realized daily drawdown and halt state across restarts."""
+        try:
+            if not self.daily_state_path.exists():
+                return
+            state = json.loads(self.daily_state_path.read_text(encoding="utf-8"))
+            state_date = datetime.fromisoformat(state["date"]).date()
+            today = datetime.now(timezone.utc).date()
+            if state_date == today:
+                self._daily_loss = float(state.get("daily_loss", 0.0))
+                self._is_halted = bool(state.get("is_halted", False))
+                self._halt_reason = str(state.get("halt_reason", ""))
+                self._daily_loss_reset_date = today
+        except Exception as exc:
+            # Fail closed: corrupt state should prevent new orders until reconciled.
+            self._is_halted = True
+            self._halt_reason = "Daily risk state is unreadable; operator reconciliation required"
+            logger.error("Could not restore daily risk state: %s", exc)
+
+    def _save_daily_state(self):
+        state = {
+            "date": datetime.now(timezone.utc).date().isoformat(),
+            "daily_loss": self._daily_loss,
+            "is_halted": self._is_halted,
+            "halt_reason": self._halt_reason,
+        }
+        temp = self.daily_state_path.with_suffix(".tmp")
+        temp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        temp.replace(self.daily_state_path)
 
     def _save_positions(self):
         """Persist open positions to disk so restarts don't lose them."""
@@ -144,6 +179,7 @@ class RiskManager:
                 self._is_halted = False
                 self._halt_reason = ""
                 logger.info("✅ Trading resumed — new day, daily loss limit reset")
+            self._save_daily_state()
 
     def can_open_position(self, symbol: str, portfolio_value: float) -> tuple[bool, str]:
         """Check if opening a new position complies with risk rules."""
@@ -169,6 +205,7 @@ class RiskManager:
                 f"(limit: -${max_daily_loss:,.2f})"
             )
             logger.warning(f"🛑 {self._halt_reason}")
+            self._save_daily_state()
             return False, self._halt_reason
 
         return True, "OK"
@@ -277,6 +314,7 @@ class RiskManager:
         )
         self.trade_history.append(record)
         self._daily_loss += pnl
+        self._save_daily_state()
 
         emoji = "💰" if pnl >= 0 else "💸"
         logger.info(

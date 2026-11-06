@@ -39,7 +39,7 @@ class TradingBot:
         self.config = config
         self.exchange = ExchangeConnector(config.exchange)
         self.strategy = get_strategy(config.strategy.name)
-        self.risk_manager = RiskManager(config.risk)
+        self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
         self.is_running = False
         self._cycle_count = 0
         self._setup_logging()
@@ -47,8 +47,9 @@ class TradingBot:
 
     def _setup_logging(self):
         """Configure logging to file and console."""
-        log_dir = Path(self.config.log_file).parent
+        log_dir = Path(self.config.data_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
+        self.config.log_file = str(log_dir / Path(self.config.log_file).name)
 
         bot_logger = logging.getLogger("bot")
         bot_logger.setLevel(getattr(logging, self.config.log_level))
@@ -75,7 +76,7 @@ class TradingBot:
 
     def _setup_trade_log(self):
         """Setup a separate JSON trade log for record keeping."""
-        log_dir = Path(self.config.log_file).parent
+        log_dir = Path(self.config.data_dir)
         self.trade_log_path = log_dir / "trades.jsonl"
 
     def _log_trade(self, trade_data: dict):

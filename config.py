@@ -17,6 +17,7 @@ class ExchangeConfig:
     api_key: str = os.getenv("API_KEY", "")
     api_secret: str = os.getenv("API_SECRET", "")
     paper_trading: bool = os.getenv("PAPER_TRADING", "true").lower() == "true"
+    allow_live_trading: bool = os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true"
 
 
 @dataclass
@@ -52,10 +53,18 @@ class BotConfig:
     enable_notifications: bool = os.getenv("ENABLE_NOTIFICATIONS", "true").lower() == "true"
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    dashboard_token: str = os.getenv("DASHBOARD_TOKEN", "")
+    data_dir: str = os.getenv("DATA_DIR", "data")
 
     def validate(self):
         """Validate configuration values."""
         errors = []
+
+        # Fail closed: live orders require two independent, explicit settings.
+        if not self.exchange.paper_trading and not self.exchange.allow_live_trading:
+            errors.append("Live trading is disabled. Set ALLOW_LIVE_TRADING=true only after completing the live-readiness checklist.")
+        if not self.exchange.paper_trading and self.exchange.allow_live_trading:
+            errors.append("Live trading requires an explicit operator confirmation and is not enabled by this application yet.")
 
         if not self.exchange.api_key or self.exchange.api_key == "your_testnet_api_key_here":
             errors.append("API_KEY is not set. Get one from https://testnet.binance.vision")
@@ -69,6 +78,19 @@ class BotConfig:
             errors.append("POSITION_SIZE_PCT > 50% is dangerously high")
         if not self.strategy.trading_pairs:
             errors.append("No TRADING_PAIRS configured")
+
+        if self.risk.max_risk_per_trade <= 0 or self.risk.max_risk_per_trade > 2:
+            errors.append("MAX_RISK_PER_TRADE must be greater than 0 and no more than 2%")
+        if self.risk.max_open_positions < 1:
+            errors.append("MAX_OPEN_POSITIONS must be at least 1")
+        if self.risk.max_daily_loss_pct <= 0 or self.risk.max_daily_loss_pct > 5:
+            errors.append("MAX_DAILY_LOSS_PCT must be greater than 0 and no more than 5%")
+        if not (0 < self.risk.stop_loss_pct <= 10):
+            errors.append("STOP_LOSS_PCT must be greater than 0 and no more than 10%")
+        if not (0 < self.risk.position_size_pct <= 50):
+            errors.append("POSITION_SIZE_PCT must be greater than 0 and no more than 50%")
+        if not self.dashboard_token:
+            errors.append("DASHBOARD_TOKEN is required because the Railway dashboard exposes account and trading controls")
 
         return errors
 
