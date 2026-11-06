@@ -84,6 +84,7 @@ class TradeRecord:
     pnl: float
     pnl_pct: float
     reason: str  # Why the trade was closed
+    fee: float = 0.0
 
     @property
     def is_winner(self) -> bool:
@@ -291,7 +292,7 @@ class RiskManager:
         """Check if opening a new position complies with risk rules."""
         self._reset_daily_if_needed()
 
-        mode = self.store.read_state("entry_mode") or "ACTIVE"
+        mode = self.entry_mode()
         if mode != "ACTIVE":
             return False, "Entry-only pause is active; existing positions continue to be monitored and exited"
 
@@ -345,7 +346,10 @@ class RiskManager:
             return False
 
     def entry_mode(self):
-        return self.store.read_state("entry_mode") or "ACTIVE"
+        persisted = self.store.read_state("entry_mode")
+        if persisted:
+            return persisted
+        return "EXIT_ONLY" if getattr(self.config, "start_paused", False) else "ACTIVE"
 
     def calculate_position_size(
         self,
@@ -454,7 +458,8 @@ class RiskManager:
         self,
         symbol: str,
         exit_price: float,
-        reason: str
+        reason: str,
+        fee_cost: float = 0.0
     ) -> TradeRecord | None:
         """Close an open position, record the trade, and update persistence."""
         if symbol not in self.open_positions:
@@ -468,8 +473,11 @@ class RiskManager:
             self.open_positions[symbol] = position
             return None
 
-        pnl = position.unrealized_pnl(exit_price)
-        pnl_pct = position.unrealized_pnl_pct(exit_price)
+        gross_pnl = position.unrealized_pnl(exit_price)
+        total_fee = max(0.0, float(fee_cost))
+        pnl = gross_pnl - total_fee
+        total_cost = position.entry_price * position.amount
+        pnl_pct = (pnl / total_cost * 100) if total_cost > 0 else 0.0
 
         record = TradeRecord(
             symbol=symbol,
@@ -482,6 +490,7 @@ class RiskManager:
             pnl=pnl,
             pnl_pct=pnl_pct,
             reason=reason,
+            fee=total_fee,
         )
         self.trade_history.append(record)
         self._daily_loss += pnl

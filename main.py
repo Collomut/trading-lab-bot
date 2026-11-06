@@ -129,19 +129,20 @@ Examples:
 
 def run_backtest(config: BotConfig):
     """
-    Simple backtesting simulation using historical data.
-    Fetches historical candles and simulates what the bot
-    would have done.
+    Historical replay simulation incorporating next-bar execution and fees.
+    This replay is an exploratory research tool and does not prove live profitability.
     """
     from exchange import ExchangeConnector
     from strategies import get_strategy, ohlcv_to_dataframe, Signal
     from risk_manager import RiskManager
     import pandas as pd
 
-    print("📊 Running Exploratory Historical Replay")
-    print("This replay is not a validated backtest: it omits fees, slippage, latency, partial fills, and realistic multi-symbol portfolio timing.")
-    print("Do not use its returns or win rate to decide whether to trade live.")
-    print("=" * 50)
+    print("\n" + "=" * 70)
+    print("⚠️ EXPLORATORY HISTORICAL REPLAY ONLY (F-10)")
+    print("This replay models next-bar open execution and 0.1% trading fees, but omits")
+    print("live order-book depth, spread, latency, and Testnet liquidity dynamics.")
+    print("Do NOT use these simulated results as evidence of live edge or profitability.")
+    print("=" * 70 + "\n")
 
     exchange = ExchangeConnector(config.exchange)
     strategy = get_strategy(
@@ -155,10 +156,11 @@ def run_backtest(config: BotConfig):
     initial_balance = 10000.0  # $10,000 starting balance
     balance = initial_balance
     trades = []
+    fee_rate = 0.001  # 0.1% Spot fee per trade
 
     for symbol in config.strategy.trading_pairs:
         symbol = symbol.strip()
-        print(f"\n🔍 Backtesting {symbol}...")
+        print(f"\n🔍 Replaying {symbol}...")
 
         # Fetch historical data
         ohlcv = exchange.fetch_ohlcv(symbol, config.strategy.timeframe, limit=500)
@@ -169,73 +171,89 @@ def run_backtest(config: BotConfig):
         df = ohlcv_to_dataframe(ohlcv)
         position = None  # (amount, entry_price) for this specific symbol
 
-        # Walk through history simulating trades
-        for i in range(50, len(df)):
+        # Walk through history simulating next-bar execution without lookahead
+        for i in range(50, len(df) - 1):
             window = df.iloc[:i+1].copy()
             signal = strategy.analyze(window, symbol)
-            current_price = window["close"].iloc[-1]
+            next_bar = df.iloc[i+1]
+            exec_price = float(next_bar["open"])
+            bar_high = float(next_bar["high"])
+            bar_low = float(next_bar["low"])
 
-            if signal.signal == Signal.BUY and position is None and signal.confidence >= 0.5:
-                # Buy
-                amount_usd = balance * (config.risk.position_size_pct / 100)
-                amount = amount_usd / current_price
-                position = (amount, current_price)
-                balance -= amount_usd
-                trades.append({
-                    "action": "BUY",
-                    "symbol": symbol,
-                    "price": current_price,
-                    "time": window.index[-1],
-                })
-
-            elif position is not None:
+            if position is not None:
                 pos_amount, entry_price = position
-
-                # Check stop-loss
                 stop_price = entry_price * (1 - config.risk.stop_loss_pct / 100)
                 tp_price = entry_price * (1 + config.risk.take_profit_pct / 100)
 
                 should_sell = False
+                sell_price = exec_price
                 reason = ""
 
-                if current_price <= stop_price:
+                # Conservative intrabar check: if low breached stop_price, stop triggered
+                if bar_low <= stop_price:
                     should_sell = True
+                    sell_price = min(exec_price, stop_price)
                     reason = "STOP-LOSS"
-                elif current_price >= tp_price:
+                elif bar_high >= tp_price:
                     should_sell = True
+                    sell_price = max(exec_price, tp_price)
                     reason = "TAKE-PROFIT"
                 elif signal.signal == Signal.SELL and signal.confidence >= 0.5:
                     should_sell = True
+                    sell_price = exec_price
                     reason = "STRATEGY SIGNAL"
 
                 if should_sell:
-                    proceeds = pos_amount * current_price
-                    pnl = proceeds - (pos_amount * entry_price)
-                    balance += proceeds
+                    gross_proceeds = pos_amount * sell_price
+                    exit_fee = gross_proceeds * fee_rate
+                    net_proceeds = gross_proceeds - exit_fee
+                    cost_basis = pos_amount * entry_price
+                    pnl = net_proceeds - cost_basis
+                    balance += net_proceeds
                     trades.append({
                         "action": "SELL",
                         "symbol": symbol,
-                        "price": current_price,
+                        "price": sell_price,
                         "pnl": pnl,
+                        "fee": exit_fee,
                         "reason": reason,
-                        "time": window.index[-1],
+                        "time": str(next_bar.name) if hasattr(next_bar, "name") else str(window.index[-1]),
                     })
                     position = None
+
+            elif signal.signal == Signal.BUY and position is None and signal.confidence >= 0.5:
+                # Buy at next bar open with fee deduction
+                amount_usd = balance * (config.risk.position_size_pct / 100)
+                buy_fee = amount_usd * fee_rate
+                net_usd = amount_usd - buy_fee
+                amount = net_usd / exec_price
+                position = (amount, exec_price)
+                balance -= amount_usd
+                trades.append({
+                    "action": "BUY",
+                    "symbol": symbol,
+                    "price": exec_price,
+                    "fee": buy_fee,
+                    "time": str(next_bar.name) if hasattr(next_bar, "name") else str(window.index[-1]),
+                })
 
         # Close any remaining open position for this symbol at last price
         if position:
             pos_amount, entry_price = position
-            last_price = df["close"].iloc[-1]
-            proceeds = pos_amount * last_price
-            pnl = proceeds - (pos_amount * entry_price)
-            balance += proceeds
+            last_price = float(df["close"].iloc[-1])
+            gross_proceeds = pos_amount * last_price
+            exit_fee = gross_proceeds * fee_rate
+            net_proceeds = gross_proceeds - exit_fee
+            pnl = net_proceeds - (pos_amount * entry_price)
+            balance += net_proceeds
             trades.append({
                 "action": "SELL",
                 "symbol": symbol,
                 "price": last_price,
                 "pnl": pnl,
+                "fee": exit_fee,
                 "reason": "END OF BACKTEST",
-                "time": df.index[-1],
+                "time": str(df.index[-1]),
             })
 
     # Results

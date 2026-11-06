@@ -33,10 +33,14 @@ class Signal(Enum):
 
 @dataclass
 class TradeSignal:
-    """A trading signal with metadata."""
+    """A trading signal with heuristic metadata.
+
+    Note: `confidence` represents a heuristic rule-matching score (0.0 to 1.0),
+    not a calibrated statistical probability of profit (F-21).
+    """
     signal: Signal
     symbol: str
-    confidence: float  # 0.0 to 1.0
+    confidence: float  # Heuristic score between 0.0 and 1.0 (not calibrated probability)
     reason: str
     indicators: dict
 
@@ -44,7 +48,7 @@ class TradeSignal:
         emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}[self.signal.value]
         return (
             f"{emoji} {self.signal.value} {self.symbol} "
-            f"(confidence: {self.confidence:.0%}) — {self.reason}"
+            f"(score: {self.confidence:.0%}) — {self.reason}"
         )
 
 

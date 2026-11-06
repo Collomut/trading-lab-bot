@@ -865,10 +865,24 @@ class TradingBot:
                 self.risk_manager.halt(f"Invalid sell fill details for {symbol}; protective stop restored, reconcile exchange orders and balances")
                 return
 
+            fee_cost = 0.0
+            if isinstance(order, dict):
+                if isinstance(order.get("fee"), dict) and "cost" in order["fee"]:
+                    try:
+                        fee_cost = float(order["fee"]["cost"] or 0.0)
+                    except (TypeError, ValueError):
+                        pass
+                elif isinstance(order.get("fees"), list):
+                    try:
+                        fee_cost = sum(float(f.get("cost", 0) or 0) for f in order["fees"])
+                    except (TypeError, ValueError):
+                        pass
+
             record = self.risk_manager.close_position(
                 symbol=symbol,
                 exit_price=fill_price,
-                reason=f"Strategy signal: {signal.reason}"
+                reason=f"Strategy signal: {signal.reason}",
+                fee_cost=fee_cost
             )
 
             if record:
@@ -889,6 +903,7 @@ class TradingBot:
                     "amount": record.amount,
                     "pnl": record.pnl,
                     "pnl_pct": record.pnl_pct,
+                    "fee": record.fee,
                     "reason": record.reason,
                 })
 
@@ -952,7 +967,20 @@ class TradingBot:
                     self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
                     self.risk_manager.halt(f"Invalid stop-exit fill details for {symbol}; protective stop restored, reconcile exchange orders and balances")
                     return
-                record = self.risk_manager.close_position(symbol, fill_price, reason)
+                fee_cost = 0.0
+                if isinstance(order, dict):
+                    if isinstance(order.get("fee"), dict) and "cost" in order["fee"]:
+                        try:
+                            fee_cost = float(order["fee"]["cost"] or 0.0)
+                        except (TypeError, ValueError):
+                            pass
+                    elif isinstance(order.get("fees"), list):
+                        try:
+                            fee_cost = sum(float(f.get("cost", 0) or 0) for f in order["fees"])
+                        except (TypeError, ValueError):
+                            pass
+
+                record = self.risk_manager.close_position(symbol, fill_price, reason, fee_cost=fee_cost)
 
                 if record:
                     self.risk_manager.store.mark_order_applied(client_order_id)
@@ -971,6 +999,7 @@ class TradingBot:
                         "amount": record.amount,
                         "pnl": record.pnl,
                         "pnl_pct": record.pnl_pct,
+                        "fee": record.fee,
                         "reason": record.reason,
                     })
 

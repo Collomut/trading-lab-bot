@@ -920,6 +920,41 @@ class TestTradingBot(unittest.TestCase):
             self.assertEqual(store.unresolved_orders(), [])
             self.assertIsNone(store.read_state("baseline_asset_balances"))
 
+    def test_f11_canonical_fee_netting_in_close_position(self):
+        """F-11: Close position must net fees against gross PnL."""
+        with TemporaryDirectory() as persistence_dir:
+            risk = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            # Open position: 0.1 BTC @ $50,000 = $5,000 cost basis
+            risk.open_position("BTC/USDT", 50000.0, 0.1, order_id="buy_1")
+
+            # Exit at $50,500 (+ $50 gross gain), with $10 in trading fees
+            record = risk.close_position("BTC/USDT", 50500.0, "Take profit", fee_cost=10.0)
+            self.assertIsNotNone(record)
+            # Net PnL must be $50 - $10 = $40
+            self.assertAlmostEqual(record.pnl, 40.0)
+            self.assertEqual(record.fee, 10.0)
+            # Return % is 40 / 5000 = 0.8%
+            self.assertAlmostEqual(record.pnl_pct, 0.8)
+
+    def test_f12_start_paused_policy(self):
+        """F-12: START_PAUSED=true policy defaults to EXIT_ONLY mode."""
+        with TemporaryDirectory() as persistence_dir:
+            config = RiskConfig(start_paused=True)
+            risk = RiskManager(config, persistence_dir=persistence_dir)
+
+            # Assert default entry mode is EXIT_ONLY
+            self.assertEqual(risk.entry_mode(), "EXIT_ONLY")
+            can_open, reason = risk.can_open_position("BTC/USDT", 10000.0)
+            self.assertFalse(can_open)
+            self.assertIn("Entry-only pause is active", reason)
+
+    def test_f21_trade_signal_heuristic_score_formatting(self):
+        """F-21: TradeSignal string must present confidence as a heuristic score."""
+        from strategies import TradeSignal, Signal
+        sig = TradeSignal(Signal.BUY, "BTC/USDT", 0.75, "RSI bounce", {})
+        sig_str = str(sig)
+        self.assertIn("score: 75%", sig_str)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,6 +36,7 @@ class RiskConfig:
     position_size_pct: float = float(os.getenv("POSITION_SIZE_PCT", "10.0"))
     max_rolling_drawdown_pct: float = float(os.getenv("MAX_ROLLING_DRAWDOWN_PCT", "5.0"))
     max_consecutive_losses: int = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3"))
+    start_paused: bool = os.getenv("START_PAUSED", "false").lower() in ("true", "1", "yes")
 
 
 @dataclass
