@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autonomous Trading Bot Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0B0E14;
+      --card-bg: #141923;
+      --card-border: #232B3B;
+      --card-hover: #1A2230;
+      --text: #F1F5F9;
+      --text-muted: #94A3B8;
+      --accent: #3B82F6;
+      --accent-glow: rgba(59, 130, 246, 0.25);
+      --green: #10B981;
+      --green-bg: rgba(16, 185, 129, 0.12);
+      --red: #F43F5E;
+      --red-bg: rgba(244, 63, 94, 0.12);
+      --yellow: #F59E0B;
+      --yellow-bg: rgba(245, 158, 11, 0.12);
+      --cyan: #06B6D4;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      min-height: 100vh;
+      padding: 24px;
+      line-height: 1.5;
+    }
+
+    .container { max-width: 1380px; margin: 0 auto; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--card-border);
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #2563EB, #06B6D4);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 0 20px rgba(37, 99, 235, 0.35);
+    }
+
+    .brand h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+    .brand p { font-size: 13px; color: var(--text-muted); }
+
+    .header-actions { display: flex; align-items: center; gap: 12px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .badge-testnet { background: var(--yellow-bg); color: var(--yellow); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-live { background: var(--green-bg); color: var(--green); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-pulse {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
+
+    .btn {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .btn:hover { background: var(--card-hover); border-color: var(--accent); }
+    .btn-primary { background: #2563EB; border-color: #3B82F6; color: white; }
+    .btn-primary:hover { background: #1D4ED8; box-shadow: 0 0 16px rgba(37, 99, 235, 0.4); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Market Tickers Grid */
+    .tickers-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .ticker-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 16px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: border-color 0.2s;
+    }
+    .ticker-card:hover { border-color: #334155; }
+    .ticker-pair { font-size: 14px; font-weight: 700; color: var(--text); }
+    .ticker-sub { font-size: 11px; color: var(--text-muted); }
+    .ticker-price { font-size: 18px; font-weight: 700; text-align: right; }
+
+    /* Key Stats Cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 20px;
+    }
+    .stat-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+    .stat-value { font-size: 26px; font-weight: 700; }
+    .stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    /* Main Grid Layout */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+    @media (max-width: 1024px) { .main-grid { grid-template-columns: 1fr; } }
+
+    /* Panel Card */
+    .panel {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .panel-body { padding: 20px; }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+    th { padding: 12px 16px; color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid var(--card-border); }
+    td { padding: 14px 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255, 255, 255, 0.015); }
+
+    .tag {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .tag-buy { background: var(--green-bg); color: var(--green); }
+    .tag-sell { background: var(--red-bg); color: var(--red); }
+    .tag-be { background: rgba(59, 130, 246, 0.15); color: #60A5FA; }
+
+    .pnl-pos { color: var(--green); font-weight: 600; }
+    .pnl-neg { color: var(--red); font-weight: 600; }
+
+    /* Status Items */
+    .info-list { display: flex; flex-direction: column; gap: 14px; }
+    .info-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+    .info-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .info-label { color: var(--text-muted); }
+    .info-value { font-weight: 600; }
+
+    .empty-state {
+      padding: 40px 20px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    footer {
+      margin-top: 40px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+      padding-top: 20px;
+      border-top: 1px solid var(--card-border);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div>
+          <h1>Autonomous Trading Bot</h1>
+          <p>Real-Time Surveillance & Execution Engine</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span id="mode-badge" class="badge badge-testnet">
+          <span class="badge-pulse"></span>
+          <span id="mode-text">TESTNET ACTIVE</span>
+        </span>
+        <button id="btn-analyze" class="btn btn-primary" onclick="triggerCycle()">
+          <span>⚡ Run Analysis</span>
+        </button>
+        <button class="btn" onclick="fetchStatus()">
+          <span>🔄 Refresh</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Real-Time Market Tickers -->
+    <div id="tickers-container" class="tickers-grid">
+      <!-- Populated via JavaScript -->
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Available USDT Balance</div>
+        <div class="stat-value mono" id="stat-balance">$0.00</div>
+        <div class="stat-sub" id="stat-balance-sub">Paper Trading Portfolio</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Today's Realized P&L</div>
+        <div class="stat-value mono" id="stat-daily-pnl">$+0.00</div>
+        <div class="stat-sub">Circuit Breaker: 3.0% Max Loss</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Open Positions</div>
+        <div class="stat-value mono" id="stat-positions">0 / 3</div>
+        <div class="stat-sub">1% Max Risk per Trade</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Trades Logged</div>
+        <div class="stat-value mono" id="stat-total-trades">0</div>
+        <div class="stat-sub" id="stat-winrate">Win Rate: 0.0%</div>
+      </div>
+    </div>
+
+    <!-- Main Grid: Positions & Strategy Config -->
+    <div class="main-grid">
+      <!-- Open Positions Panel -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Active Market Positions</div>
+          <span class="mono" style="font-size: 12px; color: var(--text-muted);" id="positions-count-badge">0 active</span>
+        </div>
+        <div class="panel-body" style="padding: 0;">
+          <div id="positions-table-wrap">
+            <div class="empty-state">No open positions currently active. Bot is continuously scanning markets for high-probability consensus entries.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Strategy & Safeguard Parameters -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Risk & Strategy Rules</div>
+          <span class="tag" style="background: rgba(59, 130, 246, 0.15); color: #60A5FA;">Active</span>
+        </div>
+        <div class="panel-body">
+          <div class="info-list">
+            <div class="info-row">
+              <span class="info-label">Strategy Architecture</span>
+              <span class="info-value mono" id="info-strategy">Combined Consensus</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Analysis Timeframe</span>
+              <span class="info-value mono" id="info-timeframe">1h (Low Noise)</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Trend Filter</span>
+              <span class="info-value">EMA 50 / 200 Uptrend Veto</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Break-Even Trigger</span>
+              <span class="info-value mono" style="color: var(--green);">+1.5% Auto Break-Even</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Trailing Stop</span>
+              <span class="info-value mono">1.5% Trail Behind Highs</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Hard Stop-Loss / TP</span>
+              <span class="info-value mono">SL: 2.0% | TP: 3.0%</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Risk Sizing</span>
+              <span class="info-value mono">1.0% Risk Cap (10% Max Size)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trade History Table -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Completed Trade Audit Log</div>
+        <span class="mono" style="font-size: 12px; color: var(--text-muted);" id="trades-count-badge">0 completed trades</span>
+      </div>
+      <div class="panel-body" style="padding: 0;">
+        <div id="trades-table-wrap">
+          <div class="empty-state">No trades executed yet in this session.</div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      Autonomous Trading Bot Surveillance Dashboard • State synchronized with Binance Testnet API • Last updated: <span id="last-update" class="mono">--:--:--</span>
+    </footer>
+  </div>
+
+  <script>
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        renderDashboard(data);
+      } catch (err) {
+        console.error('Failed to fetch status:', err);
+      }
+    }
+
+    function renderDashboard(data) {
+      // Last update
+      document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+      // Mode Badge
+      const modeBadge = document.getElementById('mode-badge');
+      const modeText = document.getElementById('mode-text');
+      if (data.paper_trading) {
+        modeBadge.className = 'badge badge-testnet';
+        modeText.textContent = 'TESTNET ACTIVE (PAPER)';
+      } else {
+        modeBadge.className = 'badge badge-live';
+        modeText.textContent = 'LIVE TRADING (REAL MONEY)';
+      }
+
+      // Stats
+      document.getElementById('stat-balance').textContent = '$' + (data.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      
+      const dailyPnlEl = document.getElementById('stat-daily-pnl');
+      const dailyPnl = data.daily_pnl || 0;
+      dailyPnlEl.textContent = (dailyPnl >= 0 ? '+$' : '-$') + Math.abs(dailyPnl).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      dailyPnlEl.className = 'stat-value mono ' + (dailyPnl >= 0 ? 'pnl-pos' : 'pnl-neg');
+
+      document.getElementById('stat-positions').textContent = `${data.positions_count || 0} / ${data.max_positions || 3}`;
+      document.getElementById('stat-total-trades').textContent = data.stats.total_trades || 0;
+      document.getElementById('stat-winrate').textContent = `Win Rate: ${data.stats.win_rate || 0}% (${data.stats.winners || 0}W / ${data.stats.losers || 0}L)`;
+
+      // Info sidebar
+      document.getElementById('info-strategy').textContent = data.strategy_name || 'Combined';
+      document.getElementById('info-timeframe').textContent = data.timeframe || '1h';
+
+      // Render Tickers
+      const tickersContainer = document.getElementById('tickers-container');
+      tickersContainer.innerHTML = '';
+      if (data.prices) {
+        for (const [symbol, price] of Object.entries(data.prices)) {
+          const card = document.createElement('div');
+          card.className = 'ticker-card';
+          card.innerHTML = `
+            <div>
+              <div class="ticker-pair">${symbol}</div>
+              <div class="ticker-sub">Binance Spot</div>
+            </div>
+            <div>
+              <div class="ticker-price mono">$${price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+            </div>
+          `;
+          tickersContainer.appendChild(card);
+        }
+      }
+
+      // Render Open Positions
+      const posWrap = document.getElementById('positions-table-wrap');
+      const positions = data.positions || {};
+      const posKeys = Object.keys(positions);
+      document.getElementById('positions-count-badge').textContent = `${posKeys.length} active`;
+
+      if (posKeys.length === 0) {
+        posWrap.innerHTML = '<div class="empty-state">No open positions. Bot is continuously scanning markets for high-probability consensus entries.</div>';
+      } else {
+        let html = `
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Amount</th>
+                <th>Entry Price</th>
+                <th>Current Price</th>
+                <th>Unrealized P&L</th>
+                <th>Stop-Loss</th>
+                <th>Take-Profit</th>
+                <th>Safety Status</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        for (const sym of posKeys) {
+          const p = positions[sym];
+          const curPrice = data.prices[sym] || p.entry_price;
+          const pnl = (curPrice - p.entry_price) * p.amount;
+          const pnlPct = ((curPrice - p.entry_price) / p.entry_price) * 100;
+          const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+          const beBadge = p.break_even_activated 
+            ? '<span class="tag tag-be">🛡️ Break-Even Active</span>' 
+            : '<span class="tag" style="background: rgba(255,255,255,0.06); color: #94A3B8;">Initial SL</span>';
+
+          html += `
+            <tr>
+              <td><strong>${sym}</strong></td>
+              <td class="mono">${p.amount.toFixed(6)}</td>
+              <td class="mono">$${p.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+              <td class="mono">$${curPrice.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+              <td class="mono ${pnlClass}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</td>
+              <td class="mono" style="color: var(--red);">$${p.stop_loss_price.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+              <td class="mono" style="color: var(--green);">$${p.take_profit_price.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+              <td>${beBadge}</td>
+            </tr>
+          `;
+        }
+        html += '</tbody></table>';
+        posWrap.innerHTML = html;
+      }
+
+      // Render Trade History
+      const tradesWrap = document.getElementById('trades-table-wrap');
+      const trades = data.trades || [];
+      document.getElementById('trades-count-badge').textContent = `${trades.length} completed trades`;
+
+      if (trades.length === 0) {
+        tradesWrap.innerHTML = '<div class="empty-state">No trades executed yet in this session.</div>';
+      } else {
+        let html = `
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Action</th>
+                <th>Symbol</th>
+                <th>Fill Price</th>
+                <th>Realized P&L</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        for (const t of trades.slice().reverse().slice(0, 15)) {
+          const pnl = t.pnl || 0;
+          const pnlPct = t.pnl_pct || 0;
+          const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+          const pnlStr = t.action === 'SELL' 
+            ? `<span class="mono ${pnlClass}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</span>`
+            : '<span class="mono" style="color: var(--text-muted);">-</span>';
+          const actionTag = t.action === 'BUY' 
+            ? '<span class="tag tag-buy">BUY</span>' 
+            : '<span class="tag tag-sell">SELL</span>';
+
+          html += `
+            <tr>
+              <td class="mono" style="font-size: 11px; color: var(--text-muted);">${(t.timestamp || '').replace('T', ' ').slice(0, 19)}</td>
+              <td>${actionTag}</td>
+              <td><strong>${t.symbol}</strong></td>
+              <td class="mono">$${(t.price || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+              <td>${pnlStr}</td>
+              <td style="color: var(--text-muted); font-size: 12px;">${t.reason || '-'}</td>
+            </tr>
+          `;
+        }
+        html += '</tbody></table>';
+        tradesWrap.innerHTML = html;
+      }
+    }
+
+    async function triggerCycle() {
+      const btn = document.getElementById('btn-analyze');
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ Analyzing...</span>';
+      try {
+        const res = await fetch('/api/run-cycle', { method: 'POST' });
+        const data = await res.json();
+        renderDashboard(data);
+      } catch (err) {
+        console.error('Trigger cycle failed:', err);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>⚡ Run Analysis</span>';
+      }
+    }
+
+    // Initial fetch and 5s polling
+    fetchStatus();
+    setInterval(fetchStatus, 5000);
+  </script>
+</body>
+</html>
