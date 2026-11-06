@@ -17,7 +17,10 @@ class ExchangeConfig:
     name: str = os.getenv("EXCHANGE", "binance")
     api_key: str = os.getenv("API_KEY", "")
     api_secret: str = os.getenv("API_SECRET", "")
+    demo_api_key: str = os.getenv("DEMO_API_KEY", "")
+    demo_api_secret: str = os.getenv("DEMO_API_SECRET", "")
     paper_trading: bool = os.getenv("PAPER_TRADING", "true").lower() == "true"
+    paper_environment: str = os.getenv("PAPER_ENVIRONMENT", "testnet").strip().lower()
     allow_live_trading: bool = os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true"
 
 
@@ -64,16 +67,28 @@ class BotConfig:
         """Validate configuration values."""
         errors = []
 
+        if self.exchange.paper_trading:
+            if self.exchange.paper_environment not in {"testnet", "demo"}:
+                errors.append("PAPER_ENVIRONMENT must be either 'testnet' or 'demo'")
+            if self.exchange.paper_environment == "demo" and self.exchange.name.lower() != "binance":
+                errors.append("PAPER_ENVIRONMENT=demo is currently supported only for Binance")
+
         # Fail closed: live orders require two independent, explicit settings.
         if not self.exchange.paper_trading and not self.exchange.allow_live_trading:
             errors.append("Live trading is disabled. Set ALLOW_LIVE_TRADING=true only after completing the live-readiness checklist.")
         if not self.exchange.paper_trading and self.exchange.allow_live_trading:
             errors.append("Live trading requires an explicit operator confirmation and is not enabled by this application yet.")
 
-        if not self.exchange.api_key or self.exchange.api_key == "your_testnet_api_key_here":
-            errors.append("API_KEY is not set. Get one from https://testnet.binance.vision")
-        if not self.exchange.api_secret or self.exchange.api_secret == "your_testnet_api_secret_here":
-            errors.append("API_SECRET is not set. Get one from https://testnet.binance.vision")
+        if self.exchange.paper_trading and self.exchange.paper_environment == "demo":
+            if not self.exchange.demo_api_key:
+                errors.append("DEMO_API_KEY is required for Binance Demo Mode")
+            if not self.exchange.demo_api_secret:
+                errors.append("DEMO_API_SECRET is required for Binance Demo Mode")
+        else:
+            if not self.exchange.api_key or self.exchange.api_key == "your_testnet_api_key_here":
+                errors.append("API_KEY is not set. Get a testnet key from https://testnet.binance.vision")
+            if not self.exchange.api_secret or self.exchange.api_secret == "your_testnet_api_secret_here":
+                errors.append("API_SECRET is not set. Get a testnet secret from https://testnet.binance.vision")
         if self.risk.max_risk_per_trade > 5.0:
             errors.append("MAX_RISK_PER_TRADE > 5% is extremely risky!")
         if self.risk.stop_loss_pct > 10.0:

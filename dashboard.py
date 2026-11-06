@@ -216,6 +216,7 @@ class WebDashboard:
 
         return {
             "paper_trading": self.config.exchange.paper_trading,
+            "paper_environment": self.config.exchange.paper_environment,
             "exchange": self.config.exchange.name,
             "net_worth": round(total_net_worth, 2) if total_net_worth is not None else None,
             "cash_balance": round(usdt_balance, 2),

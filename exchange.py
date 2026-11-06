@@ -23,9 +23,17 @@ class ExchangeConnector:
     def _create_exchange(self):
         """Create and configure the ccxt exchange instance."""
         exchange_class = getattr(ccxt, self.config.name)
+        api_key = self.config.api_key
+        api_secret = self.config.api_secret
+        if self.config.paper_trading and self.config.paper_environment == "demo":
+            api_key = self.config.demo_api_key
+            api_secret = self.config.demo_api_secret
+            if not api_key or not api_secret:
+                raise RuntimeError("DEMO_API_KEY and DEMO_API_SECRET are required for Binance Demo Mode")
+
         exchange = exchange_class({
-            "apiKey": self.config.api_key,
-            "secret": self.config.api_secret,
+            "apiKey": api_key,
+            "secret": api_secret,
             "enableRateLimit": True,
             "options": {
                 "defaultType": "spot",
@@ -34,8 +42,19 @@ class ExchangeConnector:
         })
 
         if self.config.paper_trading:
-            exchange.set_sandbox_mode(True)
-            logger.info("🧪 Running in PAPER TRADING mode (testnet)")
+            if self.config.paper_environment == "demo":
+                enable_demo_trading = getattr(exchange, "enable_demo_trading", None)
+                if not callable(enable_demo_trading):
+                    raise RuntimeError(
+                        "Installed CCXT does not support Binance Demo Mode; upgrade CCXT to >=4.5.6"
+                    )
+                enable_demo_trading(True)
+                logger.info("🧪 Running in Binance SPOT DEMO mode (no real funds)")
+            elif self.config.paper_environment == "testnet":
+                exchange.set_sandbox_mode(True)
+                logger.info("🧪 Running in PAPER TRADING mode (testnet)")
+            else:
+                raise ValueError("PAPER_ENVIRONMENT must be either 'testnet' or 'demo'")
         else:
             logger.warning("💰 Running in LIVE TRADING mode — real money at risk!")
 

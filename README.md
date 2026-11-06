@@ -77,8 +77,11 @@ EXCHANGE=binance
 API_KEY=your_key
 API_SECRET=your_secret
 
-# Paper trading (true = fake money, false = real Binance account)
+# Keep paper trading enabled. Select "demo" only after adding DEMO_API_KEY/SECRET.
 PAPER_TRADING=true
+PAPER_ENVIRONMENT=testnet  # choose demo for Binance Demo Mode
+DEMO_API_KEY=your_demo_api_key
+DEMO_API_SECRET=your_demo_api_secret
 
 # Trading pairs to monitor
 TRADING_PAIRS=BTC/USDT,ETH/USDT,SOL/USDT
@@ -110,5 +113,6 @@ This build intentionally blocks live trading even if `PAPER_TRADING=false`. Do n
 
 - The dashboard requires a high-entropy `DASHBOARD_TOKEN` in Railway; without it, requests fail closed.
 - Mount a Railway Volume at `/app/data` and set `DATA_DIR=/app/data`; otherwise local JSON state and logs can be lost on redeploy.
-- Use testnet keys only. The app does not reconcile positions with the exchange and does not place exchange-side stop orders.
+- Use dedicated Binance Demo Mode keys when `PAPER_ENVIRONMENT=demo`; use Spot Testnet keys when `PAPER_ENVIRONMENT=testnet`. Never use live account keys for paper mode.
+- Demo Mode is a better execution rehearsal than Spot Testnet, but it does not prove profitability or guarantee live fills. The app does not reconcile positions with the exchange and does not place exchange-side stop orders.
 - Do not grant withdrawal permission to exchange API keys.

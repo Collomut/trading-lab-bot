@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from strategies import (
     Signal,
@@ -19,7 +20,8 @@ from strategies import (
     ohlcv_to_dataframe
 )
 from risk_manager import RiskManager, Position
-from config import RiskConfig
+from config import ExchangeConfig, RiskConfig
+from exchange import ExchangeConnector
 
 
 class TestTradingBot(unittest.TestCase):
@@ -81,6 +83,26 @@ class TestTradingBot(unittest.TestCase):
         # Position size capped at 10% ($1,000) -> 10 units
         size = rm.calculate_position_size(portfolio, entry_price, sl_price)
         self.assertAlmostEqual(size, 10.0)
+
+    @patch("exchange.ccxt.binance")
+    def test_binance_demo_mode_uses_demo_endpoints_not_testnet(self, binance_factory):
+        config = ExchangeConfig(
+            name="binance",
+            api_key="demo-key",
+            api_secret="testnet-secret",
+            demo_api_key="demo-key",
+            demo_api_secret="demo-secret",
+            paper_trading=True,
+            paper_environment="demo",
+        )
+
+        ExchangeConnector(config)
+
+        self.assertEqual(binance_factory.call_args.args[0]["apiKey"], "demo-key")
+        self.assertEqual(binance_factory.call_args.args[0]["secret"], "demo-secret")
+        exchange = binance_factory.return_value
+        exchange.enable_demo_trading.assert_called_once_with(True)
+        exchange.set_sandbox_mode.assert_not_called()
 
     def test_corrupt_position_state_halts_new_entries(self):
         with TemporaryDirectory() as persistence_dir:
