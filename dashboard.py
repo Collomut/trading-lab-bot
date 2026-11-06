@@ -105,10 +105,12 @@ class WebDashboard:
         return web.FileResponse(html_path)
 
     async def handle_asset(self, request):
-        # Only serve the shared stylesheet; never accept arbitrary file paths.
-        if request.match_info.get("name") != "app.css":
+        # Only serve explicitly supported shared assets; never accept arbitrary paths.
+        assets = {"app.css": "app.css", "app.js": "app.js"}
+        asset_path = assets.get(request.match_info.get("name"))
+        if asset_path is None:
             raise web.HTTPNotFound()
-        return web.FileResponse(Path(__file__).parent / "templates" / "app.css")
+        return web.FileResponse(Path(__file__).parent / "templates" / asset_path)
 
     def _setup_lifecycle(self):
         self.app.on_startup.append(self.start_background_tasks)
