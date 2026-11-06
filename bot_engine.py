@@ -328,27 +328,61 @@ class TradingBot:
         )
         return order, client_id
 
-    def _place_and_persist_native_stop(self, symbol: str, entry_order_id: str) -> bool:
+    def _place_and_persist_native_stop(self, symbol: str, entry_order_id: str, fallback_sl: float | None = None, fallback_amount: float | None = None) -> bool:
         position = self.risk_manager.open_positions.get(symbol)
-        if not position:
-            self.risk_manager.halt(f"Cannot protect missing position {symbol}")
+        amount = position.amount if position else fallback_amount
+        sl_price = position.stop_loss_price if position else fallback_sl
+        if not amount or not sl_price or amount <= 0 or sl_price <= 0:
+            self.risk_manager.halt(f"Cannot protect missing or invalid position parameters for {symbol}")
             return False
-        client_id = self._client_order_id(symbol, "stop", entry_order_id or position.entry_time)
+        client_id = self._client_order_id(symbol, "stop", entry_order_id or (position.entry_time if position else int(time.time()*1000)))
         try:
             order = self.exchange.place_native_stop_loss(
-                symbol, position.amount, position.stop_loss_price, client_id
+                symbol, amount, sl_price, client_id
             )
             if not isinstance(order, dict) or not order.get("id") or str(order.get("status", "")).lower() != "open":
                 raise RuntimeError("Exchange did not confirm an open protective stop")
-            if not self.risk_manager.attach_exchange_stop(symbol, order["id"], client_id):
-                raise RuntimeError("Protective stop reference could not be persisted")
+            if position:
+                if not self.risk_manager.attach_exchange_stop(symbol, order["id"], client_id):
+                    raise RuntimeError("Protective stop reference could not be persisted")
             self.risk_manager.store.append_event("protective_stop_placed", {
                 "symbol": symbol, "order_id": str(order["id"]), "client_order_id": client_id,
+                "amount": str(amount), "stop_price": str(sl_price),
             })
             return True
         except Exception as exc:
             self.risk_manager.halt(f"Native stop placement/persistence failed for {symbol}; reconcile before continuing")
             logger.critical("Exchange-native stop was not confirmed for %s (%s)", symbol, type(exc).__name__)
+            return False
+
+    def _sync_exchange_stop(self, symbol: str) -> bool:
+        """Safely synchronize a tightened local break-even or trailing stop to Binance (F-05)."""
+        position = self.risk_manager.open_positions.get(symbol)
+        if not position or not position.stop_order_id:
+            return False
+        old_stop_id = position.stop_order_id
+        try:
+            if not self.exchange.cancel_order(old_stop_id, symbol):
+                logger.warning("Could not cancel old stop %s for %s during trailing sync; leaving local exit monitored", old_stop_id, symbol)
+                return False
+            client_id = self._client_order_id(symbol, "stop_trail", f"{int(time.time()*1000)}")
+            new_stop = self.exchange.place_native_stop_loss(
+                symbol, position.amount, position.stop_loss_price, client_id
+            )
+            if isinstance(new_stop, dict) and new_stop.get("id") and str(new_stop.get("status", "")).lower() == "open":
+                position.stop_order_id = str(new_stop["id"])
+                position.stop_client_order_id = client_id
+                self.risk_manager._save_positions()
+                self.risk_manager.store.append_event("exchange_stop_tightened", {
+                    "symbol": symbol, "old_order_id": old_stop_id, "new_order_id": str(new_stop["id"]),
+                    "new_stop_price": position.stop_loss_price
+                })
+                logger.info("Synchronized tightened stop to Binance for %s at $%s", symbol, position.stop_loss_price)
+                return True
+            else:
+                raise RuntimeError("Replacement exchange stop not confirmed open")
+        except Exception as exc:
+            logger.warning("Failed to synchronize exchange stop to Binance for %s: %s; local trailing stop remains active", symbol, exc)
             return False
 
     def _recover_terminal_partial_sell(self, symbol: str, order: dict, client_order_id: str, requested_amount) -> bool:
@@ -701,26 +735,56 @@ class TradingBot:
                 return
             fill_price = float(order.get("average") or order.get("price") or 0)
             net_filled = self._net_base_filled(order, symbol)
+            fee_ambiguous = False
+            if net_filled is None and order.get("id"):
+                try:
+                    refetched = self.exchange.exchange.fetch_order(order.get("id"), symbol)
+                    if isinstance(refetched, dict):
+                        order = refetched
+                        net_filled = self._net_base_filled(order, symbol)
+                except Exception:
+                    pass
             if net_filled is None:
-                self.risk_manager.halt(f"Buy fee/quantity details are incomplete for {symbol}; operator reconciliation required")
-                return
+                fee_ambiguous = True
+                net_filled = filled_quantity
+                self.risk_manager.store.append_event("buy_fee_missing_reconciled", {
+                    "symbol": symbol, "order_id": str(order.get("id", "")), "filled": str(filled_quantity)
+                })
+
             fill_amount = float(net_filled)
             if fill_price <= 0 or fill_amount <= 0:
                 self.risk_manager.halt(f"Invalid buy fill details for {symbol}; reconcile exchange orders and balances")
                 return
 
-            self.risk_manager.open_position(
-                symbol=symbol,
-                entry_price=fill_price,
-                amount=fill_amount,
-                order_id=order.get("id", ""),
-                atr=atr
+            try:
+                self.risk_manager.open_position(
+                    symbol=symbol,
+                    entry_price=fill_price,
+                    amount=fill_amount,
+                    order_id=order.get("id", ""),
+                    atr=atr
+                )
+            except Exception as exc:
+                logger.error("Failed to open local position: %s", exc)
+
+            # F-02: Even if local persistence failed or risk_manager is halted,
+            # we MUST still place the native stop loss on the exchange for the acquired coins!
+            stop_placed = self._place_and_persist_native_stop(
+                symbol, order.get("id", ""), fallback_sl=stop_loss_price, fallback_amount=fill_amount
             )
-            if self.risk_manager._is_halted:
-                logger.error("Position persistence failed after buy for %s; trading halted", symbol)
+
+            if self.risk_manager._is_halted or not stop_placed:
+                logger.error("Position or stop persistence issue after buy for %s; stop_placed: %s; trading halted", symbol, stop_placed)
+                self.risk_manager.store.append_event("unpersisted_entry_incident", {
+                    "symbol": symbol, "fill_amount": fill_amount, "fill_price": fill_price,
+                    "stop_placed": stop_placed, "order_id": str(order.get("id", ""))
+                })
                 return
-            if not self._place_and_persist_native_stop(symbol, order.get("id", "")):
+
+            if fee_ambiguous:
+                self.risk_manager.halt(f"Buy fee details were incomplete for {symbol}; position protected with stop, operator reconciliation required")
                 return
+
             self.risk_manager.store.mark_order_applied(client_order_id)
             if partial_terminal_fill:
                 self.risk_manager.halt(f"Partial entry fill for {symbol} was protected; manual review required")
@@ -769,30 +833,36 @@ class TradingBot:
             return
 
         position = self.risk_manager.open_positions[symbol]
+        old_stop_price = position.stop_loss_price
+        position_amount = position.amount
+
         if not self._cancel_exchange_stop(symbol):
             return
 
         logger.info(
-            f"🔻 Executing SELL: {position.amount:.6f} {symbol} @ ~${current_price:,.2f} "
+            f"🔻 Executing SELL: {position_amount:.6f} {symbol} @ ~${current_price:,.2f} "
             f"| Confidence: {signal.confidence:.0%}"
         )
 
         try:
-            order, client_order_id = self._submit_market_order(symbol, "sell", position.amount, decision_key)
+            order, client_order_id = self._submit_market_order(symbol, "sell", position_amount, decision_key)
         except Exception as exc:
-            self.risk_manager.halt(f"Sell order state requires reconciliation for {symbol}")
-            logger.error("Sell order state requires reconciliation for %s: %s", symbol, exc)
+            self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
+            self.risk_manager.halt(f"Sell order state requires reconciliation for {symbol}; protective stop restored")
+            logger.error("Sell order state requires reconciliation for %s: %s; protective stop restored", symbol, exc)
             return
         if order:
-            if not self._confirmed_full_fill(order, position.amount):
-                if self._recover_terminal_partial_sell(symbol, order, client_order_id, position.amount):
+            if not self._confirmed_full_fill(order, position_amount):
+                if self._recover_terminal_partial_sell(symbol, order, client_order_id, position_amount):
                     return
-                self.risk_manager.halt(f"Unconfirmed or partial sell fill for {symbol}; reconcile exchange orders and balances")
-                logger.error("Sell order for %s was not confirmed fully filled; position remains tracked", symbol)
+                self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
+                self.risk_manager.halt(f"Unconfirmed or partial sell fill for {symbol}; protective stop restored, reconcile exchange orders and balances")
+                logger.error("Sell order for %s was not confirmed fully filled; position remains protected", symbol)
                 return
             fill_price = float(order.get("average") or order.get("price") or 0)
             if fill_price <= 0:
-                self.risk_manager.halt(f"Invalid sell fill details for {symbol}; reconcile exchange orders and balances")
+                self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
+                self.risk_manager.halt(f"Invalid sell fill details for {symbol}; protective stop restored, reconcile exchange orders and balances")
                 return
 
             record = self.risk_manager.close_position(
@@ -824,6 +894,23 @@ class TradingBot:
 
     def check_stop_loss_take_profit(self):
         """Check all open positions for Trailing SL, Breakeven, and TP triggers."""
+        # 1. Sync any tightened break-even or trailing stops to Binance exchange (F-05)
+        for sym, pos in list(self.risk_manager.open_positions.items()):
+            cur_p = self.exchange.get_current_price(sym)
+            if cur_p > 0:
+                gain_pct = ((cur_p - pos.entry_price) / pos.entry_price) * 100
+                if gain_pct >= 1.5 and not pos.break_even_activated:
+                    pos.stop_loss_price = max(pos.stop_loss_price, pos.entry_price)
+                    pos.break_even_activated = True
+                    self.risk_manager._save_positions()
+                    self._sync_exchange_stop(sym)
+                elif pos.break_even_activated:
+                    trailing_sl = pos.highest_price * (1 - 0.015)
+                    if trailing_sl > pos.stop_loss_price:
+                        pos.stop_loss_price = trailing_sl
+                        self.risk_manager._save_positions()
+                        self._sync_exchange_stop(sym)
+
         to_close = self.risk_manager.check_positions(
             self.exchange.get_current_price
         )
@@ -834,6 +921,9 @@ class TradingBot:
             if not position:
                 continue
 
+            old_stop_price = position.stop_loss_price
+            position_amount = position.amount
+
             if not self._cancel_exchange_stop(symbol):
                 return
 
@@ -841,21 +931,24 @@ class TradingBot:
 
             try:
                 key = f"stop:{position.order_id}:{reason}:{int(time.time() // 60)}"
-                order, client_order_id = self._submit_market_order(symbol, "sell", position.amount, key)
+                order, client_order_id = self._submit_market_order(symbol, "sell", position_amount, key)
             except Exception as exc:
-                self.risk_manager.halt(f"Stop-exit order state requires reconciliation for {symbol}")
-                logger.error("Stop-exit order state requires reconciliation for %s: %s", symbol, exc)
+                self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
+                self.risk_manager.halt(f"Stop-exit order state requires reconciliation for {symbol}; protective stop restored")
+                logger.error("Stop-exit order state requires reconciliation for %s: %s; protective stop restored", symbol, exc)
                 return
             if order:
-                if not self._confirmed_full_fill(order, position.amount):
-                    if self._recover_terminal_partial_sell(symbol, order, client_order_id, position.amount):
+                if not self._confirmed_full_fill(order, position_amount):
+                    if self._recover_terminal_partial_sell(symbol, order, client_order_id, position_amount):
                         return
-                    self.risk_manager.halt(f"Unconfirmed or partial stop-exit for {symbol}; reconcile exchange orders and balances")
-                    logger.error("Stop-exit for %s was not confirmed fully filled", symbol)
+                    self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
+                    self.risk_manager.halt(f"Unconfirmed or partial stop-exit for {symbol}; protective stop restored, reconcile exchange orders and balances")
+                    logger.error("Stop-exit for %s was not confirmed fully filled; position remains protected", symbol)
                     return
                 fill_price = float(order.get("average") or order.get("price") or 0)
                 if fill_price <= 0:
-                    self.risk_manager.halt(f"Invalid stop-exit fill details for {symbol}; reconcile exchange orders and balances")
+                    self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
+                    self.risk_manager.halt(f"Invalid stop-exit fill details for {symbol}; protective stop restored, reconcile exchange orders and balances")
                     return
                 record = self.risk_manager.close_position(symbol, fill_price, reason)
 
@@ -914,9 +1007,27 @@ class TradingBot:
             self.risk_manager.set_exit_only()
             try:
                 _, open_orders = self.exchange.fetch_account_snapshot()
+                bot_cancelled_count = 0
+                non_bot_untouched_count = 0
                 for order in open_orders:
-                    if not self.exchange.cancel_order(str(order.get("id", "")), order.get("symbol")):
-                        raise RuntimeError("an open exchange order could not be cancelled")
+                    cid = str(order.get("clientOrderId") or "")
+                    oid = str(order.get("id") or "")
+                    sym = order.get("symbol")
+                    is_bot_order = (
+                        cid.startswith("cb") or
+                        cid.startswith("testnet-smoke") or
+                        cid.startswith("sim_") or
+                        cid.startswith("client_") or
+                        cid.startswith("stop") or
+                        self.risk_manager.store.is_known_client_order(cid)
+                    )
+                    if is_bot_order:
+                        if not self.exchange.cancel_order(oid, sym):
+                            raise RuntimeError(f"Bot-owned order {oid} ({cid}) could not be cancelled")
+                        bot_cancelled_count += 1
+                    else:
+                        non_bot_untouched_count += 1
+                        logger.info("Emergency stop: leaving external/manual order %s (%s) untouched", oid, cid)
             except Exception as exc:
                 self.risk_manager.halt("Emergency stop could not verify/cancel exchange orders; operator action required")
                 detail = str(exc) if isinstance(exc, AccountAccessError) else f"Exchange-order cancellation failed ({type(exc).__name__})"
@@ -942,7 +1053,10 @@ class TradingBot:
                     return False, f"Entries paused. Could not safely confirm the close for {symbol} ({type(exc).__name__})."
 
             self.risk_manager.halt("Emergency stop complete; manual review required before resuming")
-            return True, "Open exchange orders were cancelled and tracked positions were closed. Trading is halted."
+            msg = f"Bot-owned exchange orders ({bot_cancelled_count}) were cancelled and tracked positions were closed. Trading is halted."
+            if non_bot_untouched_count > 0:
+                msg += f" Note: {non_bot_untouched_count} external/manual order(s) were left untouched."
+            return True, msg
         finally:
             self._cycle_lock.release()
 

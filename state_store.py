@@ -106,6 +106,13 @@ class StateStore:
             row = conn.execute("SELECT * FROM order_intents WHERE client_order_id=?", (client_order_id,)).fetchone()
             return dict(row) if row else None
 
+    def is_known_client_order(self, client_order_id: str) -> bool:
+        if not client_order_id:
+            return False
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT 1 FROM order_intents WHERE client_order_id=?", (client_order_id,)).fetchone()
+            return row is not None
+
     def mark_order_applied(self, client_order_id):
         with self._lock, closing(self._connect()) as conn:
             conn.execute("UPDATE order_intents SET applied=1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE client_order_id=? AND state IN ('FILLED','PARTIAL_CLOSED','CANCELED','REJECTED','EXPIRED')", (client_order_id,))

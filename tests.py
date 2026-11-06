@@ -645,6 +645,175 @@ class TestTradingBot(unittest.TestCase):
             self.assertFalse(mock_urlopen.called)
             self.assertFalse(mock_smtp.called)
 
+    def test_f02_confirmed_buy_places_stop_even_if_position_persistence_fails(self):
+        """F-02: Confirm native stop loss is placed on exchange even if local DB write fails."""
+        from unittest.mock import Mock, patch
+        from bot_engine import TradingBot
+        from strategies import TradeSignal, Signal
+
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_usdt_balance.return_value = 10000.0
+            bot.exchange.get_current_price.return_value = 50000.0
+            bot.exchange.amount_to_precision.return_value = "0.01"
+            bot.exchange.get_market_limits.return_value = {"min_amount": 0.001, "min_cost": 10.0, "active": True}
+            bot.exchange.get_order_book.return_value = {"bids": [[49990.0, 1.0]], "asks": [[50000.0, 1.0]]}
+            bot._has_correlated_open_position = lambda s: (False, "")
+
+            # Simulate buy fill on Binance
+            buy_order = {
+                "id": "buy_f02_123",
+                "status": "closed",
+                "filled": "0.01",
+                "average": "50000.0",
+                "fees": [{"currency": "USDT", "cost": "0.5"}],
+            }
+            bot._submit_market_order = Mock(return_value=(buy_order, "cb_buy_client_1"))
+            # Fault injection: simulate database position save failure
+            with patch.object(bot.risk_manager, "_save_positions", side_effect=RuntimeError("disk full")):
+                # When _save_positions fails, open_position sets halted
+                # Now run buy signal
+                signal = TradeSignal(Signal.BUY, "BTC/USDT", 0.8, "Test buy", indicators={"atr": 500.0})
+                bot._handle_buy_signal(signal)
+
+            # Assert risk manager halted due to DB error
+            self.assertTrue(bot.risk_manager._is_halted)
+            # CRITICAL F-02 ASSERTION: Exchange stop loss WAS STILL PLACED on Binance!
+            self.assertTrue(bot.exchange.place_native_stop_loss.called)
+            call_args = bot.exchange.place_native_stop_loss.call_args[0]
+            self.assertEqual(call_args[0], "BTC/USDT")
+            self.assertEqual(call_args[1], 0.01)  # Amount protected
+
+    def test_f03_missing_fee_data_still_protects_and_records_position(self):
+        """F-03: Missing fee/fill array must not abandon acquired coins unprotected."""
+        from unittest.mock import Mock
+        from bot_engine import TradingBot
+        from strategies import TradeSignal, Signal
+
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_usdt_balance.return_value = 10000.0
+            bot.exchange.get_current_price.return_value = 50000.0
+            bot.exchange.amount_to_precision.return_value = "0.01"
+            bot.exchange.get_market_limits.return_value = {"min_amount": 0.001, "min_cost": 10.0, "active": True}
+            bot.exchange.get_order_book.return_value = {"bids": [[49990.0, 1.0]], "asks": [[50000.0, 1.0]]}
+            bot._has_correlated_open_position = lambda s: (False, "")
+
+            # Fill response with NO fee array, NO fee dict, and NO info.fills
+            buy_order = {
+                "id": "buy_f03_456",
+                "status": "closed",
+                "filled": "0.01",
+                "average": "50000.0",
+                # Omitted fees!
+            }
+            bot._submit_market_order = Mock(return_value=(buy_order, "cb_buy_client_2"))
+            bot.exchange.exchange.fetch_order = Mock(return_value=buy_order)
+            bot.send_notification = Mock()
+            bot._log_trade = Mock()
+
+            signal = TradeSignal(Signal.BUY, "BTC/USDT", 0.8, "Test fee-less buy", indicators={"atr": 500.0})
+            bot._handle_buy_signal(signal)
+
+            # Assert position was recorded and NOT abandoned
+            self.assertIn("BTC/USDT", bot.risk_manager.open_positions)
+            # Assert exchange stop loss was placed
+            self.assertTrue(bot.exchange.place_native_stop_loss.called)
+            # Assert halted for operator verification
+            self.assertTrue(bot.risk_manager._is_halted)
+
+    def test_f04_exit_failure_restores_protective_stop(self):
+        """F-04: If market sell fails after stop cancellation, protective stop must be restored."""
+        from unittest.mock import Mock
+        from bot_engine import TradingBot
+        from strategies import TradeSignal, Signal
+
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_current_price.return_value = 52000.0
+
+            # Position with open stop
+            pos = bot.risk_manager.open_position("BTC/USDT", 50000.0, 0.01, order_id="buy_1")
+            pos.stop_order_id = "initial_stop_id"
+            bot.risk_manager._save_positions()
+
+            bot.exchange.cancel_order.return_value = True
+            # Simulate market sell exception (e.g. network disconnect during sell)
+            bot._submit_market_order = Mock(side_effect=RuntimeError("Network failure on sell"))
+
+            signal = TradeSignal(Signal.SELL, "BTC/USDT", 0.9, "Take profit signal", indicators={})
+            bot._handle_sell_signal(signal)
+
+            # Assert market sell failed and trading halted
+            self.assertTrue(bot.risk_manager._is_halted)
+            # CRITICAL F-04 ASSERTION: Protective stop was RESTORED on exchange!
+            self.assertTrue(bot.exchange.place_native_stop_loss.called)
+            call_args = bot.exchange.place_native_stop_loss.call_args[0]
+            self.assertEqual(call_args[0], "BTC/USDT")
+            self.assertEqual(call_args[1], 0.01)
+
+    def test_f05_sync_exchange_stop_on_breakeven_or_trailing(self):
+        """F-05: Tighter break-even or trailing stops synchronize to exchange."""
+        from unittest.mock import Mock
+        from bot_engine import TradingBot
+
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.cancel_order.return_value = True
+            bot.exchange.place_native_stop_loss.return_value = {"id": "new_tighter_stop_id", "status": "open"}
+
+            # Position entered at 50,000, initial SL at 49,000
+            pos = bot.risk_manager.open_position("BTC/USDT", 50000.0, 0.01, order_id="buy_1")
+            pos.stop_order_id = "old_stop_id"
+            pos.stop_loss_price = 50000.0  # Tightened to entry (break-even)
+            bot.risk_manager._save_positions()
+
+            synced = bot._sync_exchange_stop("BTC/USDT")
+            self.assertTrue(synced)
+            # Old stop cancelled
+            bot.exchange.cancel_order.assert_called_with("old_stop_id", "BTC/USDT")
+            # New stop placed at 50,000
+            bot.exchange.place_native_stop_loss.assert_called_with("BTC/USDT", 0.01, 50000.0, pos.stop_client_order_id)
+            self.assertEqual(pos.stop_order_id, "new_tighter_stop_id")
+
+    def test_f13_emergency_stop_cancels_only_bot_orders(self):
+        """F-13: Emergency stop cancels bot-owned orders and leaves user orders untouched."""
+        from unittest.mock import Mock
+        import threading
+        from bot_engine import TradingBot
+
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot._cycle_lock = threading.Lock()
+            bot.exchange = Mock()
+
+            # Mock exchange open orders: 1 bot order, 1 manual user order
+            bot_order = {"id": "111", "symbol": "BTC/USDT", "clientOrderId": "cb_bot_stop_123"}
+            manual_order = {"id": "222", "symbol": "BTC/USDT", "clientOrderId": "web_manual_limit_order"}
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {}}, [bot_order, manual_order])
+            bot.exchange.cancel_order.return_value = True
+
+            success, msg = bot.emergency_stop()
+            self.assertTrue(success)
+            # Only bot order cancelled
+            bot.exchange.cancel_order.assert_called_once_with("111", "BTC/USDT")
+            # Manual order untouched message
+            self.assertIn("1 external/manual order(s) were left untouched", msg)
+
 
 if __name__ == "__main__":
     unittest.main()
