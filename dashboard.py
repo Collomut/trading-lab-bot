@@ -18,7 +18,7 @@ from pathlib import Path
 from aiohttp import web
 
 from config import BotConfig
-from exchange import ExchangeConnector
+from exchange import AccountAccessError, ExchangeConnector
 from strategies import get_strategy
 from risk_manager import RiskManager
 from bot_engine import TradingBot
@@ -78,6 +78,7 @@ class WebDashboard:
         self.app.router.add_get('/api/candles', self.handle_candles)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
         self.app.router.add_post('/api/exit-only', self.handle_exit_only)
+        self.app.router.add_post('/api/resume', self.handle_resume_entries)
         self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
         self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
 
@@ -170,15 +171,20 @@ class WebDashboard:
         exchange = self.bot.exchange
         risk = self.bot.risk_manager
 
-        # 1. Fetch available cash
+        # 1. Fetch cash independently from open-order permission. This lets
+        # the dashboard show a valid balance while still blocking trading if
+        # full account reconciliation is unavailable.
+        account_issue = ""
         try:
-            account, _ = await loop.run_in_executor(None, exchange.fetch_account_snapshot)
+            account = await loop.run_in_executor(None, exchange.fetch_balance_snapshot)
             usdt_balance = float((account.get("free") or {}).get("USDT") or 0.0)
             account_available = True
-        except Exception:
-            # Do not report a failed private API call as a genuine zero balance.
-            usdt_balance = 0.0
+        except Exception as exc:
+            account_issue = str(exc) if isinstance(exc, AccountAccessError) else "Balance unavailable: the private account request failed."
+            usdt_balance = None
             account_available = False
+        if not self.bot._last_reconciliation_ok and self.bot._last_account_error:
+            account_issue = self.bot._last_account_error
 
         # 2. Fetch live prices
         prices = {}
@@ -206,7 +212,7 @@ class WebDashboard:
 
         # 4. Total portfolio net worth = Cash + Open Position Values
         # If the exchange balance call failed, report unavailable instead of inventing equity.
-        total_net_worth = None if usdt_balance <= 0 else usdt_balance + sum(
+        total_net_worth = None if not account_available else usdt_balance + sum(
             p["amount"] * p["current_price"] for p in positions.values()
         )
 
@@ -243,8 +249,9 @@ class WebDashboard:
             "paper_environment": self.config.exchange.paper_environment,
             "exchange": self.config.exchange.name,
             "net_worth": round(total_net_worth, 2) if total_net_worth is not None else None,
-            "cash_balance": round(usdt_balance, 2),
+            "cash_balance": round(usdt_balance, 2) if usdt_balance is not None else None,
             "account_available": account_available,
+            "account_issue": account_issue,
             "initial_balance": self.initial_balance,
             "total_gain_loss": round(total_gain_loss, 2),
             "total_gain_loss_pct": round(gain_loss_pct, 2),
@@ -271,6 +278,7 @@ class WebDashboard:
             "halt_reason": risk._halt_reason,
             "entry_mode": risk.entry_mode(),
             "exchange_reconciled": self.bot._last_reconciliation_ok,
+            "resume_available": risk.entry_mode() == "EXIT_ONLY" and not risk._is_halted and account_available and self.bot._last_reconciliation_ok,
             "testnet_smoke_attempted": risk.store.read_state("testnet_smoke_trade") is not None,
             "prices": prices,
             "market_summary": market_summary,
@@ -336,8 +344,27 @@ class WebDashboard:
         request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
         if not origin or not hmac.compare_digest(origin, request_origin):
             return web.json_response({"error": "Same-origin request required."}, status=403)
-        self.bot.risk_manager.set_exit_only()
-        return web.json_response({"entry_mode": "EXIT_ONLY", "message": "New entries paused; existing positions remain monitored."})
+        loop = asyncio.get_event_loop()
+        success, message = await loop.run_in_executor(None, self.bot.pause_entries)
+        return web.json_response({
+            "success": success,
+            "entry_mode": self.bot.risk_manager.entry_mode(),
+            "message": message,
+        }, status=200 if success else 503)
+
+    async def handle_resume_entries(self, request):
+        origin = request.headers.get("Origin", "")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
+        if not origin or not hmac.compare_digest(origin, request_origin):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        loop = asyncio.get_event_loop()
+        success, message = await loop.run_in_executor(None, self.bot.resume_entries)
+        return web.json_response({
+            "success": success,
+            "entry_mode": self.bot.risk_manager.entry_mode(),
+            "message": message,
+        }, status=200 if success else 409)
 
     async def handle_emergency_stop(self, request):
         origin = request.headers.get("Origin", "")

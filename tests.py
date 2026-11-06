@@ -268,8 +268,48 @@ class TestTradingBot(unittest.TestCase):
         connector = object.__new__(ExchangeConnector)
         connector.exchange = Mock()
         connector.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("secret omitted")
-        with self.assertRaisesRegex(RuntimeError, "reconciliation is unavailable"):
+        with self.assertRaisesRegex(RuntimeError, "Testnet authentication"):
             connector.fetch_account_snapshot()
+
+    def test_account_authentication_failure_is_actionable_without_echoing_secrets(self):
+        import ccxt
+        from exchange import AccountAccessError
+        from unittest.mock import Mock
+        connector = object.__new__(ExchangeConnector)
+        connector.exchange = Mock()
+        connector.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("private-value-must-not-appear")
+
+        with self.assertRaises(AccountAccessError) as raised:
+            connector.fetch_balance_snapshot()
+
+        self.assertIn("Spot Testnet", str(raised.exception))
+        self.assertNotIn("private-value-must-not-appear", str(raised.exception))
+
+        from exchange import account_access_message
+        self.assertIn("API_SECRET does not match", account_access_message(ccxt.ExchangeError('{"code":-1022,"msg":"signature invalid"}')))
+        self.assertIn("API key, IP, or permissions", account_access_message(ccxt.ExchangeError('{"code":-2015,"msg":"key rejected"}')))
+
+    def test_resume_entries_requires_clean_reconciliation(self):
+        import threading
+        from unittest.mock import Mock
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.set_exit_only()
+            bot._cycle_lock = threading.Lock()
+            bot._last_account_error = "Testnet credentials rejected"
+            bot._reconcile_exchange_state = Mock(return_value=False)
+
+            success, message = bot.resume_entries()
+
+            self.assertFalse(success)
+            self.assertIn("credentials rejected", message)
+            self.assertEqual(bot.risk_manager.entry_mode(), "EXIT_ONLY")
+
+            bot._reconcile_exchange_state.return_value = True
+            success, message = bot.resume_entries()
+            self.assertTrue(success)
+            self.assertEqual(bot.risk_manager.entry_mode(), "ACTIVE")
 
     def test_native_stop_is_submitted_as_market_stop_with_persistable_client_id(self):
         from unittest.mock import Mock

@@ -6,11 +6,42 @@ Supports both paper trading (testnet) and live trading.
 import ccxt
 import logging
 import math
+import re
 import time
 from datetime import datetime, timezone
 from config import ExchangeConfig
 
 logger = logging.getLogger("bot.exchange")
+
+
+class AccountAccessError(RuntimeError):
+    """Safe, actionable account-access failure without echoing credentials."""
+
+
+def account_access_message(exc: Exception) -> str:
+    match = re.search(r'"?code"?\s*[:=]\s*(-?\d+)', str(exc), re.IGNORECASE)
+    code = match.group(1) if match else ""
+    if code == "-2015":
+        return "Binance rejected the API key, IP, or permissions (-2015). Use an active Spot Testnet key pair and check its IP restrictions and Spot permission."
+    if code == "-2014":
+        return "Binance says the API key format is invalid (-2014). Re-enter the complete Spot Testnet API key without spaces."
+    if code == "-1022":
+        return "Binance rejected the request signature (-1022). API_SECRET does not match this API_KEY; re-enter the matching Spot Testnet pair."
+    if code == "-1021":
+        return "Binance rejected the request timestamp (-1021). Check server clock synchronization and retry."
+    if isinstance(exc, ccxt.AuthenticationError):
+        return (
+            "Binance rejected Testnet authentication. Check that API_KEY and API_SECRET are the matching pair "
+            "created for Spot Testnet, are active, and have Spot trading permission. Do not use Demo or live keys."
+        )
+    if isinstance(exc, ccxt.PermissionDenied):
+        return "Binance denied account access. Check the Testnet key permissions and any IP restrictions."
+    if isinstance(exc, ccxt.RateLimitExceeded):
+        return "Binance Testnet rate-limited the account request. The bot is waiting and will retry."
+    if isinstance(exc, ccxt.NetworkError):
+        return "Binance Testnet could not be reached. Check service networking and retry after it recovers."
+    suffix = f" (Binance error {code})" if code else ""
+    return f"Binance Testnet rejected an account request{suffix}. Check the service logs and confirm the Testnet key permissions."
 
 
 def filter_closed_ohlcv(candles: list, timeframe_seconds: float, now_ms: int | None = None) -> list:
@@ -99,7 +130,7 @@ class ExchangeConnector:
         return exchange
 
     def get_balance(self) -> dict:
-        """Fetch current account balances."""
+        """Fetch current account balances; private API errors must not look like zero."""
         try:
             balance = self.exchange.fetch_balance()
             # Extract non-zero balances
@@ -113,8 +144,9 @@ class ExchangeConnector:
                     }
             return holdings
         except ccxt.BaseError as e:
-            logger.error("Failed to fetch balance (%s)", type(e).__name__)
-            return {}
+            safe_message = account_access_message(e)
+            logger.error("Failed to fetch balance (%s): %s", type(e).__name__, safe_message)
+            raise AccountAccessError(safe_message) from e
 
     def fetch_account_snapshot(self) -> tuple[dict, list]:
         """Strict authenticated snapshot; private API failures must not look empty."""
@@ -123,8 +155,18 @@ class ExchangeConnector:
             orders = self.exchange.fetch_open_orders()
             return balance, orders
         except ccxt.BaseError as exc:
-            logger.error("Private account reconciliation failed (%s)", type(exc).__name__)
-            raise RuntimeError("Account reconciliation is unavailable") from exc
+            safe_message = account_access_message(exc)
+            logger.error("Private account reconciliation failed (%s): %s", type(exc).__name__, safe_message)
+            raise AccountAccessError(safe_message) from exc
+
+    def fetch_balance_snapshot(self) -> dict:
+        """Read account balances independently from the open-order permission."""
+        try:
+            return self.exchange.fetch_balance()
+        except ccxt.BaseError as exc:
+            safe_message = account_access_message(exc)
+            logger.error("Private balance request failed (%s): %s", type(exc).__name__, safe_message)
+            raise AccountAccessError(safe_message) from exc
 
     def amount_to_precision(self, symbol: str, amount) -> str:
         self.exchange.load_markets()

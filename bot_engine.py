@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import BotConfig
-from exchange import ExchangeConnector
+from exchange import AccountAccessError, ExchangeConnector
 from strategies import get_strategy, ohlcv_to_dataframe, Signal
 from risk_manager import RiskManager
 
@@ -57,6 +57,7 @@ class TradingBot:
         self._last_analyzed_candle = {}
         self._last_reconciliation_ok = False
         self._last_account_balance = None
+        self._last_account_error = ""
         self._setup_logging()
         self._setup_trade_log()
 
@@ -359,12 +360,21 @@ class TradingBot:
             if self.risk_manager.store.unresolved_orders():
                 raise ValueError("unresolved local order intent exists")
             self._last_account_balance = balance
+            self._last_account_error = ""
             self._last_reconciliation_ok = True
             self.risk_manager.resume_after_reconciliation()
             return True
         except Exception as exc:
             self._last_reconciliation_ok = False
-            reason = f"Exchange reconciliation failed: {type(exc).__name__}"
+            if isinstance(exc, AccountAccessError):
+                self._last_account_error = str(exc)
+                # Keep the durable halt in the reconciliation class so a
+                # later clean private-account check can clear this transient
+                # connectivity/authentication halt safely.
+                reason = f"Exchange reconciliation failed: {type(exc).__name__}"
+            else:
+                self._last_account_error = "Account reconciliation failed. Check exchange permissions and service logs."
+                reason = f"Exchange reconciliation failed: {type(exc).__name__}"
             self.risk_manager.halt(reason)
             try:
                 self.risk_manager.store.append_event("reconciliation_failed", {"reason": reason})
@@ -793,7 +803,8 @@ class TradingBot:
                         raise RuntimeError("an open exchange order could not be cancelled")
             except Exception as exc:
                 self.risk_manager.halt("Emergency stop could not verify/cancel exchange orders; operator action required")
-                return False, f"Entries paused. Exchange-order cancellation failed ({type(exc).__name__}); inspect the exchange account."
+                detail = str(exc) if isinstance(exc, AccountAccessError) else f"Exchange-order cancellation failed ({type(exc).__name__})"
+                return False, f"Entries paused. {detail} Inspect the Testnet account before attempting recovery."
 
             for symbol, position in list(self.risk_manager.open_positions.items()):
                 try:
@@ -816,6 +827,42 @@ class TradingBot:
 
             self.risk_manager.halt("Emergency stop complete; manual review required before resuming")
             return True, "Open exchange orders were cancelled and tracked positions were closed. Trading is halted."
+        finally:
+            self._cycle_lock.release()
+
+    def pause_entries(self) -> tuple[bool, str]:
+        """Serialize the entry pause against order cycles and durably record it."""
+        if not self._cycle_lock.acquire(timeout=30):
+            return False, "The trading cycle is still busy. Pause was not confirmed; retry and verify the status."
+        try:
+            self.risk_manager.set_exit_only()
+            return True, "New entries paused. Existing positions remain monitored."
+        except Exception:
+            self.risk_manager.halt("Entry pause could not be saved; operator review required")
+            logger.exception("Could not persist entry pause")
+            return False, "Pause could not be saved. Trading is halted; inspect service logs."
+        finally:
+            self._cycle_lock.release()
+
+    def resume_entries(self) -> tuple[bool, str]:
+        """Resume a deliberate entry pause only after a fresh clean account reconciliation."""
+        if not self._cycle_lock.acquire(timeout=10):
+            return False, "The trading worker is busy. Wait for the current account check and try again."
+        try:
+            if self.risk_manager.entry_mode() != "EXIT_ONLY":
+                return False, "New entries are not paused."
+            if not self._reconcile_exchange_state():
+                reason = self._last_account_error or self.risk_manager._halt_reason
+                return False, f"Cannot resume: account reconciliation failed. {reason}"
+            if self.risk_manager._is_halted:
+                return False, f"Cannot resume while a safety halt is active: {self.risk_manager._halt_reason}"
+            self.risk_manager.store.write_state("entry_mode", "ACTIVE")
+            self.risk_manager.store.append_event("mode_changed", {"mode": "ACTIVE", "source": "operator_resume"})
+            return True, "Entries resumed after successful account reconciliation."
+        except Exception as exc:
+            self.risk_manager.halt("Resume request could not be saved; operator review required")
+            logger.exception("Could not safely resume entries (%s)", type(exc).__name__)
+            return False, "Resume could not be saved. Trading remains paused; inspect service logs."
         finally:
             self._cycle_lock.release()
 

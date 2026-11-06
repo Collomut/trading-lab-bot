@@ -39,7 +39,7 @@
 | Criterion | Status | Evidence / remaining work |
 |---|---|---|
 | Emergency stop that cancels/closes | PARTIAL | The authenticated same-origin control cancels exchange orders, attempts to close bot-tracked positions, then latches a halt. It depends on the same service/API/network, does not terminate Railway, and does not sweep untracked inventory. |
-| Exit-only mode | PASS | `/api/exit-only` durably disables new entries; existing tracked positions continue through stop/strategy exit monitoring. No UI resume control is provided. |
+| Exit-only mode | PASS | `/api/exit-only` durably disables new entries; existing tracked positions continue through stop/strategy exit monitoring. `/api/resume` takes the same trading lock and requires fresh successful account reconciliation; safety halts cannot be cleared by this control. |
 | Manual exchange intervention | PARTIAL | Balance/open-order mismatch blocks new orders. Automatic position import/adoption and safe external-close accounting are not implemented. |
 | Safe hot reload | CRITICAL | Configuration changes require a restart; in-flight risk limits are not dynamically reconciled. |
 | External heartbeat / alert routing | PARTIAL | Optional Telegram notifications exist; no independent dead-man monitor or SMS/phone paging is configured by code. |
@@ -63,4 +63,4 @@ Line numbers refer to this reviewed build:
 - Durable schema and order transitions: `state_store.py:17` (`ORDER_TRANSITIONS`), `state_store.py:39` (`_initialize`), `state_store.py:81` (`write_positions`), `state_store.py:89` (`create_order_intent`), `state_store.py:109` (`mark_order_applied`).
 - Stable IDs, pre-submit journal, reconciliation, fill and entry preflight: `bot_engine.py:166` (`_client_order_id`), `bot_engine.py:171` (`_submit_market_order`), `bot_engine.py:205` (`_reconcile_exchange_state`), `bot_engine.py:259` (`_net_base_filled`), `bot_engine.py:286` (`_handle_buy_signal`), `bot_engine.py:567` (`run_cycle`).
 - Risk persistence and entry gate: `risk_manager.py:118` (`_load_daily_state`), `risk_manager.py:145` (`_save_daily_state`), `risk_manager.py:160` (`_save_positions`), `risk_manager.py:182` (`_load_positions`), `risk_manager.py:246` (`can_open_position`), `risk_manager.py:287` (`calculate_position_size`), `risk_manager.py:415` (`check_positions`).
-- Exit-only operator endpoint: `dashboard.py:80` (route), `dashboard.py:330` (`handle_exit_only`). Risk/config caps: `config.py:68` (`validate`), `config.py:130` (spread bound), `config.py:137` (per-trade risk bound).
+- Entry pause/resume endpoints: `dashboard.py:80` (routes), `dashboard.py:340` (`handle_exit_only`), `dashboard.py:351` (`handle_resume_entries`); serialized resume/reconciliation: `bot_engine.py:824` (`resume_entries`). Risk/config caps: `config.py:68` (`validate`), `config.py:130` (spread bound), `config.py:137` (per-trade risk bound).
