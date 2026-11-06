@@ -194,7 +194,11 @@ class WebDashboard:
 
     async def _serve_page(self, filename):
         html_path = Path(__file__).parent / "templates" / filename
-        return web.FileResponse(html_path)
+        resp = web.FileResponse(html_path)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
 
     async def handle_asset(self, request):
         # Only serve explicitly supported shared assets; never accept arbitrary paths.
@@ -287,7 +291,15 @@ class WebDashboard:
             return web.Response(text="<h1>Dashboard template not found</h1>", content_type="text/html")
         with open(html_path, "r", encoding="utf-8") as f:
             content = f.read()
-        return web.Response(text=content, content_type="text/html")
+        return web.Response(
+            text=content,
+            content_type="text/html",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+        )
 
     async def _get_current_status(self) -> dict:
         """Fetch real-time bot and market status tailored for beginners."""
@@ -433,7 +445,14 @@ class WebDashboard:
     async def handle_status(self, request):
         try:
             status = await self._get_current_status()
-            return web.json_response(status)
+            return web.json_response(
+                status,
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                }
+            )
         except Exception:
             logger.exception("Dashboard status request failed")
             return web.json_response({"error": "Status is temporarily unavailable."}, status=500)
