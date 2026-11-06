@@ -19,15 +19,16 @@ class AccountAccessError(RuntimeError):
 
 
 def account_access_message(exc: Exception) -> str:
-    match = re.search(r'"?code"?\s*[:=]\s*(-?\d+)', str(exc), re.IGNORECASE)
+    error_text = str(exc).lower()
+    match = re.search(r'"?code"?\s*[:=]\s*(-?\d+)', error_text, re.IGNORECASE)
     code = match.group(1) if match else ""
-    if code == "-2015":
+    if code == "-2015" or "invalid api-key, ip, or permissions" in error_text:
         return "Binance rejected the API key, IP, or permissions (-2015). Use an active Spot Testnet key pair and check its IP restrictions and Spot permission."
-    if code == "-2014":
+    if code == "-2014" or "api-key format invalid" in error_text:
         return "Binance says the API key format is invalid (-2014). Re-enter the complete Spot Testnet API key without spaces."
-    if code == "-1022":
+    if code == "-1022" or "signature for this request is not valid" in error_text:
         return "Binance rejected the request signature (-1022). API_SECRET does not match this API_KEY; re-enter the matching Spot Testnet pair."
-    if code == "-1021":
+    if code == "-1021" or "timestamp for this request is outside" in error_text or "timestamp for this request was" in error_text:
         return "Binance rejected the request timestamp (-1021). Check server clock synchronization and retry."
     if isinstance(exc, ccxt.AuthenticationError):
         return (
