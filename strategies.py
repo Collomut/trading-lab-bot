@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 import numpy as np
-from ta.trend import EMAIndicator, MACD, SMAIndicator
+from ta.trend import ADXIndicator, EMAIndicator, MACD, SMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 
@@ -305,12 +305,22 @@ class CombinedStrategy:
     Risk level: LOWEST / CONSERVATIVE
     """
 
-    def __init__(self, use_trend_filter: bool = True, trend_period: int = 50):
+    def __init__(
+        self,
+        use_trend_filter: bool = True,
+        trend_period: int = 50,
+        regime_filter_enabled: bool = True,
+        min_trend_adx: float = 18.0,
+        max_atr_pct: float = 3.0,
+    ):
         self.ema = EMA_Crossover_Strategy()
         self.rsi = RSI_Mean_Reversion_Strategy()
         self.macd = MACD_Strategy()
         self.use_trend_filter = use_trend_filter
         self.trend_period = trend_period
+        self.regime_filter_enabled = regime_filter_enabled
+        self.min_trend_adx = min_trend_adx
+        self.max_atr_pct = max_atr_pct
 
     def analyze(self, df: pd.DataFrame, symbol: str) -> TradeSignal:
         """
@@ -322,6 +332,44 @@ class CombinedStrategy:
         )
         df["atr"] = atr_indicator.average_true_range()
         current_atr = df["atr"].iloc[-1] if not df["atr"].isna().all() else 0.0
+
+        # A fixed, inspectable gate: pause new BUYs in weak-trend or unusually
+        # volatile conditions. It never changes its own thresholds.
+        regime_ok = True
+        regime_reason = "Regime filter disabled"
+        regime_adx = np.nan
+        atr_pct = np.nan
+        regime_label = "filter_off"
+        if self.regime_filter_enabled:
+            if len(df) < 30:
+                regime_ok = False
+                regime_reason = "Not enough candles to classify market regime"
+                regime_label = "unknown"
+            else:
+                try:
+                    adx_indicator = ADXIndicator(
+                        high=df["high"], low=df["low"], close=df["close"], window=14
+                    )
+                    regime_adx = float(adx_indicator.adx().iloc[-1])
+                    current_close = float(df["close"].iloc[-1])
+                    atr_pct = (float(current_atr) / current_close * 100.0) if current_close > 0 else np.nan
+                    if not np.isfinite(regime_adx) or not np.isfinite(atr_pct):
+                        raise ValueError("Non-finite regime indicator")
+                    if atr_pct > self.max_atr_pct:
+                        regime_ok = False
+                        regime_reason = f"High volatility ({atr_pct:.2f}% ATR > {self.max_atr_pct:.2f}% limit)"
+                        regime_label = "high_volatility"
+                    elif regime_adx < self.min_trend_adx:
+                        regime_ok = False
+                        regime_reason = f"Weak trend ({regime_adx:.1f} ADX < {self.min_trend_adx:.1f} minimum)"
+                        regime_label = "weak_trend"
+                    else:
+                        regime_reason = f"Trend conditions pass ({regime_adx:.1f} ADX, {atr_pct:.2f}% ATR)"
+                        regime_label = "trend"
+                except Exception as exc:
+                    regime_ok = False
+                    regime_reason = f"Regime unavailable; entry paused ({exc})"
+                    regime_label = "unknown"
 
         # Calculate volume moving average
         vol_sma_indicator = SMAIndicator(close=df["volume"], window=20)
@@ -358,6 +406,9 @@ class CombinedStrategy:
 
         all_indicators = {
             "atr": round(current_atr, 4) if not pd.isna(current_atr) else 0.0,
+            "atr_pct": round(float(atr_pct), 3) if np.isfinite(atr_pct) else None,
+            "adx": round(float(regime_adx), 2) if np.isfinite(regime_adx) else None,
+            "market_regime": regime_label,
             "volume": round(current_vol, 2),
             "vol_avg20": round(vol_avg, 2) if not pd.isna(vol_avg) else 0.0,
         }
@@ -380,6 +431,13 @@ class CombinedStrategy:
 
         # Handle BUY signals (Must pass Trend Filter + Agreement)
         if len(buy_signals) >= 2:
+            if not regime_ok:
+                return TradeSignal(
+                    signal=Signal.HOLD, symbol=symbol, confidence=0.0,
+                    reason=f"BUY PAUSED: {regime_reason}",
+                    indicators=all_indicators
+                )
+
             # Check Trend Filter
             if not trend_ok_for_buy:
                 return TradeSignal(
@@ -412,7 +470,13 @@ class CombinedStrategy:
         )
 
 
-def get_strategy(name: str):
+def get_strategy(
+    name: str,
+    *,
+    regime_filter_enabled: bool = True,
+    min_trend_adx: float = 18.0,
+    max_atr_pct: float = 3.0,
+):
     """Factory function to get a strategy by name."""
     strategies = {
         "ema_crossover": EMA_Crossover_Strategy,
@@ -423,5 +487,11 @@ def get_strategy(name: str):
     if name not in strategies:
         raise ValueError(
             f"Unknown strategy '{name}'. Available: {list(strategies.keys())}"
+        )
+    if name == "combined":
+        return CombinedStrategy(
+            regime_filter_enabled=regime_filter_enabled,
+            min_trend_adx=min_trend_adx,
+            max_atr_pct=max_atr_pct,
         )
     return strategies[name]()

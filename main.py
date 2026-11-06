@@ -142,7 +142,12 @@ def run_backtest(config: BotConfig):
     print("=" * 50)
 
     exchange = ExchangeConnector(config.exchange)
-    strategy = get_strategy(config.strategy.name)
+    strategy = get_strategy(
+        config.strategy.name,
+        regime_filter_enabled=config.strategy.regime_filter_enabled,
+        min_trend_adx=config.strategy.min_trend_adx,
+        max_atr_pct=config.strategy.max_atr_pct,
+    )
 
     # Simulated portfolio
     initial_balance = 10000.0  # $10,000 starting balance

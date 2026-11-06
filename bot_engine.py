@@ -42,6 +42,7 @@ class TradingBot:
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
         self.is_running = False
         self._cycle_count = 0
+        self.last_signals = {}
         self._setup_logging()
         self._setup_trade_log()
 
@@ -123,6 +124,13 @@ class TradingBot:
         # Convert to DataFrame and run strategy
         df = ohlcv_to_dataframe(ohlcv)
         signal = self.strategy.analyze(df, symbol)
+        self.last_signals[symbol] = {
+            "signal": signal.signal.value,
+            "reason": signal.reason,
+            "confidence": signal.confidence,
+            "indicators": signal.indicators,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
         if signal.signal != Signal.HOLD:
             logger.info(str(signal))

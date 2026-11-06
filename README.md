@@ -19,10 +19,11 @@ Railway files outside a mounted volume are ephemeral, so open-position and risk 
 1. **Macro Trend Regime Filter**: Automatically vetoes BUY signals during downtrends (checks against 50/200-period EMA).
 2. **Process-monitored exit thresholds**: The worker checks break-even and trailing thresholds, but these are not exchange-side orders and can fail during downtime or network errors.
 3. **ATR-Aware Sizing**: Calculates Average True Range (ATR) to avoid getting shaken out by normal market wicks.
-4. **Volume Confirmation**: Rejects fakeout signals during low-volume market dead zones.
-5. **Disk Persistence**: Actively writes open positions to `data/open_positions.json`. If your computer restarts, the bot restores its tracking automatically.
-6. **Multi-Timeframe Support**: Tested and tuned for both `15m` and `1h` (1-hour timeframe achieved **66.7% win rate** in backtests).
-7. **Optional Telegram Alerts**: Sends live buy/sell/stop-loss notifications directly to your phone.
+4. **Fixed Market-Regime Gate**: The combined strategy pauses new buys when ADX is below `MIN_TREND_ADX` or ATR exceeds `MAX_ATR_PCT`. It does not alter thresholds automatically; exits and SELL signals remain available.
+5. **Volume Confirmation**: Rejects fakeout signals during low-volume market dead zones.
+6. **Disk Persistence**: Actively writes open positions to `data/open_positions.json`. If your computer restarts, the bot restores its tracking automatically.
+7. **Multi-Timeframe Support**: Supports common exchange candle intervals; performance is not established across them.
+8. **Optional Telegram Alerts**: Sends buy/sell/stop-loss notifications directly to your phone.
 
 ---
 

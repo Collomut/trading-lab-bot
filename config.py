@@ -3,6 +3,7 @@ Configuration loader for the trading bot.
 Reads settings from .env file and provides typed config access.
 """
 
+import math
 import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
@@ -37,6 +38,9 @@ class StrategyConfig:
     name: str = os.getenv("STRATEGY", "combined")
     timeframe: str = os.getenv("TIMEFRAME", "15m")
     lookback_candles: int = int(os.getenv("LOOKBACK_CANDLES", "100"))
+    regime_filter_enabled: bool = os.getenv("REGIME_FILTER_ENABLED", "true").lower() == "true"
+    min_trend_adx: float = float(os.getenv("MIN_TREND_ADX", "18"))
+    max_atr_pct: float = float(os.getenv("MAX_ATR_PCT", "3.0"))
     trading_pairs: list = field(default_factory=lambda: os.getenv(
         "TRADING_PAIRS", "BTC/USDT,ETH/USDT"
     ).split(","))
@@ -91,6 +95,10 @@ class BotConfig:
             errors.append("POSITION_SIZE_PCT must be greater than 0 and no more than 50%")
         if not self.dashboard_token:
             errors.append("DASHBOARD_TOKEN is required because the Railway dashboard exposes account and trading controls")
+        if not math.isfinite(self.strategy.min_trend_adx) or not (0 <= self.strategy.min_trend_adx <= 100):
+            errors.append("MIN_TREND_ADX must be a finite value between 0 and 100")
+        if not math.isfinite(self.strategy.max_atr_pct) or self.strategy.max_atr_pct <= 0:
+            errors.append("MAX_ATR_PCT must be a finite value greater than 0")
 
         return errors
 
