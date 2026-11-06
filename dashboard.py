@@ -59,18 +59,41 @@ class WebDashboard:
 
     def _setup_routes(self):
         self.app.router.add_get('/', self.handle_index)
+        self.app.router.add_get('/positions', self.handle_positions)
+        self.app.router.add_get('/history', self.handle_history)
+        self.app.router.add_get('/strategy', self.handle_strategy)
         self.app.router.add_get('/terms', self.handle_terms)
+        self.app.router.add_get('/assets/{name}', self.handle_asset)
         self.app.router.add_get('/api/status', self.handle_status)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
 
     async def handle_terms(self, request):
         """Serve the terms and glossary page."""
-        html_path = Path(__file__).parent / "templates" / "terms.html"
+        html_path = Path(__file__).parent / "templates" / "glossary.html"
         if not html_path.exists():
             return web.Response(text="<h1>Terms template not found</h1>", content_type="text/html")
         with open(html_path, "r", encoding="utf-8") as f:
             content = f.read()
         return web.Response(text=content, content_type="text/html")
+
+    async def handle_positions(self, request):
+        return await self._serve_page("positions.html")
+
+    async def handle_history(self, request):
+        return await self._serve_page("history.html")
+
+    async def handle_strategy(self, request):
+        return await self._serve_page("strategy.html")
+
+    async def _serve_page(self, filename):
+        html_path = Path(__file__).parent / "templates" / filename
+        return web.FileResponse(html_path)
+
+    async def handle_asset(self, request):
+        # Only serve the shared stylesheet; never accept arbitrary file paths.
+        if request.match_info.get("name") != "app.css":
+            raise web.HTTPNotFound()
+        return web.FileResponse(Path(__file__).parent / "templates" / "app.css")
 
     def _setup_lifecycle(self):
         self.app.on_startup.append(self.start_background_tasks)
@@ -116,7 +139,7 @@ class WebDashboard:
 
     async def handle_index(self, request):
         """Serve the HTML dashboard."""
-        html_path = Path(__file__).parent / "templates" / "index.html"
+        html_path = Path(__file__).parent / "templates" / "overview.html"
         if not html_path.exists():
             return web.Response(text="<h1>Dashboard template not found</h1>", content_type="text/html")
         with open(html_path, "r", encoding="utf-8") as f:
@@ -208,6 +231,13 @@ class WebDashboard:
             "positions": positions,
             "positions_count": len(positions),
             "max_positions": self.config.risk.max_open_positions,
+            "risk_per_trade_pct": self.config.risk.max_risk_per_trade,
+            "position_size_pct": self.config.risk.position_size_pct,
+            "daily_loss_limit_pct": self.config.risk.max_daily_loss_pct,
+            "stop_loss_pct": self.config.risk.stop_loss_pct,
+            "take_profit_pct": self.config.risk.take_profit_pct,
+            "halted": risk._is_halted,
+            "halt_reason": risk._halt_reason,
             "prices": prices,
             "market_summary": market_summary,
             "strategy_name": self.config.strategy.name.upper(),
