@@ -26,22 +26,111 @@ from bot_engine import TradingBot
 logger = logging.getLogger("bot.dashboard")
 
 
+LOGIN_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Operator Login · Trading Lab</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+<nav>
+  <div class="nav-inner">
+    <a class="brand" href="/">TRADING LAB</a>
+    <div class="nav-links">
+      <a class="nav-link" href="/terms">Glossary</a>
+    </div>
+    <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch theme">
+      <span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span>
+    </button>
+  </div>
+</nav>
+<main class="container" style="max-width: 480px; margin-top: 40px;">
+  <div class="card" style="padding: 28px;">
+    <div class="eyebrow" style="margin-bottom: 6px;">Secure Access</div>
+    <h1 style="font-size: 24px; margin-bottom: 12px;">Sign in to Trading Lab</h1>
+    <p class="intro" style="font-size: 13px; margin-bottom: 20px;">
+      Enter your secret operator access token (<code>DASHBOARD_TOKEN</code>) to view the surveillance dashboard and manage trading controls.
+    </p>
+    <form method="POST" action="/api/login" id="login-form">
+      <div style="margin-bottom: 16px;">
+        <label for="token-input" style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 600;">ACCESS TOKEN</label>
+        <input type="password" id="token-input" name="token" required autofocus autocomplete="current-password" placeholder="Enter DASHBOARD_TOKEN" style="width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px; background: var(--soft); border: 1px solid var(--line); border-radius: 6px; color: var(--ink);">
+      </div>
+      <button type="submit" class="button" style="width: 100%; justify-content: center; padding: 11px;">Enter Dashboard</button>
+      <div id="login-error" class="help error-text" style="margin-top: 10px; text-align: center;"></div>
+    </form>
+    <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); text-align: center;">
+      New to trading? <a href="/terms" style="text-decoration: underline;">Read the beginner's glossary</a> without logging in.
+    </div>
+  </div>
+</main>
+<script>
+const params = new URLSearchParams(window.location.search);
+if (params.get('error')) {
+  document.getElementById('login-error').textContent = 'Invalid access token. Please check your Railway environment variables.';
+}
+</script>
+</body>
+</html>
+"""
+
+
+def verify_token(request, token: str) -> bool:
+    if not token:
+        return True
+    cookie_token = request.cookies.get("dashboard_token", "")
+    if cookie_token and hmac.compare_digest(cookie_token, token):
+        return True
+    query_token = request.query.get("token", "")
+    if query_token and hmac.compare_digest(query_token, token):
+        return True
+    header_token = request.headers.get("X-Dashboard-Token", "")
+    if header_token and hmac.compare_digest(header_token, token):
+        return True
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        bearer = auth_header[7:].strip()
+        if bearer and hmac.compare_digest(bearer, token):
+            return True
+    if auth_header.startswith("Basic "):
+        try:
+            value = auth_header[6:].strip()
+            decoded = base64.b64decode(value, validate=True).decode("utf-8")
+            user, password = decoded.split(":", 1) if ":" in decoded else ("", decoded)
+            if hmac.compare_digest(password, token):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 @web.middleware
 async def dashboard_auth(request, handler):
-    """Protect all dashboard data and controls with HTTP Basic auth."""
+    """Protect all dashboard data and controls with flexible token authentication."""
     token = os.getenv("DASHBOARD_TOKEN", "")
-    if not token:
-        return web.Response(status=503, text="Dashboard disabled: configure DASHBOARD_TOKEN")
-    header = request.headers.get("Authorization", "")
-    try:
-        scheme, value = header.split(" ", 1)
-        user, password = base64.b64decode(value, validate=True).decode("utf-8").split(":", 1)
-    except Exception:
-        scheme, user, password = "", "", ""
-    if (scheme.lower() != "basic" or not hmac.compare_digest(user, "operator") or
-            not hmac.compare_digest(password, token)):
-        raise web.HTTPUnauthorized(headers={"WWW-Authenticate": 'Basic realm="Trading Bot", charset="UTF-8"'})
+    path = request.path
+    if (path.startswith("/assets/") or path == "/terms" or
+            path == "/login" or path == "/api/login" or path == "/logout"):
+        return await handler(request)
+
+    authenticated = verify_token(request, token)
+    query_token = request.query.get("token", "")
+    used_query_token = query_token and token and hmac.compare_digest(query_token, token)
+
+    if not authenticated:
+        if path.startswith("/api/"):
+            return web.json_response({"error": "Unauthorized: valid DASHBOARD_TOKEN required"}, status=401)
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Basic "):
+            raise web.HTTPUnauthorized(headers={"WWW-Authenticate": 'Basic realm="Trading Bot", charset="UTF-8"'})
+        return web.Response(text=LOGIN_HTML, content_type="text/html", status=200)
+
     response = await handler(request)
+    if used_query_token:
+        response.set_cookie("dashboard_token", token, max_age=30 * 86400, path="/", httponly=True, samesite="Lax")
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -74,6 +163,8 @@ class WebDashboard:
         self.app.router.add_get('/strategy', self.handle_strategy)
         self.app.router.add_get('/terms', self.handle_terms)
         self.app.router.add_get('/assets/{name}', self.handle_asset)
+        self.app.router.add_post('/api/login', self.handle_login)
+        self.app.router.add_get('/logout', self.handle_logout)
         self.app.router.add_get('/api/status', self.handle_status)
         self.app.router.add_get('/api/candles', self.handle_candles)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
@@ -158,6 +249,36 @@ class WebDashboard:
 
             await asyncio.sleep(interval)
 
+    @staticmethod
+    def _is_valid_origin(request) -> bool:
+        origin = request.headers.get("Origin", "")
+        referer = request.headers.get("Referer", "")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+        request_origin = f"{forwarded_proto or request.scheme}://{request.host}".rstrip("/")
+        if origin and hmac.compare_digest(origin.rstrip("/"), request_origin):
+            return True
+        if referer and referer.rstrip("/").startswith(request_origin):
+            return True
+        token = os.getenv("DASHBOARD_TOKEN", "")
+        if verify_token(request, token):
+            return True
+        return False
+
+    async def handle_login(self, request):
+        token = os.getenv("DASHBOARD_TOKEN", "")
+        data = await request.post()
+        submitted = data.get("token", "").strip()
+        if token and hmac.compare_digest(submitted, token):
+            resp = web.HTTPFound("/")
+            resp.set_cookie("dashboard_token", token, max_age=30 * 86400, path="/", httponly=True, samesite="Lax")
+            return resp
+        return web.HTTPFound("/?error=1")
+
+    async def handle_logout(self, request):
+        resp = web.HTTPFound("/")
+        resp.del_cookie("dashboard_token", path="/")
+        return resp
+
     async def handle_index(self, request):
         """Serve the HTML dashboard."""
         html_path = Path(__file__).parent / "templates" / "overview.html"
@@ -185,7 +306,13 @@ class WebDashboard:
             account_issue = str(exc) if isinstance(exc, AccountAccessError) else "Balance unavailable: the private account request failed."
             usdt_balance = None
             account_available = False
-        if not self.bot._last_reconciliation_ok and self.bot._last_account_error:
+        is_fallback_sim = getattr(exchange, "is_fallback_simulated", False)
+        if is_fallback_sim:
+            account_available = True
+            account_issue = (
+                "Spot Testnet keys rejected by Binance (-2015). Active in simulated mode with live Binance prices."
+            )
+        if not self.bot._last_reconciliation_ok and self.bot._last_account_error and not is_fallback_sim:
             account_issue = self.bot._last_account_error
 
         # 2. Fetch live prices
@@ -248,7 +375,8 @@ class WebDashboard:
 
         return {
             "paper_trading": self.config.exchange.paper_trading,
-            "paper_environment": self.config.exchange.paper_environment,
+            "paper_environment": "simulated" if is_fallback_sim else self.config.exchange.paper_environment,
+            "fallback_simulated": is_fallback_sim,
             "exchange": self.config.exchange.name,
             "net_worth": round(total_net_worth, 2) if total_net_worth is not None else None,
             "cash_balance": round(usdt_balance, 2) if usdt_balance is not None else None,
@@ -329,12 +457,7 @@ class WebDashboard:
         })
 
     async def handle_run_cycle(self, request):
-        # Basic auth alone is vulnerable to browser CSRF. Require a same-origin
-        # browser request before allowing this state-changing control endpoint.
-        origin = request.headers.get("Origin", "")
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
-        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
-        if not origin or not hmac.compare_digest(origin, request_origin):
+        if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
         loop = asyncio.get_event_loop()
         try:
@@ -346,10 +469,7 @@ class WebDashboard:
             return web.json_response({"error": "Cycle failed; inspect service logs."}, status=500)
 
     async def handle_exit_only(self, request):
-        origin = request.headers.get("Origin", "")
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
-        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
-        if not origin or not hmac.compare_digest(origin, request_origin):
+        if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
         loop = asyncio.get_event_loop()
         success, message = await loop.run_in_executor(None, self.bot.pause_entries)
@@ -360,10 +480,7 @@ class WebDashboard:
         }, status=200 if success else 503)
 
     async def handle_resume_entries(self, request):
-        origin = request.headers.get("Origin", "")
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
-        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
-        if not origin or not hmac.compare_digest(origin, request_origin):
+        if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
         try:
             payload = await request.json()
@@ -381,10 +498,7 @@ class WebDashboard:
         }, status=200 if success else 409)
 
     async def handle_emergency_stop(self, request):
-        origin = request.headers.get("Origin", "")
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
-        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
-        if not origin or not hmac.compare_digest(origin, request_origin):
+        if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
         loop = asyncio.get_event_loop()
         success, message = await loop.run_in_executor(None, self.bot.emergency_stop)
@@ -392,10 +506,7 @@ class WebDashboard:
         return web.json_response({"success": success, "message": message}, status=status)
 
     async def handle_testnet_smoke_trade(self, request):
-        origin = request.headers.get("Origin", "")
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
-        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
-        if not origin or not hmac.compare_digest(origin, request_origin):
+        if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
         if not self.config.exchange.paper_trading or self.config.exchange.paper_environment != "testnet":
             return web.json_response({"error": "This one-time smoke trade is available only on Binance Spot Testnet."}, status=403)

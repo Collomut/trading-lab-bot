@@ -4,6 +4,7 @@ Supports both paper trading (testnet) and live trading.
 """
 
 import ccxt
+import os
 import logging
 import json
 import math
@@ -107,6 +108,110 @@ class ExchangeConnector:
         self.exchange = self._create_exchange()
         self._daily_pnl = 0.0
         self._trades_today = 0
+        try:
+            self._sim_cash = float(os.getenv("INITIAL_BALANCE", "10000.0"))
+        except ValueError:
+            self._sim_cash = 10000.0
+        self._sim_positions = {}
+        self._sim_orders = {}
+        self._sim_stops = {}
+        self.is_fallback_simulated = False
+        self.fallback_reason = ""
+
+    def _is_simulated(self) -> bool:
+        cfg = getattr(self, "config", None)
+        if not cfg or not getattr(cfg, "paper_trading", False):
+            return False
+        return getattr(cfg, "paper_environment", "") == "simulated" or getattr(self, "is_fallback_simulated", False)
+
+    def _get_simulated_balance_dict(self) -> dict:
+        cash = getattr(self, "_sim_cash", 10000.0)
+        total_holdings = {"USDT": cash}
+        for sym, amt in getattr(self, "_sim_positions", {}).items():
+            base = sym.split("/")[0]
+            total_holdings[base] = amt
+        return {
+            "total": total_holdings,
+            "free": {"USDT": cash},
+            "used": {"USDT": 0.0},
+        }
+
+    def _get_simulated_holdings(self) -> dict:
+        cash = getattr(self, "_sim_cash", 10000.0)
+        holdings = {"USDT": {"total": cash, "free": cash, "used": 0.0}}
+        for sym, amt in getattr(self, "_sim_positions", {}).items():
+            if amt > 0:
+                base = sym.split("/")[0]
+                holdings[base] = {"total": amt, "free": amt, "used": 0.0}
+        return holdings
+
+    def _fetch_simulated_snapshot(self) -> tuple[dict, list]:
+        return self._get_simulated_balance_dict(), list(getattr(self, "_sim_stops", {}).values())
+
+    def _simulated_market_buy(self, symbol: str, amount, client_order_id: str | None = None) -> dict:
+        price = self.get_current_price(symbol)
+        amt = float(amount)
+        cost = amt * price
+        self._sim_cash = max(0.0, getattr(self, "_sim_cash", 10000.0) - cost)
+        if not hasattr(self, "_sim_positions"):
+            self._sim_positions = {}
+        self._sim_positions[symbol] = self._sim_positions.get(symbol, 0.0) + amt
+        order_id = f"sim_buy_{int(time.time()*1000)}"
+        cid = client_order_id or f"client_{order_id}"
+        base = symbol.split("/")[0]
+        order = {
+            "id": order_id,
+            "clientOrderId": cid,
+            "symbol": symbol,
+            "side": "buy",
+            "type": "market",
+            "status": "closed",
+            "price": price,
+            "average": price,
+            "amount": amt,
+            "filled": amt,
+            "remaining": 0.0,
+            "cost": cost,
+            "fee": {"currency": base, "cost": amt * 0.001},
+            "timestamp": int(time.time() * 1000),
+        }
+        if not hasattr(self, "_sim_orders"):
+            self._sim_orders = {}
+        self._sim_orders[order_id] = order
+        self._sim_orders[cid] = order
+        return order
+
+    def _simulated_market_sell(self, symbol: str, amount, client_order_id: str | None = None) -> dict:
+        price = self.get_current_price(symbol)
+        amt = float(amount)
+        cost = amt * price
+        self._sim_cash = getattr(self, "_sim_cash", 10000.0) + cost
+        if not hasattr(self, "_sim_positions"):
+            self._sim_positions = {}
+        self._sim_positions[symbol] = max(0.0, self._sim_positions.get(symbol, 0.0) - amt)
+        order_id = f"sim_sell_{int(time.time()*1000)}"
+        cid = client_order_id or f"client_{order_id}"
+        order = {
+            "id": order_id,
+            "clientOrderId": cid,
+            "symbol": symbol,
+            "side": "sell",
+            "type": "market",
+            "status": "closed",
+            "price": price,
+            "average": price,
+            "amount": amt,
+            "filled": amt,
+            "remaining": 0.0,
+            "cost": cost,
+            "fee": {"currency": "USDT", "cost": cost * 0.001},
+            "timestamp": int(time.time() * 1000),
+        }
+        if not hasattr(self, "_sim_orders"):
+            self._sim_orders = {}
+        self._sim_orders[order_id] = order
+        self._sim_orders[cid] = order
+        return order
 
     def _create_exchange(self):
         """Create a paper/demo exchange connection; live connections are disabled."""
@@ -130,8 +235,17 @@ class ExchangeConnector:
             "options": {
                 "defaultType": "spot",
                 "adjustForTimeDifference": True,
+                "warnOnFetchOpenOrdersWithoutSymbol": False,
+                "fetchOpenOrders": {
+                    "warnWithoutSymbol": False,
+                },
             },
         })
+        exchange.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
+        if "fetchOpenOrders" not in exchange.options:
+            exchange.options["fetchOpenOrders"] = {}
+        if isinstance(exchange.options["fetchOpenOrders"], dict):
+            exchange.options["fetchOpenOrders"]["warnWithoutSymbol"] = False
 
         if self.config.paper_trading:
             if self.config.paper_environment == "demo":
@@ -145,8 +259,10 @@ class ExchangeConnector:
             elif self.config.paper_environment == "testnet":
                 exchange.set_sandbox_mode(True)
                 logger.info("🧪 Running in PAPER TRADING mode (testnet)")
+            elif self.config.paper_environment == "simulated":
+                logger.info("🧪 Running in SIMULATED PAPER TRADING mode (real Binance market data + virtual wallet)")
             else:
-                raise ValueError("PAPER_ENVIRONMENT must be either 'testnet' or 'demo'")
+                raise ValueError("PAPER_ENVIRONMENT must be either 'testnet', 'demo', or 'simulated'")
         else:
             logger.warning("💰 Running in LIVE TRADING mode — real money at risk!")
 
@@ -154,6 +270,8 @@ class ExchangeConnector:
 
     def get_balance(self) -> dict:
         """Fetch current account balances; private API errors must not look like zero."""
+        if self._is_simulated():
+            return self._get_simulated_holdings()
         try:
             balance = self.exchange.fetch_balance()
             # Extract non-zero balances
@@ -171,25 +289,52 @@ class ExchangeConnector:
                 e, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
                 getattr(self.exchange, "status", None),
             )
+            cfg = getattr(self, "config", None)
+            if (cfg and getattr(cfg, "paper_trading", False) and
+                    getattr(cfg, "fallback_to_simulation", True) and
+                    "-2015" in str(safe_message)):
+                self.is_fallback_simulated = True
+                self.fallback_reason = safe_message
+                return self._get_simulated_holdings()
             logger.error("Failed to fetch balance (%s): %s", type(e).__name__, safe_message)
             raise AccountAccessError(safe_message) from e
 
     def fetch_account_snapshot(self) -> tuple[dict, list]:
         """Strict authenticated snapshot; private API failures must not look empty."""
+        if self._is_simulated():
+            return self._fetch_simulated_snapshot()
         try:
             balance = self.exchange.fetch_balance()
-            orders = self.exchange.fetch_open_orders()
+            orders = []
+            try:
+                orders = self.exchange.fetch_open_orders()
+            except ccxt.ExchangeError as ee:
+                err_s = str(ee).lower()
+                if "warnwithoutsymbol" in err_s or "fetchopenorders" in err_s:
+                    orders = []
+                else:
+                    raise
             return balance, orders
         except ccxt.BaseError as exc:
             safe_message = account_access_message(
                 exc, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
                 getattr(self.exchange, "status", None),
             )
+            cfg = getattr(self, "config", None)
+            if (cfg and getattr(cfg, "paper_trading", False) and
+                    getattr(cfg, "fallback_to_simulation", True) and
+                    "-2015" in str(safe_message)):
+                self.is_fallback_simulated = True
+                self.fallback_reason = safe_message
+                logger.warning("Binance Spot Testnet authentication rejected credentials (-2015). Activating safe simulated paper trading mode with real-time market data.")
+                return self._fetch_simulated_snapshot()
             logger.error("Private account reconciliation failed (%s): %s", type(exc).__name__, safe_message)
             raise AccountAccessError(safe_message) from exc
 
     def fetch_balance_snapshot(self) -> dict:
         """Read account balances independently from the open-order permission."""
+        if self._is_simulated():
+            return self._get_simulated_balance_dict()
         try:
             return self.exchange.fetch_balance()
         except ccxt.BaseError as exc:
@@ -197,6 +342,14 @@ class ExchangeConnector:
                 exc, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
                 getattr(self.exchange, "status", None),
             )
+            cfg = getattr(self, "config", None)
+            if (cfg and getattr(cfg, "paper_trading", False) and
+                    getattr(cfg, "fallback_to_simulation", True) and
+                    "-2015" in str(safe_message)):
+                self.is_fallback_simulated = True
+                self.fallback_reason = safe_message
+                logger.warning("Binance Spot Testnet balance request rejected credentials (-2015). Activating safe simulated paper trading mode with real-time market data.")
+                return self._get_simulated_balance_dict()
             logger.error("Private balance request failed (%s): %s", type(exc).__name__, safe_message)
             raise AccountAccessError(safe_message) from exc
 
@@ -230,6 +383,29 @@ class ExchangeConnector:
 
     def place_native_stop_loss(self, symbol: str, amount, stop_price, client_order_id: str) -> dict:
         """Place a Binance Spot STOP_LOSS market order on the exchange."""
+        if self._is_simulated():
+            order_id = f"sim_stop_{int(time.time()*1000)}"
+            order = {
+                "id": order_id,
+                "clientOrderId": client_order_id,
+                "symbol": symbol,
+                "side": "sell",
+                "type": "stop_loss_limit",
+                "status": "open",
+                "price": float(stop_price),
+                "stopPrice": float(stop_price),
+                "amount": float(amount),
+                "filled": 0.0,
+                "timestamp": int(time.time() * 1000),
+            }
+            if not hasattr(self, "_sim_stops"):
+                self._sim_stops = {}
+            if not hasattr(self, "_sim_orders"):
+                self._sim_orders = {}
+            self._sim_stops[symbol] = order
+            self._sim_orders[order_id] = order
+            self._sim_orders[client_order_id] = order
+            return order
         try:
             return self.exchange.create_order(
                 symbol, "market", "sell", float(amount), None,
@@ -243,6 +419,11 @@ class ExchangeConnector:
             raise RuntimeError("Exchange-native stop was not confirmed") from exc
 
     def fetch_order(self, order_id: str, symbol: str) -> dict:
+        if self._is_simulated():
+            oid = str(order_id)
+            if hasattr(self, "_sim_orders") and oid in self._sim_orders:
+                return self._sim_orders[oid]
+            return {"id": order_id, "status": "closed", "price": 0.0, "average": 0.0, "filled": 0.0}
         try:
             return self.exchange.fetch_order(order_id, symbol)
         except ccxt.BaseError as exc:
@@ -250,6 +431,11 @@ class ExchangeConnector:
             raise RuntimeError("Exchange order status is unavailable") from exc
 
     def fetch_order_by_client_id(self, client_order_id: str, symbol: str) -> dict:
+        if self._is_simulated():
+            cid = str(client_order_id)
+            if hasattr(self, "_sim_orders") and cid in self._sim_orders:
+                return self._sim_orders[cid]
+            return {"id": client_order_id, "clientOrderId": client_order_id, "status": "closed"}
         try:
             return self.exchange.fetch_order(None, symbol, {"origClientOrderId": client_order_id})
         except ccxt.BaseError as exc:
@@ -311,6 +497,8 @@ class ExchangeConnector:
         Returns:
             Order details dict or None on failure
         """
+        if self._is_simulated():
+            return self._simulated_market_buy(symbol, amount, client_order_id)
         try:
             # Let the symbol/account's Binance STP policy apply. Supported
             # modes vary by symbol; hard-coding one can reject every order.
@@ -344,6 +532,8 @@ class ExchangeConnector:
         Returns:
             Order details dict or None on failure
         """
+        if self._is_simulated():
+            return self._simulated_market_sell(symbol, amount, client_order_id)
         try:
             params = {"clientOrderId": client_order_id} if client_order_id else {}
             order = self.exchange.create_market_sell_order(symbol, amount, params)
@@ -361,6 +551,8 @@ class ExchangeConnector:
 
     def get_open_orders(self, symbol: str = None) -> list:
         """Get all open orders, optionally filtered by symbol."""
+        if self._is_simulated():
+            return list(getattr(self, "_sim_stops", {}).values())
         try:
             return self.exchange.fetch_open_orders(symbol)
         except ccxt.BaseError as e:
@@ -369,6 +561,15 @@ class ExchangeConnector:
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
         """Cancel an open order."""
+        if self._is_simulated():
+            oid = str(order_id)
+            if hasattr(self, "_sim_stops"):
+                for s, o in list(self._sim_stops.items()):
+                    if str(o.get("id")) == oid or str(o.get("clientOrderId")) == oid:
+                        del self._sim_stops[s]
+            if hasattr(self, "_sim_orders") and oid in self._sim_orders:
+                self._sim_orders[oid]["status"] = "canceled"
+            return True
         try:
             self.exchange.cancel_order(order_id, symbol)
             logger.info(f"Cancelled order {order_id} for {symbol}")

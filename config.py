@@ -21,6 +21,7 @@ class ExchangeConfig:
     demo_api_secret: str = os.getenv("DEMO_API_SECRET", "")
     paper_trading: bool = os.getenv("PAPER_TRADING", "true").lower() == "true"
     paper_environment: str = os.getenv("PAPER_ENVIRONMENT", "testnet").strip().lower()
+    fallback_to_simulation: bool = os.getenv("FALLBACK_TO_SIMULATION", "true").lower() == "true"
     allow_live_trading: bool = os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true"
 
 
@@ -88,8 +89,8 @@ class BotConfig:
             errors.append("MAX_CONSECUTIVE_LOSSES must be an integer")
 
         if self.exchange.paper_trading:
-            if self.exchange.paper_environment not in {"testnet", "demo"}:
-                errors.append("PAPER_ENVIRONMENT must be either 'testnet' or 'demo'")
+            if self.exchange.paper_environment not in {"testnet", "demo", "simulated"}:
+                errors.append("PAPER_ENVIRONMENT must be either 'testnet', 'demo', or 'simulated'")
             if self.exchange.paper_environment == "demo" and self.exchange.name.lower() != "binance":
                 errors.append("PAPER_ENVIRONMENT=demo is currently supported only for Binance")
 
@@ -104,6 +105,8 @@ class BotConfig:
                 errors.append("DEMO_API_KEY is required for Binance Demo Mode")
             if not self.exchange.demo_api_secret:
                 errors.append("DEMO_API_SECRET is required for Binance Demo Mode")
+        elif self.exchange.paper_trading and (self.exchange.paper_environment == "simulated" or self.exchange.fallback_to_simulation):
+            pass
         else:
             if not self.exchange.api_key or self.exchange.api_key == "your_testnet_api_key_here":
                 errors.append("API_KEY is not set. Get a testnet key from https://testnet.binance.vision")

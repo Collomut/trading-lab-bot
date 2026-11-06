@@ -400,6 +400,47 @@ class TestTradingBot(unittest.TestCase):
         self.assertTrue(rm.open_positions["BTC/USDT"].break_even_activated)
         self.assertGreaterEqual(rm.open_positions["BTC/USDT"].stop_loss_price, 100.0)
 
+    def test_simulated_paper_trading_mode(self):
+        config = ExchangeConfig(
+            api_key="", api_secret="",
+            paper_trading=True, paper_environment="simulated",
+        )
+        connector = ExchangeConnector(config)
+        connector.get_current_price = lambda symbol: 50000.0
+
+        snapshot, orders = connector.fetch_account_snapshot()
+        self.assertIn("USDT", snapshot["total"])
+        self.assertEqual(len(orders), 0)
+
+        buy = connector.place_market_buy("BTC/USDT", 0.1, "sim-buy-1")
+        self.assertEqual(buy["status"], "closed")
+        self.assertEqual(buy["filled"], 0.1)
+
+        stop = connector.place_native_stop_loss("BTC/USDT", 0.1, 49000.0, "sim-stop-1")
+        self.assertEqual(stop["status"], "open")
+
+        snap2, orders2 = connector.fetch_account_snapshot()
+        self.assertEqual(len(orders2), 1)
+
+        sell = connector.place_market_sell("BTC/USDT", 0.1, "sim-sell-1")
+        self.assertEqual(sell["status"], "closed")
+
+    def test_auto_fallback_to_simulation_on_2015(self):
+        import ccxt
+        from unittest.mock import Mock
+        config = ExchangeConfig(
+            api_key="key", api_secret="secret",
+            paper_trading=True, paper_environment="testnet",
+            fallback_to_simulation=True,
+        )
+        connector = ExchangeConnector(config)
+        connector.exchange.fetch_balance = Mock(side_effect=ccxt.AuthenticationError('{"code":-2015,"msg":"Invalid API-key"}'))
+        connector.get_current_price = lambda symbol: 50000.0
+
+        snapshot, orders = connector.fetch_account_snapshot()
+        self.assertTrue(connector.is_fallback_simulated)
+        self.assertIn("USDT", snapshot["total"])
+
 
 if __name__ == "__main__":
     unittest.main()
