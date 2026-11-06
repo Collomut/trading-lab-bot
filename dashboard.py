@@ -310,10 +310,11 @@ class WebDashboard:
         is_fallback_sim = getattr(exchange, "is_fallback_simulated", False)
         if is_fallback_sim:
             account_available = True
-            account_issue = (
-                "Spot Testnet keys rejected by Binance (-2015). Active in simulated mode with live Binance prices."
-            )
-        if not self.bot._last_reconciliation_ok and self.bot._last_account_error and not is_fallback_sim:
+            if not self.bot._last_reconciliation_ok:
+                account_issue = (
+                    "Spot Testnet keys rejected by Binance (-2015). Initializing simulated mode with live Binance prices."
+                )
+        elif not self.bot._last_reconciliation_ok and self.bot._last_account_error:
             account_issue = self.bot._last_account_error
 
         # 2. Fetch live prices
