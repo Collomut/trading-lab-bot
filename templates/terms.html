@@ -3,17 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Essential Trading Terms & System Architecture</title>
+  <title>Trading Terms & System Architecture</title>
   <style>
     :root {
-      --bg: #FFFFFF;
-      --card-bg: #FFFFFF;
-      --border: #E5E5E5;
-      --text: #111111;
-      --text-muted: #555555;
-      --text-subtle: #888888;
+      --bg: #F7F4EE;
+      --card: #FFFFFF;
+      --card-alt: #FBF9F5;
+      --border: #E6DFD3;
+      --border-light: #ECE7DD;
+      --text: #261E17;
+      --text-muted: #6B5E52;
+      --text-subtle: #96887B;
       --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      --font-mono: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --font-mono: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,387 +30,259 @@
 
     .mono { font-family: var(--font-mono); }
 
-    /* Top Navigation */
+    /* Top Nav */
     nav {
-      border-bottom: 1px solid var(--border);
       background: #FFFFFF;
-      position: sticky;
-      top: 0;
-      z-index: 50;
+      border-bottom: 1px solid var(--border);
     }
     .nav-inner {
-      max-width: 960px;
+      max-width: 820px;
       margin: 0 auto;
       padding: 0 24px;
-      height: 60px;
+      height: 56px;
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
-    .nav-left {
-      display: flex;
-      align-items: center;
-      gap: 32px;
-    }
     .brand {
       font-weight: 700;
-      font-size: 14px;
-      letter-spacing: 0.05em;
+      font-size: 13px;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--text);
       text-decoration: none;
     }
     .nav-links {
       display: flex;
-      gap: 20px;
+      gap: 24px;
     }
     .nav-link {
       font-size: 13px;
       color: var(--text-muted);
       text-decoration: none;
       font-weight: 500;
-      padding: 6px 0;
-      border-bottom: 2px solid transparent;
-      transition: color 0.15s, border-color 0.15s;
+      transition: color 0.15s;
     }
-    .nav-link:hover {
-      color: var(--text);
-    }
-    .nav-link.active {
-      color: var(--text);
-      font-weight: 600;
-      border-bottom-color: var(--text);
-    }
+    .nav-link:hover { color: var(--text); }
+    .nav-link.active { color: var(--text); font-weight: 700; }
 
+    /* Container */
     .container {
-      max-width: 960px;
+      max-width: 820px;
       margin: 0 auto;
-      padding: 48px 24px 80px 24px;
+      padding: 44px 24px 80px 24px;
     }
 
-    .page-header {
-      margin-bottom: 40px;
-      padding-bottom: 24px;
-      border-bottom: 1px solid var(--border);
-    }
     .page-title {
-      font-size: 32px;
+      font-size: 30px;
       font-weight: 800;
       letter-spacing: -0.02em;
       margin-bottom: 8px;
     }
-    .page-lead {
-      font-size: 16px;
+    .page-desc {
+      font-size: 15px;
       color: var(--text-muted);
-      max-width: 680px;
-    }
-
-    .section {
-      margin-bottom: 48px;
-    }
-    .section-title {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--text-subtle);
-      margin-bottom: 20px;
-      padding-bottom: 8px;
+      margin-bottom: 36px;
+      padding-bottom: 20px;
       border-bottom: 1px solid var(--border);
     }
 
-    .term-card {
+    .group-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin: 32px 0 16px 0;
+    }
+
+    .term {
+      background: var(--card);
       border: 1px solid var(--border);
       border-radius: 6px;
-      padding: 24px;
-      margin-bottom: 16px;
-      background: #FFFFFF;
+      padding: 20px 22px;
+      margin-bottom: 14px;
     }
-    .term-header {
+    .term-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 6px;
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      margin-bottom: 10px;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-    .term-name {
-      font-size: 17px;
-      font-weight: 700;
     }
     .term-tag {
       font-size: 10px;
       font-weight: 700;
-      text-transform: uppercase;
       letter-spacing: 0.05em;
-      padding: 2px 8px;
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      color: var(--text-muted);
-      background: #FAFAFA;
+      text-transform: uppercase;
+      color: var(--text-subtle);
+      font-family: var(--font-mono);
     }
-    .term-def {
-      font-size: 14px;
-      color: var(--text);
-      margin-bottom: 12px;
-    }
-    .term-analogy {
+    .term-body {
       font-size: 13px;
-      color: var(--text-muted);
-      padding: 10px 14px;
-      background: #FAFAFA;
-      border-left: 3px solid #111111;
-      border-radius: 0 4px 4px 0;
-    }
-    .term-analogy strong {
       color: var(--text);
+      margin-bottom: 10px;
+    }
+    .term-note {
+      font-size: 12px;
+      color: var(--text-muted);
+      background: var(--card-alt);
+      border-left: 2px solid var(--text);
+      padding: 8px 12px;
+      border-radius: 0 4px 4px 0;
     }
 
     footer {
       border-top: 1px solid var(--border);
-      padding-top: 24px;
-      margin-top: 60px;
+      padding-top: 20px;
+      margin-top: 50px;
       display: flex;
       justify-content: space-between;
-      align-items: center;
       font-size: 12px;
       color: var(--text-subtle);
-      flex-wrap: wrap;
-      gap: 12px;
     }
-    footer a {
-      color: var(--text-muted);
-      text-decoration: underline;
-    }
+    footer a { color: var(--text-muted); text-decoration: underline; }
   </style>
 </head>
 <body>
-  <!-- Top Navigation -->
   <nav>
     <div class="nav-inner">
-      <div class="nav-left">
-        <a href="/" class="brand">Autonomous Trading System</a>
-        <div class="nav-links">
-          <a href="/" class="nav-link">Dashboard</a>
-          <a href="/terms" class="nav-link active">Glossary & Terms</a>
-        </div>
+      <a href="/" class="brand">Trading System</a>
+      <div class="nav-links">
+        <a href="/" class="nav-link">Overview</a>
+        <a href="/terms" class="nav-link active">Terms & Concepts</a>
       </div>
     </div>
   </nav>
 
   <div class="container">
-    <div class="page-header">
-      <h1 class="page-title">Essential Terms & Concept Guide</h1>
-      <p class="page-lead">A plain-English breakdown of all trading metrics, risk formulas, and mathematical indicators used by your automated system.</p>
+    <h1 class="page-title">Terms & Concepts</h1>
+    <p class="page-desc">Plain-English reference for the money management, risk rules, and indicators used by the system.</p>
+
+    <!-- Group 1 -->
+    <div class="group-title">1. Money & Value</div>
+
+    <div class="term">
+      <div class="term-title">
+        <span>Portfolio Value (Net Worth)</span>
+        <span class="term-tag">Balance</span>
+      </div>
+      <div class="term-body">The full current market value of your account: your available cash plus the live value of any open crypto positions.</div>
+      <div class="term-note">Example: $9,000 cash in wallet + a coin currently worth $1,050 = $10,050 total portfolio value.</div>
     </div>
 
-    <!-- Category 1: Money & Account -->
-    <div class="section">
-      <div class="section-title">1. Account & Money Metrics</div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Total Account Net Worth (Equity)</div>
-          <span class="term-tag">Balance</span>
-        </div>
-        <div class="term-def">
-          The true, current market value of your entire account right now. It equals your unallocated cash balance PLUS the live market value of any coins you currently hold.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> If you have $9,000 cash in your wallet and own a gold coin currently worth $1,050, your Net Worth is $10,050.
-        </div>
+    <div class="term">
+      <div class="term-title">
+        <span>Unrealized vs. Realized P&L</span>
+        <span class="term-tag">Performance</span>
       </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Unrealized P&L vs. Realized P&L</div>
-          <span class="term-tag">Performance</span>
-        </div>
-        <div class="term-def">
-          <strong>Unrealized P&L</strong> is the "paper" profit or loss on trades that are still open right now (fluctuates second by second).<br>
-          <strong>Realized P&L</strong> is the permanent, banked cash profit or loss after a trade has been fully closed and sold.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> If you buy a house for $200k and someone offers you $220k, you have $20k in <em>unrealized</em> profit. Once you accept the offer and close the deed, that $20k becomes <em>realized</em> cash in your bank.
-        </div>
-      </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Accuracy Rate (Win Rate)</div>
-          <span class="term-tag">Metric</span>
-        </div>
-        <div class="term-def">
-          The percentage of completed trades that ended with a positive profit. Calculated as: <code>(Winning Trades / Total Completed Trades) × 100</code>.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> If the bot makes 10 trades, and 7 make a profit while 3 are stopped out, your accuracy rate is 70.0%.
-        </div>
-      </div>
+      <div class="term-body"><strong>Unrealized P&L</strong> is the paper gain or loss while a trade remains open. <strong>Realized P&L</strong> is the permanent, banked cash profit or loss after the trade has closed.</div>
+      <div class="term-note">Example: A property that gains value on paper vs. the cash in your bank after you complete the sale.</div>
     </div>
 
-    <!-- Category 2: Risk Management -->
-    <div class="section">
-      <div class="section-title">2. Capital Protection & Safety Rules</div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Stop-Loss (SL)</div>
-          <span class="term-tag">Protection</span>
-        </div>
-        <div class="term-def">
-          An automatic order placed the millisecond you enter a trade to sell immediately if the price falls by 2%. It prevents small mistakes from turning into catastrophic losses.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> An emergency brake on a car. If the road ahead collapses, the car stops automatically before going off the cliff.
-        </div>
+    <div class="term">
+      <div class="term-title">
+        <span>Accuracy Rate (Win Rate)</span>
+        <span class="term-tag">Ratio</span>
       </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Take-Profit (TP)</div>
-          <span class="term-tag">Target</span>
-        </div>
-        <div class="term-def">
-          A preset exit price target (+3%) where the bot automatically sells to lock in cash gains. It prevents greed from giving back winning profits when the market reverses.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> Selling concert tickets the moment they hit the price you wanted, rather than holding on too long and seeing prices crash right before the show.
-        </div>
-      </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Break-Even Protection (Zero-Loss Shield)</div>
-          <span class="term-tag">Safety Mechanism</span>
-        </div>
-        <div class="term-def">
-          Once an open position climbs by +1.5% in profit, the bot automatically moves its stop-loss order up to the exact price it originally bought at. From that moment forward, it is impossible to lose money on that trade.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> In a casino game, taking your original $100 off the table once you're ahead, and playing only with the casino's money.
-        </div>
-      </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">1% Risk Rule (Position Sizing)</div>
-          <span class="term-tag">Money Management</span>
-        </div>
-        <div class="term-def">
-          The bot sizes every trade so that if the worst-case scenario occurs and the stop-loss hits, you lose at most 1% of your account (e.g. max $100 on a $10,000 account).
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> Never putting all your eggs in one basket. If one egg cracks, you still have 99 whole eggs.
-        </div>
-      </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Daily Circuit Breaker (Max Daily Loss)</div>
-          <span class="term-tag">Emergency Shield</span>
-        </div>
-        <div class="term-def">
-          If total losses in a single day reach 3% of your portfolio, the bot automatically halts all trading until the next calendar day. This prevents emotional revenge trading during violent market flash-crashes.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> An electrical fuse in your house. If too much current surges through the wires, the breaker trips to prevent a house fire.
-        </div>
-      </div>
+      <div class="term-body">The percentage of completed trades that ended with positive profit: <code>(Winning Trades / Total Closed Trades) × 100</code>.</div>
+      <div class="term-note">Example: 7 profitable trades out of 10 completed trades equals a 70.0% accuracy rate.</div>
     </div>
 
-    <!-- Category 3: Technical Indicators -->
-    <div class="section">
-      <div class="section-title">3. Technical Analysis & Bot Brain</div>
+    <!-- Group 2 -->
+    <div class="group-title">2. Capital Protection</div>
 
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Timeframe (1h vs 15m)</div>
-          <span class="term-tag">Market Resolution</span>
-        </div>
-        <div class="term-def">
-          Each candlestick on the chart represents 1 hour of price movement. The 1-hour timeframe filters out erratic 5-minute wicks and false alarms, providing higher accuracy and cleaner momentum.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> Looking at climate trends instead of hourly temperature fluctuations.
-        </div>
+    <div class="term">
+      <div class="term-title">
+        <span>Stop-Loss (SL)</span>
+        <span class="term-tag">Safety: 2.0%</span>
       </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Exponential Moving Average (EMA 9, 21, 50, 200)</div>
-          <span class="term-tag">Trend Filter</span>
-        </div>
-        <div class="term-def">
-          A line that calculates the average price over the last N candles, weighting recent prices more heavily. When short-term averages cross above long-term averages, it signals upward momentum. If price is below the 200 EMA, the bot refuses to buy.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> The slope of a boat in the water. If the bow is pointing down into a storm, you don't accelerate forward.
-        </div>
-      </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">RSI (Relative Strength Index)</div>
-          <span class="term-tag">Momentum Oscillator</span>
-        </div>
-        <div class="term-def">
-          A number from 0 to 100 that measures whether a coin was dumped too fast (below 30 = "Oversold" / cheap bargain) or pumped too fast (above 70 = "Overbought" / expensive risk).
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> A stretched rubber band. If it's stretched too far down, it is likely to snap back toward the center.
-        </div>
-      </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">MACD (Moving Average Convergence Divergence)</div>
-          <span class="term-tag">Momentum Shift</span>
-        </div>
-        <div class="term-def">
-          Shows the relationship between two moving averages of a price. When the MACD line crosses above its signal line, it confirms that buyers are taking control of the market.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> A speedometer accelerating. Even if a car is still moving slowly, seeing the speedometer shoot upward indicates speed is coming.
-        </div>
-      </div>
+      <div class="term-body">An automated market sell order executed if a coin drops 2% from entry, preventing small pullbacks from turning into large drawdowns.</div>
+      <div class="term-note">Example: An emergency brake stopping a vehicle automatically if the path ahead collapses.</div>
     </div>
 
-    <!-- Category 4: Trading Environment -->
-    <div class="section">
-      <div class="section-title">4. Execution Environment</div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Paper Trading (Testnet)</div>
-          <span class="term-tag">Simulation</span>
-        </div>
-        <div class="term-def">
-          Trading with simulated fake money on real live market price feeds. It allows you to test the bot's execution, discipline, and strategy in real market conditions without risking a single dollar.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> A flight simulator for pilots before flying a real Boeing 747.
-        </div>
+    <div class="term">
+      <div class="term-title">
+        <span>Take-Profit (TP)</span>
+        <span class="term-tag">Target: 3.0%</span>
       </div>
-
-      <div class="term-card">
-        <div class="term-header">
-          <div class="term-name">Spot Trading (Non-Custodial API)</div>
-          <span class="term-tag">Security</span>
-        </div>
-        <div class="term-def">
-          Buying and selling the actual coin without borrowed money (no leverage, no liquidation risk). Because the bot uses Spot Trading API keys without withdrawal permissions, your funds cannot be transferred out of your account by anyone.
-        </div>
-        <div class="term-analogy">
-          <strong>Everyday Example:</strong> Buying physical currency at an exchange counter. You own the bill outright without any debt.
-        </div>
-      </div>
+      <div class="term-body">A preset exit price (+3%) where the bot automatically closes the position to lock in cash profits.</div>
+      <div class="term-note">Example: Selling concert tickets the instant they reach your desired price, avoiding a last-minute drop.</div>
     </div>
 
-    <!-- Footer -->
+    <div class="term">
+      <div class="term-title">
+        <span>Break-Even Protection</span>
+        <span class="term-tag">Trigger: +1.5%</span>
+      </div>
+      <div class="term-body">When an open position reaches +1.5% profit, the stop-loss price moves to your purchase price. Once triggered, the trade cannot lose capital.</div>
+      <div class="term-note">Example: Removing your initial bet from the table once ahead, playing strictly with accumulated profit.</div>
+    </div>
+
+    <div class="term">
+      <div class="term-title">
+        <span>1% Risk Rule</span>
+        <span class="term-tag">Sizing</span>
+      </div>
+      <div class="term-body">Position sizing is calibrated so that if a stop-loss is hit, the maximum loss is capped at 1% of the portfolio ($100 on a $10,000 account).</div>
+      <div class="term-note">Example: Never risking all your eggs in one basket; if one cracks, 99 remain intact.</div>
+    </div>
+
+    <div class="term">
+      <div class="term-title">
+        <span>Daily Circuit Breaker</span>
+        <span class="term-tag">Emergency: 3.0%</span>
+      </div>
+      <div class="term-body">If total daily losses reach 3%, all automated trading halts until the following day to prevent emotional over-trading during flash-crashes.</div>
+      <div class="term-note">Example: A residential circuit breaker tripping to stop an electrical overload.</div>
+    </div>
+
+    <!-- Group 3 -->
+    <div class="group-title">3. Strategy & Signals</div>
+
+    <div class="term">
+      <div class="term-title">
+        <span>Timeframe (1-Hour)</span>
+        <span class="term-tag">Resolution</span>
+      </div>
+      <div class="term-body">Each candlestick chart interval spans 1 hour. This timeframe filters out short-term 5-minute market noise and reduces false breakout entries.</div>
+      <div class="term-note">Example: Evaluating seasonal climate trends rather than minute-by-minute wind changes.</div>
+    </div>
+
+    <div class="term">
+      <div class="term-title">
+        <span>Moving Averages (EMA 50 / 200)</span>
+        <span class="term-tag">Trend Filter</span>
+      </div>
+      <div class="term-body">Smooth lines tracking average price over 50 and 200 hours. The bot automatically vetoes any buy orders if the market is trading below the 200 EMA.</div>
+      <div class="term-note">Example: Only sailing with the tide, never steering into an opposing current.</div>
+    </div>
+
+    <div class="term">
+      <div class="term-title">
+        <span>RSI & MACD</span>
+        <span class="term-tag">Momentum</span>
+      </div>
+      <div class="term-body">Mathematical indicators that gauge whether an asset was oversold (overshot to the downside) and whether momentum has turned bullish.</div>
+      <div class="term-note">Example: A rubber band stretched downward snapping back toward equilibrium.</div>
+    </div>
+
+    <!-- Group 4 -->
+    <div class="group-title">4. Environment</div>
+
+    <div class="term">
+      <div class="term-title">
+        <span>Paper Trading (Testnet)</span>
+        <span class="term-tag">Simulation</span>
+      </div>
+      <div class="term-body">Executing simulated trades against real-time exchange data using test currency, validating execution without risking real funds.</div>
+      <div class="term-note">Example: A certified flight simulator used by commercial pilots before live flight.</div>
+    </div>
+
     <footer>
-      <div>Autonomous Trading Bot • Documentation & Educational Reference</div>
-      <div><a href="/">← Return to Dashboard</a></div>
+      <div>Autonomous Trading System • Reference Guide</div>
+      <div><a href="/">← Return to Overview</a></div>
     </footer>
   </div>
 </body>
