@@ -653,7 +653,7 @@ class TradingBot:
             return
 
         current_price = self.exchange.get_current_price(symbol)
-        if current_price <= 0:
+        if current_price is None or current_price <= 0:
             return
 
         atr = signal.indicators.get("atr", 0.0)
@@ -829,7 +829,7 @@ class TradingBot:
             return
 
         current_price = self.exchange.get_current_price(symbol)
-        if current_price <= 0:
+        if current_price is None or current_price <= 0:
             return
 
         position = self.risk_manager.open_positions[symbol]
@@ -897,7 +897,7 @@ class TradingBot:
         # 1. Sync any tightened break-even or trailing stops to Binance exchange (F-05)
         for sym, pos in list(self.risk_manager.open_positions.items()):
             cur_p = self.exchange.get_current_price(sym)
-            if cur_p > 0:
+            if cur_p is not None and cur_p > 0:
                 gain_pct = ((cur_p - pos.entry_price) / pos.entry_price) * 100
                 if gain_pct >= 1.5 and not pos.break_even_activated:
                     pos.stop_loss_price = max(pos.stop_loss_price, pos.entry_price)
@@ -917,6 +917,8 @@ class TradingBot:
 
         for symbol, reason in to_close:
             current_price = self.exchange.get_current_price(symbol)
+            if current_price is None or current_price <= 0:
+                continue
             position = self.risk_manager.open_positions.get(symbol)
             if not position:
                 continue
@@ -985,6 +987,9 @@ class TradingBot:
         if positions:
             for symbol, pos in positions.items():
                 current = self.exchange.get_current_price(symbol)
+                if current is None or current <= 0:
+                    print(f"    ⚠️ {symbol}: price unavailable | SL: ${pos.stop_loss_price:,.2f} | TP: ${pos.take_profit_price:,.2f}")
+                    continue
                 pnl = pos.unrealized_pnl(current)
                 pnl_pct = pos.unrealized_pnl_pct(current)
                 emoji = "📈" if pnl >= 0 else "📉"
@@ -1207,7 +1212,10 @@ class TradingBot:
                     symbol = next(pair.strip() for pair in self.config.strategy.trading_pairs if pair.strip().split("/")[0] == base)
                     quantity = Decimal(str(totals.get(base) or 0))
                     if quantity > 0:
-                        mark = Decimal(str(self.exchange.get_current_price(symbol)))
+                        raw_price = self.exchange.get_current_price(symbol)
+                        if raw_price is None or raw_price <= 0:
+                            raise ValueError(f"market valuation is unavailable for {symbol}")
+                        mark = Decimal(str(raw_price))
                         if not mark.is_finite() or mark <= 0:
                             raise ValueError("market valuation is unavailable")
                         equity += quantity * mark

@@ -10,6 +10,7 @@ import json
 import math
 import re
 import time
+import threading
 from datetime import datetime, timezone
 from config import ExchangeConfig
 
@@ -152,8 +153,15 @@ def filter_closed_ohlcv(candles: list, timeframe_seconds: float, now_ms: int | N
 class ExchangeConnector:
     """Manages the connection to a cryptocurrency exchange via ccxt."""
 
+    @property
+    def _exchange_lock(self):
+        if not hasattr(self, "_lock_obj"):
+            self._lock_obj = threading.RLock()
+        return self._lock_obj
+
     def __init__(self, config: ExchangeConfig):
         self.config = config
+        self._lock_obj = threading.RLock()
         self.exchange = self._create_exchange()
         self._daily_pnl = 0.0
         self._trades_today = 0
@@ -327,80 +335,83 @@ class ExchangeConnector:
         """Fetch current account balances; private API errors must not look like zero."""
         if self._is_simulated():
             return self._get_simulated_holdings()
-        try:
-            balance = self.exchange.fetch_balance()
-            # Extract non-zero balances
-            holdings = {}
-            for currency, amount in balance.get("total", {}).items():
-                if amount and amount > 0:
-                    holdings[currency] = {
-                        "total": amount,
-                        "free": balance["free"].get(currency, 0),
-                        "used": balance["used"].get(currency, 0),
-                    }
-            return holdings
-        except ccxt.BaseError as e:
-            body, status_code = extract_ccxt_response_metadata(self.exchange, e)
-            safe_message = account_access_message(e, body, status_code)
-            cfg = getattr(self, "config", None)
-            if (cfg and getattr(cfg, "paper_trading", False) and
-                    getattr(cfg, "fallback_to_simulation", True) and
-                    "-2015" in str(safe_message)):
-                self.is_fallback_simulated = True
-                self.fallback_reason = safe_message
-                return self._get_simulated_holdings()
-            logger.error("Failed to fetch balance (%s): %s", type(e).__name__, safe_message)
-            raise AccountAccessError(safe_message) from e
+        with self._exchange_lock:
+            try:
+                balance = self.exchange.fetch_balance()
+                # Extract non-zero balances
+                holdings = {}
+                for currency, amount in balance.get("total", {}).items():
+                    if amount and amount > 0:
+                        holdings[currency] = {
+                            "total": amount,
+                            "free": balance["free"].get(currency, 0),
+                            "used": balance["used"].get(currency, 0),
+                        }
+                return holdings
+            except ccxt.BaseError as e:
+                body, status_code = extract_ccxt_response_metadata(self.exchange, e)
+                safe_message = account_access_message(e, body, status_code)
+                cfg = getattr(self, "config", None)
+                if (cfg and getattr(cfg, "paper_trading", False) and
+                        getattr(cfg, "fallback_to_simulation", True) and
+                        "-2015" in str(safe_message)):
+                    self.is_fallback_simulated = True
+                    self.fallback_reason = safe_message
+                    return self._get_simulated_holdings()
+                logger.error("Failed to fetch balance (%s): %s", type(e).__name__, safe_message)
+                raise AccountAccessError(safe_message) from e
 
     def fetch_account_snapshot(self) -> tuple[dict, list]:
         """Strict authenticated snapshot; private API failures must not look empty."""
         if self._is_simulated():
             return self._fetch_simulated_snapshot()
-        try:
-            balance = self.exchange.fetch_balance()
-            orders = []
+        with self._exchange_lock:
             try:
-                orders = self.exchange.fetch_open_orders()
-            except ccxt.ExchangeError as ee:
-                err_s = str(ee).lower()
-                if "warnwithoutsymbol" in err_s or "fetchopenorders" in err_s:
-                    orders = []
-                else:
-                    raise
-            return balance, orders
-        except ccxt.BaseError as exc:
-            body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-            safe_message = account_access_message(exc, body, status_code)
-            cfg = getattr(self, "config", None)
-            if (cfg and getattr(cfg, "paper_trading", False) and
-                    getattr(cfg, "fallback_to_simulation", True) and
-                    "-2015" in str(safe_message)):
-                self.is_fallback_simulated = True
-                self.fallback_reason = safe_message
-                logger.warning("Binance Spot Testnet authentication rejected credentials (-2015). Activating safe simulated paper trading mode with real-time market data.")
-                return self._fetch_simulated_snapshot()
-            logger.error("Private account reconciliation failed (%s): %s", type(exc).__name__, safe_message)
-            raise AccountAccessError(safe_message) from exc
+                balance = self.exchange.fetch_balance()
+                orders = []
+                try:
+                    orders = self.exchange.fetch_open_orders()
+                except ccxt.ExchangeError as ee:
+                    err_s = str(ee).lower()
+                    if "warnwithoutsymbol" in err_s or "fetchopenorders" in err_s:
+                        orders = []
+                    else:
+                        raise
+                return balance, orders
+            except ccxt.BaseError as exc:
+                body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+                safe_message = account_access_message(exc, body, status_code)
+                cfg = getattr(self, "config", None)
+                if (cfg and getattr(cfg, "paper_trading", False) and
+                        getattr(cfg, "fallback_to_simulation", True) and
+                        "-2015" in str(safe_message)):
+                    self.is_fallback_simulated = True
+                    self.fallback_reason = safe_message
+                    logger.warning("Binance Spot Testnet authentication rejected credentials (-2015). Activating safe simulated paper trading mode with real-time market data.")
+                    return self._fetch_simulated_snapshot()
+                logger.error("Private account reconciliation failed (%s): %s", type(exc).__name__, safe_message)
+                raise AccountAccessError(safe_message) from exc
 
     def fetch_balance_snapshot(self) -> dict:
         """Read account balances independently from the open-order permission."""
         if self._is_simulated():
             return self._get_simulated_balance_dict()
-        try:
-            return self.exchange.fetch_balance()
-        except ccxt.BaseError as exc:
-            body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-            safe_message = account_access_message(exc, body, status_code)
-            cfg = getattr(self, "config", None)
-            if (cfg and getattr(cfg, "paper_trading", False) and
-                    getattr(cfg, "fallback_to_simulation", True) and
-                    "-2015" in str(safe_message)):
-                self.is_fallback_simulated = True
-                self.fallback_reason = safe_message
-                logger.warning("Binance Spot Testnet balance request rejected credentials (-2015). Activating safe simulated paper trading mode with real-time market data.")
-                return self._get_simulated_balance_dict()
-            logger.error("Private balance request failed (%s): %s", type(exc).__name__, safe_message)
-            raise AccountAccessError(safe_message) from exc
+        with self._exchange_lock:
+            try:
+                return self.exchange.fetch_balance()
+            except ccxt.BaseError as exc:
+                body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+                safe_message = account_access_message(exc, body, status_code)
+                cfg = getattr(self, "config", None)
+                if (cfg and getattr(cfg, "paper_trading", False) and
+                        getattr(cfg, "fallback_to_simulation", True) and
+                        "-2015" in str(safe_message)):
+                    self.is_fallback_simulated = True
+                    self.fallback_reason = safe_message
+                    logger.warning("Binance Spot Testnet balance request rejected credentials (-2015). Activating safe simulated paper trading mode with real-time market data.")
+                    return self._get_simulated_balance_dict()
+                logger.error("Private balance request failed (%s): %s", type(exc).__name__, safe_message)
+                raise AccountAccessError(safe_message) from exc
 
     def diagnose_account_access(self) -> dict:
         """Read-only account diagnostic testing balance and open-order access separately.
@@ -423,28 +434,29 @@ class ExchangeConnector:
             result["overall_status"] = "SIMULATED_WALLET"
             return result
 
-        # 1. Test balance access independently
-        try:
-            self.exchange.fetch_balance()
-            result["balance_ok"] = True
-        except ccxt.BaseError as exc:
-            body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-            result["balance_error"] = account_access_message(exc, body, status_code)
+        with self._exchange_lock:
+            # 1. Test balance access independently
+            try:
+                self.exchange.fetch_balance()
+                result["balance_ok"] = True
+            except ccxt.BaseError as exc:
+                body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+                result["balance_error"] = account_access_message(exc, body, status_code)
 
-        # 2. Test open-order access independently
-        try:
-            self.exchange.fetch_open_orders()
-            result["orders_ok"] = True
-        except ccxt.ExchangeError as ee:
-            err_s = str(ee).lower()
-            if "warnwithoutsymbol" in err_s or "fetchopenorders" in err_s:
+            # 2. Test open-order access independently
+            try:
+                self.exchange.fetch_open_orders()
                 result["orders_ok"] = True
-            else:
-                body, status_code = extract_ccxt_response_metadata(self.exchange, ee)
-                result["orders_error"] = account_access_message(ee, body, status_code)
-        except ccxt.BaseError as exc:
-            body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-            result["orders_error"] = account_access_message(exc, body, status_code)
+            except ccxt.ExchangeError as ee:
+                err_s = str(ee).lower()
+                if "warnwithoutsymbol" in err_s or "fetchopenorders" in err_s:
+                    result["orders_ok"] = True
+                else:
+                    body, status_code = extract_ccxt_response_metadata(self.exchange, ee)
+                    result["orders_error"] = account_access_message(ee, body, status_code)
+            except ccxt.BaseError as exc:
+                body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+                result["orders_error"] = account_access_message(exc, body, status_code)
 
         if result["balance_ok"] and result["orders_ok"]:
             result["overall_status"] = "AUTHENTICATED_AND_RECONCILED"
@@ -456,32 +468,36 @@ class ExchangeConnector:
         return result
 
     def amount_to_precision(self, symbol: str, amount) -> str:
-        self.exchange.load_markets()
-        return self.exchange.amount_to_precision(symbol, str(amount))
+        with self._exchange_lock:
+            self.exchange.load_markets()
+            return self.exchange.amount_to_precision(symbol, str(amount))
 
     def price_to_precision(self, symbol: str, price) -> str:
-        self.exchange.load_markets()
-        return self.exchange.price_to_precision(symbol, str(price))
+        with self._exchange_lock:
+            self.exchange.load_markets()
+            return self.exchange.price_to_precision(symbol, str(price))
 
     def get_market_limits(self, symbol: str) -> dict:
-        self.exchange.load_markets()
-        market = self.exchange.market(symbol)
-        limits = market.get("limits", {})
-        amount = limits.get("amount", {}) or {}
-        cost = limits.get("cost", {}) or {}
-        return {
-            "min_amount": amount.get("min"), "max_amount": amount.get("max"),
-            "min_cost": cost.get("min"), "max_cost": cost.get("max"),
-            "active": market.get("active", True),
-        }
+        with self._exchange_lock:
+            self.exchange.load_markets()
+            market = self.exchange.market(symbol)
+            limits = market.get("limits", {})
+            amount = limits.get("amount", {}) or {}
+            cost = limits.get("cost", {}) or {}
+            return {
+                "min_amount": amount.get("min"), "max_amount": amount.get("max"),
+                "min_cost": cost.get("min"), "max_cost": cost.get("max"),
+                "active": market.get("active", True),
+            }
 
     def get_order_book(self, symbol: str, limit: int = 20) -> dict:
         """Fetch L2 liquidity for entry preflight; unavailable means no entry."""
-        try:
-            return self.exchange.fetch_order_book(symbol, limit=limit)
-        except ccxt.BaseError as exc:
-            logger.error("Order book unavailable for %s (%s)", symbol, type(exc).__name__)
-            raise RuntimeError("Order book preflight is unavailable") from exc
+        with self._exchange_lock:
+            try:
+                return self.exchange.fetch_order_book(symbol, limit=limit)
+            except ccxt.BaseError as exc:
+                logger.error("Order book unavailable for %s (%s)", symbol, type(exc).__name__)
+                raise RuntimeError("Order book preflight is unavailable") from exc
 
     def place_native_stop_loss(self, symbol: str, amount, stop_price, client_order_id: str) -> dict:
         """Place a Binance Spot STOP_LOSS market order on the exchange."""
@@ -508,17 +524,21 @@ class ExchangeConnector:
             self._sim_orders[order_id] = order
             self._sim_orders[client_order_id] = order
             return order
-        try:
-            return self.exchange.create_order(
-                symbol, "market", "sell", float(amount), None,
-                {
-                    "stopLossPrice": self.price_to_precision(symbol, stop_price),
-                    "clientOrderId": client_order_id,
-                },
-            )
-        except ccxt.BaseError as exc:
-            logger.error("Native stop placement failed for %s (%s)", symbol, type(exc).__name__)
-            raise RuntimeError("Exchange-native stop was not confirmed") from exc
+        with self._exchange_lock:
+            try:
+                prec_stop = self.price_to_precision(symbol, stop_price)
+                return self.exchange.create_order(
+                    symbol, "market", "sell", float(amount), None,
+                    {
+                        "stopLossPrice": prec_stop,
+                        "clientOrderId": client_order_id,
+                    },
+                )
+            except ccxt.BaseError as exc:
+                body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+                safe_msg = account_access_message(exc, body, status_code)
+                logger.error("Native stop placement failed for %s (%s): %s", symbol, type(exc).__name__, safe_msg)
+                raise RuntimeError(f"Exchange-native stop was not confirmed: {safe_msg}") from exc
 
     def fetch_order(self, order_id: str, symbol: str) -> dict:
         if self._is_simulated():
@@ -526,11 +546,12 @@ class ExchangeConnector:
             if hasattr(self, "_sim_orders") and oid in self._sim_orders:
                 return self._sim_orders[oid]
             return {"id": order_id, "status": "closed", "price": 0.0, "average": 0.0, "filled": 0.0}
-        try:
-            return self.exchange.fetch_order(order_id, symbol)
-        except ccxt.BaseError as exc:
-            logger.error("Order status lookup failed for %s (%s)", symbol, type(exc).__name__)
-            raise RuntimeError("Exchange order status is unavailable") from exc
+        with self._exchange_lock:
+            try:
+                return self.exchange.fetch_order(order_id, symbol)
+            except ccxt.BaseError as exc:
+                logger.error("Order status lookup failed for %s (%s)", symbol, type(exc).__name__)
+                raise RuntimeError("Exchange order status is unavailable") from exc
 
     def fetch_order_by_client_id(self, client_order_id: str, symbol: str) -> dict:
         if self._is_simulated():
@@ -538,11 +559,12 @@ class ExchangeConnector:
             if hasattr(self, "_sim_orders") and cid in self._sim_orders:
                 return self._sim_orders[cid]
             return {"id": client_order_id, "clientOrderId": client_order_id, "status": "closed"}
-        try:
-            return self.exchange.fetch_order(None, symbol, {"origClientOrderId": client_order_id})
-        except ccxt.BaseError as exc:
-            logger.error("Client-order reconciliation failed for %s (%s)", symbol, type(exc).__name__)
-            raise RuntimeError("Client order status is unavailable") from exc
+        with self._exchange_lock:
+            try:
+                return self.exchange.fetch_order(None, symbol, {"origClientOrderId": client_order_id})
+            except ccxt.BaseError as exc:
+                logger.error("Client-order reconciliation failed for %s (%s)", symbol, type(exc).__name__)
+                raise RuntimeError("Client order status is unavailable") from exc
 
     def get_usdt_balance(self) -> float:
         """Get available USDT balance."""
@@ -555,13 +577,14 @@ class ExchangeConnector:
 
         Returns list of [timestamp, open, high, low, close, volume]
         """
-        try:
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-            logger.debug(f"Fetched {len(ohlcv)} candles for {symbol} ({timeframe})")
-            return ohlcv
-        except ccxt.BaseError as e:
-            logger.error("Failed to fetch OHLCV for %s (%s)", symbol, type(e).__name__)
-            return []
+        with self._exchange_lock:
+            try:
+                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                logger.debug(f"Fetched {len(ohlcv)} candles for {symbol} ({timeframe})")
+                return ohlcv
+            except ccxt.BaseError as e:
+                logger.error("Failed to fetch OHLCV for %s (%s)", symbol, type(e).__name__)
+                return []
 
     def fetch_closed_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
         """Fetch and filter candles so strategy signals use closed bars only."""
@@ -569,24 +592,35 @@ class ExchangeConnector:
         if not candles:
             return []
         try:
-            seconds = float(self.exchange.parse_timeframe(timeframe))
+            with self._exchange_lock:
+                seconds = float(self.exchange.parse_timeframe(timeframe))
         except (AttributeError, TypeError, ValueError) as exc:
             logger.error("Cannot determine candle duration for %s: %s", timeframe, exc)
             return []
         return filter_closed_ohlcv(candles, seconds)
 
-    def get_ticker(self, symbol: str) -> dict:
-        """Get current ticker data (price, volume, etc.)."""
-        try:
-            return self.exchange.fetch_ticker(symbol)
-        except ccxt.BaseError as e:
-            logger.error("Failed to fetch ticker for %s (%s)", symbol, type(e).__name__)
-            return {}
+    def get_ticker(self, symbol: str) -> dict | None:
+        """Get current ticker data (price, volume, etc.). Returns None on failure."""
+        with self._exchange_lock:
+            try:
+                return self.exchange.fetch_ticker(symbol)
+            except ccxt.BaseError as e:
+                logger.error("Failed to fetch ticker for %s (%s)", symbol, type(e).__name__)
+                return None
 
-    def get_current_price(self, symbol: str) -> float:
-        """Get the current price of a trading pair."""
+    def get_current_price(self, symbol: str) -> float | None:
+        """Get the current price of a trading pair; returns None if price is unavailable or invalid (F-07)."""
         ticker = self.get_ticker(symbol)
-        return ticker.get("last", 0.0)
+        if not ticker or not isinstance(ticker, dict):
+            return None
+        last = ticker.get("last")
+        if last is None:
+            return None
+        try:
+            val = float(last)
+            return val if math.isfinite(val) and val > 0 else None
+        except (TypeError, ValueError):
+            return None
 
     def place_market_buy(self, symbol: str, amount, client_order_id: str | None = None) -> dict | None:
         """
@@ -601,27 +635,28 @@ class ExchangeConnector:
         """
         if self._is_simulated():
             return self._simulated_market_buy(symbol, amount, client_order_id)
-        try:
-            # Let the symbol/account's Binance STP policy apply. Supported
-            # modes vary by symbol; hard-coding one can reject every order.
-            params = {"clientOrderId": client_order_id} if client_order_id else {}
-            order = self.exchange.create_market_buy_order(symbol, amount, params)
-            cost = order.get("cost", 0)
-            price = order.get("average", order.get("price", 0))
-            logger.info(
-                f"✅ BUY {amount} {symbol} @ ${price:,.2f} "
-                f"(Total: ${cost:,.2f})"
-            )
-            self._trades_today += 1
-            return order
-        except ccxt.InsufficientFunds as e:
-            logger.error("Insufficient funds for buy order on %s (%s)", symbol, type(e).__name__)
-            return None
-        except ccxt.BaseError as e:
-            # A timeout or exchange error can occur after acceptance. Treat order
-            # outcome as unknown; callers must halt and reconcile before retrying.
-            logger.error("Buy order outcome is unknown for %s; manual reconciliation required", symbol)
-            raise RuntimeError("Exchange did not confirm buy order outcome") from e
+        with self._exchange_lock:
+            try:
+                # Let the symbol/account's Binance STP policy apply. Supported
+                # modes vary by symbol; hard-coding one can reject every order.
+                params = {"clientOrderId": client_order_id} if client_order_id else {}
+                order = self.exchange.create_market_buy_order(symbol, amount, params)
+                cost = order.get("cost", 0)
+                price = order.get("average", order.get("price", 0))
+                logger.info(
+                    f"✅ BUY {amount} {symbol} @ ${price:,.2f} "
+                    f"(Total: ${cost:,.2f})"
+                )
+                self._trades_today += 1
+                return order
+            except ccxt.InsufficientFunds as e:
+                logger.error("Insufficient funds for buy order on %s (%s)", symbol, type(e).__name__)
+                return None
+            except ccxt.BaseError as e:
+                # A timeout or exchange error can occur after acceptance. Treat order
+                # outcome as unknown; callers must halt and reconcile before retrying.
+                logger.error("Buy order outcome is unknown for %s; manual reconciliation required", symbol)
+                raise RuntimeError("Exchange did not confirm buy order outcome") from e
 
     def place_market_sell(self, symbol: str, amount, client_order_id: str | None = None) -> dict | None:
         """
@@ -636,30 +671,32 @@ class ExchangeConnector:
         """
         if self._is_simulated():
             return self._simulated_market_sell(symbol, amount, client_order_id)
-        try:
-            params = {"clientOrderId": client_order_id} if client_order_id else {}
-            order = self.exchange.create_market_sell_order(symbol, amount, params)
-            cost = order.get("cost", 0)
-            price = order.get("average", order.get("price", 0))
-            logger.info(
-                f"✅ SELL {amount} {symbol} @ ${price:,.2f} "
-                f"(Total: ${cost:,.2f})"
-            )
-            self._trades_today += 1
-            return order
-        except ccxt.BaseError as e:
-            logger.error("Sell order outcome is unknown for %s; manual reconciliation required", symbol)
-            raise RuntimeError("Exchange did not confirm sell order outcome") from e
+        with self._exchange_lock:
+            try:
+                params = {"clientOrderId": client_order_id} if client_order_id else {}
+                order = self.exchange.create_market_sell_order(symbol, amount, params)
+                cost = order.get("cost", 0)
+                price = order.get("average", order.get("price", 0))
+                logger.info(
+                    f"✅ SELL {amount} {symbol} @ ${price:,.2f} "
+                    f"(Total: ${cost:,.2f})"
+                )
+                self._trades_today += 1
+                return order
+            except ccxt.BaseError as e:
+                logger.error("Sell order outcome is unknown for %s; manual reconciliation required", symbol)
+                raise RuntimeError("Exchange did not confirm sell order outcome") from e
 
     def get_open_orders(self, symbol: str = None) -> list:
         """Get all open orders, optionally filtered by symbol."""
         if self._is_simulated():
             return list(getattr(self, "_sim_stops", {}).values())
-        try:
-            return self.exchange.fetch_open_orders(symbol)
-        except ccxt.BaseError as e:
-            logger.error("Failed to fetch open orders (%s)", type(e).__name__)
-            return []
+        with self._exchange_lock:
+            try:
+                return self.exchange.fetch_open_orders(symbol)
+            except ccxt.BaseError as e:
+                logger.error("Failed to fetch open orders (%s)", type(e).__name__)
+                return []
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
         """Cancel an open order."""
@@ -672,28 +709,31 @@ class ExchangeConnector:
             if hasattr(self, "_sim_orders") and oid in self._sim_orders:
                 self._sim_orders[oid]["status"] = "canceled"
             return True
-        try:
-            self.exchange.cancel_order(order_id, symbol)
-            logger.info(f"Cancelled order {order_id} for {symbol}")
-            return True
-        except ccxt.BaseError as e:
-            logger.error("Failed to cancel order %s (%s)", order_id, type(e).__name__)
-            return False
+        with self._exchange_lock:
+            try:
+                self.exchange.cancel_order(order_id, symbol)
+                logger.info(f"Cancelled order {order_id} for {symbol}")
+                return True
+            except ccxt.BaseError as e:
+                logger.error("Failed to cancel order %s (%s)", order_id, type(e).__name__)
+                return False
 
     def get_min_order_amount(self, symbol: str) -> float:
         """Get the minimum order amount for a trading pair."""
-        try:
-            self.exchange.load_markets()
-            market = self.exchange.market(symbol)
-            return market.get("limits", {}).get("amount", {}).get("min", 0.0)
-        except ccxt.BaseError as e:
-            logger.error("Failed to get minimum amount for %s (%s)", symbol, type(e).__name__)
-            return 0.0
+        with self._exchange_lock:
+            try:
+                self.exchange.load_markets()
+                market = self.exchange.market(symbol)
+                return market.get("limits", {}).get("amount", {}).get("min", 0.0)
+            except ccxt.BaseError as e:
+                logger.error("Failed to get minimum amount for %s (%s)", symbol, type(e).__name__)
+                return 0.0
 
     def get_server_time(self) -> datetime:
         """Get the exchange server time."""
-        try:
-            timestamp = self.exchange.fetch_time()
-            return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
-        except ccxt.BaseError:
-            return datetime.now(timezone.utc)
+        with self._exchange_lock:
+            try:
+                timestamp = self.exchange.fetch_time()
+                return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+            except ccxt.BaseError:
+                return datetime.now(timezone.utc)

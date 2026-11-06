@@ -9,11 +9,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from contextlib import closing
 from pathlib import Path
 
 
 class StateStore:
+    SCHEMA_VERSION = 1
     ORDER_TRANSITIONS = {
         "PENDING": {"SUBMITTED", "UNKNOWN", "REJECTED"},
         "SUBMITTED": {"UNKNOWN", "OPEN", "PARTIALLY_FILLED", "PARTIAL_CLOSED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
@@ -40,6 +42,11 @@ class StateStore:
         with self._lock, closing(self._connect()) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    description TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS positions (symbol TEXT PRIMARY KEY, value_json TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS order_intents (
@@ -55,7 +62,73 @@ class StateStore:
                     details_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
+                INSERT OR IGNORE INTO schema_migrations (version, description)
+                VALUES (1, 'Base schema: state, positions, order_intents, audit_events');
             """)
+
+    def get_schema_version(self) -> int:
+        """Return the current schema migration version (F-17)."""
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+    def create_backup(self, backup_path: str | Path | None = None) -> Path:
+        """Create a consistent online SQLite backup (F-17)."""
+        if backup_path is None:
+            ts = int(time.time() * 1000)
+            backup_path = self.path.with_name(f"{self.path.stem}_backup_{ts}.db")
+        else:
+            backup_path = Path(backup_path)
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with self._lock, closing(self._connect()) as src, closing(sqlite3.connect(backup_path)) as dst:
+            src.backup(dst)
+
+        return backup_path
+
+    def snapshot_and_reset_for_testnet_wipe(self, operator_reason: str, export_path: str | Path | None = None) -> dict:
+        """Safely snapshot state and reset positions/orders after a Binance Spot Testnet reset (F-09)."""
+        if not operator_reason or not operator_reason.strip():
+            raise ValueError("Operator reason is required for Testnet reset recovery")
+
+        backup_file = self.create_backup()
+        positions = self.read_positions()
+        unresolved = self.unresolved_orders()
+
+        export_data = {
+            "timestamp": int(time.time() * 1000),
+            "operator_reason": operator_reason.strip(),
+            "backup_file": str(backup_file),
+            "positions": positions,
+            "unresolved_orders": unresolved,
+        }
+
+        if export_path:
+            out_p = Path(export_path)
+            out_p.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_p, "w", encoding="utf-8") as f:
+                json.dump(export_data, f, indent=2)
+
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            # Clear positions
+            conn.execute("DELETE FROM positions")
+            # Mark all non-terminal orders as canceled with testnet reset reason
+            conn.execute("""
+                UPDATE order_intents
+                SET state='CANCELED', applied=1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                WHERE state NOT IN ('FILLED','PARTIAL_CLOSED','CANCELED','REJECTED','EXPIRED') OR applied=0
+            """)
+            # Reset baseline balances and smoke trade marker
+            conn.execute("DELETE FROM state WHERE key IN ('baseline_asset_balances', 'testnet_smoke_trade')")
+            # Record audit event
+            conn.execute(
+                "INSERT INTO audit_events(event_type, details_json) VALUES(?,?)",
+                ("testnet_reset_recovery", json.dumps(export_data, allow_nan=False))
+            )
+            conn.commit()
+
+        return export_data
 
     def quick_check(self):
         with closing(self._connect()) as conn:
@@ -127,4 +200,3 @@ class StateStore:
     def append_event(self, event_type, details):
         with self._lock, closing(self._connect()) as conn:
             conn.execute("INSERT INTO audit_events(event_type,details_json) VALUES(?,?)", (event_type, json.dumps(details, allow_nan=False)))
-

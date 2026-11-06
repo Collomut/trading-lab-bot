@@ -814,6 +814,112 @@ class TestTradingBot(unittest.TestCase):
             # Manual order untouched message
             self.assertIn("1 external/manual order(s) were left untouched", msg)
 
+    def test_f06_exchange_locking_is_present(self):
+        """F-06: ExchangeConnector must serialize CCXT calls through an internal lock."""
+        from exchange import ExchangeConnector
+        cfg = ExchangeConfig(name="binance", paper_trading=True, paper_environment="simulated")
+        conn = ExchangeConnector(cfg)
+        self.assertTrue(hasattr(conn, "_exchange_lock"))
+        # Lock is reentrant
+        with conn._exchange_lock:
+            with conn._exchange_lock:
+                pass
+
+    def test_f07_ticker_failure_returns_none_not_zero(self):
+        """F-07: Ticker failure or invalid price must return None, never numeric $0.00."""
+        from unittest.mock import Mock
+        from exchange import ExchangeConnector
+        import ccxt
+
+        cfg = ExchangeConfig(name="binance", paper_trading=True, paper_environment="simulated")
+        conn = ExchangeConnector(cfg)
+        conn.exchange = Mock()
+
+        # 1. CCXT error on fetch_ticker
+        conn.exchange.fetch_ticker.side_effect = ccxt.NetworkError("Exchange timeout")
+        self.assertIsNone(conn.get_ticker("BTC/USDT"))
+        self.assertIsNone(conn.get_current_price("BTC/USDT"))
+
+        # 2. Malformed last price (None, 0.0, negative, NaN)
+        conn.exchange.fetch_ticker.side_effect = None
+        conn.exchange.fetch_ticker.return_value = {"last": None}
+        self.assertIsNone(conn.get_current_price("BTC/USDT"))
+
+        conn.exchange.fetch_ticker.return_value = {"last": 0.0}
+        self.assertIsNone(conn.get_current_price("BTC/USDT"))
+
+        conn.exchange.fetch_ticker.return_value = {"last": -50.0}
+        self.assertIsNone(conn.get_current_price("BTC/USDT"))
+
+        conn.exchange.fetch_ticker.return_value = {"last": float("nan")}
+        self.assertIsNone(conn.get_current_price("BTC/USDT"))
+
+        # 3. Valid price
+        conn.exchange.fetch_ticker.return_value = {"last": 52100.50}
+        self.assertEqual(conn.get_current_price("BTC/USDT"), 52100.50)
+
+    def test_f16_healthcheck_handlers(self):
+        """F-16: Liveness and readiness probes respond with clean status without secrets."""
+        import asyncio
+        from unittest.mock import Mock
+        from dashboard import WebDashboard
+
+        dash = object.__new__(WebDashboard)
+        dash.bot = Mock()
+        dash.bot.risk_manager = Mock()
+        dash.bot.exchange = Mock()
+
+        # Liveness test
+        req = Mock()
+        resp = asyncio.run(dash.handle_liveness(req))
+        self.assertEqual(resp.status, 200)
+
+        # Readiness test: when ready
+        dash.bot._last_reconciliation_ok = True
+        dash.bot.risk_manager._is_halted = False
+        dash.bot.risk_manager.entry_mode.return_value = "ACTIVE"
+        dash.bot.exchange.is_fallback_simulated = False
+        resp_ready = asyncio.run(dash.handle_readiness(req))
+        self.assertEqual(resp_ready.status, 200)
+
+        # Readiness test: when halted -> 503
+        dash.bot.risk_manager._is_halted = True
+        resp_halted = asyncio.run(dash.handle_readiness(req))
+        self.assertEqual(resp_halted.status, 503)
+
+    def test_f17_sqlite_schema_version_and_online_backup(self):
+        """F-17 & F-09: SQLite schema versioning, online backup, and Testnet reset recovery."""
+        from state_store import StateStore
+
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "state.db"
+            store = StateStore(db_path)
+
+            # Assert schema version
+            self.assertEqual(store.get_schema_version(), 1)
+
+            # Write sample state and position
+            store.write_state("baseline_asset_balances", {"BTC": "0.1"})
+            store.write_positions({"BTC/USDT": {"amount": 0.05, "entry_price": 50000.0}})
+            store.create_order_intent("client_123", "BTC/USDT", "BUY", 0.05, {"type": "market"})
+
+            # Create online backup
+            backup_file = store.create_backup()
+            self.assertTrue(backup_file.exists())
+            # Verify backup has data
+            backup_store = StateStore(backup_file)
+            self.assertIn("BTC/USDT", backup_store.read_positions())
+
+            # Perform Testnet reset recovery
+            reset_data = store.snapshot_and_reset_for_testnet_wipe("Bi-weekly Spot Testnet reset")
+            self.assertIn("backup_file", reset_data)
+            self.assertEqual(reset_data["operator_reason"], "Bi-weekly Spot Testnet reset")
+
+            # Check positions were safely reset and orders canceled
+            self.assertEqual(store.read_positions(), {})
+            self.assertEqual(store.unresolved_orders(), [])
+            self.assertIsNone(store.read_state("baseline_asset_balances"))
+
 
 if __name__ == "__main__":
     unittest.main()

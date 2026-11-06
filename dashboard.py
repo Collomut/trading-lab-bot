@@ -10,6 +10,7 @@ Enhanced with:
 
 import os
 import json
+import time
 import asyncio
 import logging
 import base64
@@ -113,7 +114,8 @@ async def dashboard_auth(request, handler):
     token = os.getenv("DASHBOARD_TOKEN", "")
     path = request.path
     if (path.startswith("/assets/") or path == "/terms" or
-            path == "/login" or path == "/api/login" or path == "/logout"):
+            path == "/login" or path == "/api/login" or path == "/logout" or
+            path.startswith("/health/")):
         return await handler(request)
 
     authenticated = verify_token(request, token)
@@ -144,6 +146,7 @@ async def dashboard_auth(request, handler):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; connect-src 'self';"
     return response
 
 
@@ -152,6 +155,9 @@ class WebDashboard:
         self.port = port or int(os.getenv("PORT", 5000))
         self.config = BotConfig()
         self.bot = TradingBot(self.config)
+        self._status_cache = None
+        self._status_cache_time = 0.0
+        self._status_cache_ttl = 5.0
         try:
             self.initial_balance = float(os.getenv("INITIAL_BALANCE", "10000.0"))
         except ValueError:
@@ -172,6 +178,8 @@ class WebDashboard:
         self.app.router.add_get('/strategy', self.handle_strategy)
         self.app.router.add_get('/terms', self.handle_terms)
         self.app.router.add_get('/assets/{name}', self.handle_asset)
+        self.app.router.add_get('/health/liveness', self.handle_liveness)
+        self.app.router.add_get('/health/readiness', self.handle_readiness)
         self.app.router.add_post('/api/login', self.handle_login)
         self.app.router.add_get('/logout', self.handle_logout)
         self.app.router.add_get('/api/status', self.handle_status)
@@ -217,6 +225,34 @@ class WebDashboard:
         if asset_path is None:
             raise web.HTTPNotFound()
         return web.FileResponse(Path(__file__).parent / "templates" / asset_path)
+
+    async def handle_liveness(self, request):
+        """Unauthenticated liveness probe (F-16). Reports if web event loop is alive."""
+        return web.json_response({
+            "status": "alive",
+            "service": "trading-bot",
+            "timestamp": int(time.time() * 1000)
+        })
+
+    async def handle_readiness(self, request):
+        """Readiness probe reporting operational bot status without exposing secrets (F-16)."""
+        risk = self.bot.risk_manager
+        exchange = self.bot.exchange
+        is_reconciled = self.bot._last_reconciliation_ok
+        is_halted = risk._is_halted
+        is_fallback_sim = getattr(exchange, "is_fallback_simulated", False)
+        mode = risk.entry_mode()
+
+        ready = (is_reconciled or is_fallback_sim) and not is_halted
+        status_code = 200 if ready else 503
+        return web.json_response({
+            "status": "ready" if ready else "not_ready",
+            "halted": is_halted,
+            "entry_mode": mode,
+            "reconciled": is_reconciled,
+            "fallback_simulated": is_fallback_sim,
+            "timestamp": int(time.time() * 1000)
+        }, status=status_code)
 
     def _setup_lifecycle(self):
         self.app.on_startup.append(self.start_background_tasks)
@@ -341,40 +377,73 @@ class WebDashboard:
 
         # 2. Fetch live prices
         prices = {}
+        price_failures = []
         for sym in self.config.strategy.trading_pairs:
             sym = sym.strip()
             p = await loop.run_in_executor(None, exchange.get_current_price, sym)
-            prices[sym] = round(p, 2)
+            if p is not None and p > 0:
+                prices[sym] = round(p, 2)
+            else:
+                prices[sym] = None
+                price_failures.append(sym)
 
         # 3. Read open positions & calculate live unrealized profit/loss
         positions = {}
         unrealized_total = 0.0
+        has_unrealized_error = False
         for sym, pos in risk.open_positions.items():
-            cur_p = prices.get(sym, pos.entry_price)
-            pos_pnl = (cur_p - pos.entry_price) * pos.amount
-            pos_pnl_pct = ((cur_p - pos.entry_price) / pos.entry_price) * 100 if pos.entry_price > 0 else 0
-            unrealized_total += pos_pnl
+            cur_p = prices.get(sym)
+            if cur_p is None:
+                has_unrealized_error = True
+                pos_dict = pos.to_dict()
+                pos_dict["current_price"] = None
+                pos_dict["unrealized_pnl"] = None
+                pos_dict["unrealized_pnl_pct"] = None
+                pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
+                pos_dict["target_gain_dollars"] = round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
+                positions[sym] = pos_dict
+            else:
+                pos_pnl = (cur_p - pos.entry_price) * pos.amount
+                pos_pnl_pct = ((cur_p - pos.entry_price) / pos.entry_price) * 100 if pos.entry_price > 0 else 0
+                unrealized_total += pos_pnl
 
-            pos_dict = pos.to_dict()
-            pos_dict["current_price"] = cur_p
-            pos_dict["unrealized_pnl"] = round(pos_pnl, 2)
-            pos_dict["unrealized_pnl_pct"] = round(pos_pnl_pct, 2)
-            pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
-            pos_dict["target_gain_dollars"] = round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
-            positions[sym] = pos_dict
+                pos_dict = pos.to_dict()
+                pos_dict["current_price"] = cur_p
+                pos_dict["unrealized_pnl"] = round(pos_pnl, 2)
+                pos_dict["unrealized_pnl_pct"] = round(pos_pnl_pct, 2)
+                pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
+                pos_dict["target_gain_dollars"] = round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
+                positions[sym] = pos_dict
 
         # 4. Total portfolio net worth = Cash + Open Position Values
-        # If the exchange balance call failed, report unavailable instead of inventing equity.
-        total_net_worth = None if not account_available else usdt_balance + sum(
-            p["amount"] * p["current_price"] for p in positions.values()
-        )
+        # If the exchange balance call failed or mark is missing, report unavailable (F-07, F-08).
+        if not account_available or usdt_balance is None or has_unrealized_error:
+            total_net_worth = None
+        else:
+            total_net_worth = usdt_balance + sum(
+                p["amount"] * p["current_price"] for p in positions.values() if p.get("current_price") is not None
+            )
 
-        # 5. Read completed trade history
+        # Non-configured holdings on account (F-08)
+        configured_bases = {p.split("/")[0].strip() for p in self.config.strategy.trading_pairs}
+        unconfigured_holdings = {}
+        if isinstance(account, dict):
+            for asset, amt in (account.get("total") or {}).items():
+                if asset != "USDT" and asset not in configured_bases:
+                    try:
+                        f_amt = float(amt)
+                        if f_amt > 0:
+                            unconfigured_holdings[asset] = f_amt
+                    except (TypeError, ValueError):
+                        pass
+
+        # 5. Read completed trade history (F-15: bounded reading)
         trades = []
         if self.bot.trade_log_path.exists():
             try:
                 with open(self.bot.trade_log_path, "r", encoding="utf-8") as f:
-                    for line in f:
+                    lines = f.readlines()
+                    for line in lines[-100:]:
                         line = line.strip()
                         if line:
                             trades.append(json.loads(line))
@@ -383,8 +452,12 @@ class WebDashboard:
 
         # 6. Calculate accuracy and performance stats
         realized_pnl = sum(t.get("pnl", 0.0) for t in trades if t.get("action") == "SELL")
-        total_gain_loss = realized_pnl + unrealized_total
-        gain_loss_pct = (total_gain_loss / self.initial_balance) * 100 if self.initial_balance > 0 else 0.0
+        total_gain_loss = None if total_net_worth is None else realized_pnl + unrealized_total
+        gain_loss_pct = (
+            ((total_gain_loss / self.initial_balance) * 100)
+            if (total_gain_loss is not None and self.initial_balance > 0)
+            else 0.0
+        )
 
         completed_sells = [t for t in trades if t.get("action") == "SELL"]
         winners = [t for t in completed_sells if t.get("pnl", 0) > 0]
@@ -403,14 +476,17 @@ class WebDashboard:
             "fallback_simulated": is_fallback_sim,
             "exchange": self.config.exchange.name,
             "net_worth": round(total_net_worth, 2) if total_net_worth is not None else None,
+            "bot_tracked_value": round(total_net_worth, 2) if total_net_worth is not None else None,
+            "unconfigured_holdings": unconfigured_holdings,
+            "price_failures": price_failures,
             "cash_balance": round(usdt_balance, 2) if usdt_balance is not None else None,
             "account_available": account_available,
             "account_issue": account_issue,
             "initial_balance": self.initial_balance,
-            "total_gain_loss": round(total_gain_loss, 2),
-            "total_gain_loss_pct": round(gain_loss_pct, 2),
+            "total_gain_loss": round(total_gain_loss, 2) if total_gain_loss is not None else None,
+            "total_gain_loss_pct": round(gain_loss_pct, 2) if gain_loss_pct is not None else None,
             "realized_pnl": round(realized_pnl, 2),
-            "unrealized_pnl": round(unrealized_total, 2),
+            "unrealized_pnl": round(unrealized_total, 2) if not has_unrealized_error else None,
             "daily_pnl": round(risk._daily_loss, 2),
             "accuracy_pct": round(accuracy_pct, 1),
             "total_trades": len(completed_sells),
@@ -453,8 +529,20 @@ class WebDashboard:
         }
 
     async def handle_status(self, request):
+        now = time.time()
+        if self._status_cache is not None and (now - self._status_cache_time) < self._status_cache_ttl:
+            return web.json_response(
+                self._status_cache,
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                }
+            )
         try:
             status = await self._get_current_status()
+            self._status_cache = status
+            self._status_cache_time = now
             return web.json_response(
                 status,
                 headers={
@@ -496,6 +584,7 @@ class WebDashboard:
     async def handle_run_cycle(self, request):
         if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
+        self._status_cache = None
         loop = asyncio.get_event_loop()
         try:
             await loop.run_in_executor(None, self.bot.run_once)
@@ -508,6 +597,7 @@ class WebDashboard:
     async def handle_exit_only(self, request):
         if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
+        self._status_cache = None
         loop = asyncio.get_event_loop()
         success, message = await loop.run_in_executor(None, self.bot.pause_entries)
         return web.json_response({
@@ -519,6 +609,7 @@ class WebDashboard:
     async def handle_resume_entries(self, request):
         if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
+        self._status_cache = None
         try:
             payload = await request.json()
         except Exception:
@@ -537,6 +628,7 @@ class WebDashboard:
     async def handle_emergency_stop(self, request):
         if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
+        self._status_cache = None
         loop = asyncio.get_event_loop()
         success, message = await loop.run_in_executor(None, self.bot.emergency_stop)
         status = 200 if success else 503
@@ -547,6 +639,7 @@ class WebDashboard:
             return web.json_response({"error": "Same-origin request required."}, status=403)
         if not self.config.exchange.paper_trading or self.config.exchange.paper_environment != "testnet":
             return web.json_response({"error": "This one-time smoke trade is available only on Binance Spot Testnet."}, status=403)
+        self._status_cache = None
         loop = asyncio.get_event_loop()
         try:
             result = await loop.run_in_executor(None, self.bot.run_testnet_smoke_trade)
