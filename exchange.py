@@ -24,11 +24,14 @@ def account_access_message(exc: Exception, response_body=None, http_status=None)
     # even when the exception string omits it. Read only code/message for diagnosis;
     # never log or return the raw body, URL, headers, or request signature.
     error_text = str(exc).lower()
-    response_text = response_body if isinstance(response_body, str) else ""
-    try:
-        response_data = json.loads(response_text) if response_text else {}
-    except (TypeError, ValueError):
-        response_data = {}
+    if isinstance(response_body, dict):
+        response_data = response_body
+    else:
+        response_text = response_body if isinstance(response_body, str) else ""
+        try:
+            response_data = json.loads(response_text) if response_text else {}
+        except (TypeError, ValueError):
+            response_data = {}
     response_code = response_data.get("code") if isinstance(response_data, dict) else None
     match = re.search(r'"?code"?\s*[:=]\s*(-?\d+)', error_text, re.IGNORECASE)
     code = str(response_code) if isinstance(response_code, (int, str)) else (match.group(1) if match else "")
@@ -165,8 +168,8 @@ class ExchangeConnector:
             return holdings
         except ccxt.BaseError as e:
             safe_message = account_access_message(
-                e, getattr(self.exchange, "last_http_response", None),
-                getattr(self.exchange, "last_http_status", None),
+                e, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
+                getattr(self.exchange, "status", None),
             )
             logger.error("Failed to fetch balance (%s): %s", type(e).__name__, safe_message)
             raise AccountAccessError(safe_message) from e
@@ -179,8 +182,8 @@ class ExchangeConnector:
             return balance, orders
         except ccxt.BaseError as exc:
             safe_message = account_access_message(
-                exc, getattr(self.exchange, "last_http_response", None),
-                getattr(self.exchange, "last_http_status", None),
+                exc, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
+                getattr(self.exchange, "status", None),
             )
             logger.error("Private account reconciliation failed (%s): %s", type(exc).__name__, safe_message)
             raise AccountAccessError(safe_message) from exc
@@ -191,8 +194,8 @@ class ExchangeConnector:
             return self.exchange.fetch_balance()
         except ccxt.BaseError as exc:
             safe_message = account_access_message(
-                exc, getattr(self.exchange, "last_http_response", None),
-                getattr(self.exchange, "last_http_status", None),
+                exc, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
+                getattr(self.exchange, "status", None),
             )
             logger.error("Private balance request failed (%s): %s", type(exc).__name__, safe_message)
             raise AccountAccessError(safe_message) from exc
