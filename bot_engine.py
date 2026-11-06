@@ -120,11 +120,12 @@ class TradingBot:
             logger.debug("Telegram notification delivery failed (details suppressed)")
 
     def _send_email_notification(self, subject: str, message: str):
-        """Send an email or carrier SMS notification via SMTP."""
+        """Send an email or carrier SMS notification via SMTP (multipart plain text + HTML)."""
         if not (self.config.smtp_host and self.config.alert_email):
             return
         try:
             import smtplib
+            from email.mime.multipart import MIMEMultipart
             from email.mime.text import MIMEText
 
             clean_message = (
@@ -132,11 +133,50 @@ class TradingBot:
                 .replace("`", "")
             )
 
-            msg = MIMEText(clean_message, "plain", "utf-8")
+            # Build a styled HTML card for email readers
+            lines = [l.strip() for l in clean_message.strip().split("\n") if l.strip()]
+            title = lines[0] if lines else "Trading Alert"
+            details = lines[1:]
+
+            is_buy = "BUY" in title.upper()
+            is_profit = "+" in clean_message and ("P&L" in clean_message or "PROFIT" in clean_message)
+            badge_color = "#2e7d32" if (is_buy or is_profit) else "#c62828"
+
+            rows_html = "".join(
+                f"<tr><td style='padding:8px 12px;border-bottom:1px solid #eee;color:#555;'>{l.split(':', 1)[0]}</td>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;color:#111;text-align:right;'>{l.split(':', 1)[1].strip() if ':' in l else ''}</td></tr>"
+                for l in details
+            )
+
+            html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background-color:#F7F4EE;margin:0;padding:24px 12px;color:#222;">
+  <div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #dcd7cc;border-radius:10px;padding:24px;box-shadow:0 2px 10px rgba(0,0,0,0.04);">
+    <div style="display:inline-block;padding:5px 12px;border-radius:4px;background:{badge_color};color:#ffffff;font-size:12px;font-weight:bold;letter-spacing:0.5px;margin-bottom:16px;">
+      {title}
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin:12px 0 20px;font-size:14px;">
+      {rows_html}
+    </table>
+    <div style="padding-top:16px;border-top:1px solid #eee;font-size:12px;color:#777;display:flex;justify-content:space-between;align-items:center;">
+      <span>Automated Trading Bot</span>
+      <a href="https://trial-production-7ce1.up.railway.app" style="color:#6d4c41;text-decoration:none;font-weight:600;">Open Dashboard &rarr;</a>
+    </div>
+  </div>
+</body>
+</html>"""
+
+            msg = MIMEMultipart("alternative")
             sender = self.config.smtp_user or "trading-bot@railway.internal"
             msg["Subject"] = subject
             msg["From"] = sender
             msg["To"] = self.config.alert_email
+
+            part_plain = MIMEText(clean_message, "plain", "utf-8")
+            part_html = MIMEText(html_body, "html", "utf-8")
+            msg.attach(part_plain)
+            msg.attach(part_html)
 
             recipients = [addr.strip() for addr in self.config.alert_email.split(",") if addr.strip()]
             if not recipients:
