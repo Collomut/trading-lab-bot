@@ -65,6 +65,7 @@ class WebDashboard:
         self.app.router.add_get('/terms', self.handle_terms)
         self.app.router.add_get('/assets/{name}', self.handle_asset)
         self.app.router.add_get('/api/status', self.handle_status)
+        self.app.router.add_get('/api/candles', self.handle_candles)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
 
     async def handle_terms(self, request):
@@ -251,6 +252,32 @@ class WebDashboard:
             return web.json_response(status)
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_candles(self, request):
+        """Return recent OHLCV data for the dashboard chart."""
+        symbol = request.query.get("symbol", "").strip()
+        timeframe = request.query.get("timeframe", self.config.strategy.timeframe)
+        allowed_timeframes = {"15m", "1h", "4h", "1d"}
+        allowed_symbols = {s.strip() for s in self.config.strategy.trading_pairs}
+        if symbol not in allowed_symbols:
+            return web.json_response({"error": "Choose a configured trading pair."}, status=400)
+        if timeframe not in allowed_timeframes:
+            return web.json_response({"error": "Unsupported chart timeframe."}, status=400)
+        loop = asyncio.get_event_loop()
+        candles = await loop.run_in_executor(
+            None, self.bot.exchange.fetch_ohlcv, symbol, timeframe, 100
+        )
+        if not candles:
+            return web.json_response({"error": "Market candles are temporarily unavailable."}, status=502)
+        return web.json_response({
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "candles": [
+                {"time": int(c[0]), "open": float(c[1]), "high": float(c[2]),
+                 "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
+                for c in candles if len(c) >= 6
+            ],
+        })
 
     async def handle_run_cycle(self, request):
         loop = asyncio.get_event_loop()
