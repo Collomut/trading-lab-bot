@@ -5,6 +5,7 @@ Supports both paper trading (testnet) and live trading.
 
 import ccxt
 import logging
+import json
 import math
 import re
 import time
@@ -18,10 +19,22 @@ class AccountAccessError(RuntimeError):
     """Safe, actionable account-access failure without echoing credentials."""
 
 
-def account_access_message(exc: Exception) -> str:
+def account_access_message(exc: Exception, response_body=None, http_status=None) -> str:
+    # Binance/CCXT errors can keep the useful code in the exchange's last response
+    # even when the exception string omits it. Read only code/message for diagnosis;
+    # never log or return the raw body, URL, headers, or request signature.
     error_text = str(exc).lower()
+    response_text = response_body if isinstance(response_body, str) else ""
+    try:
+        response_data = json.loads(response_text) if response_text else {}
+    except (TypeError, ValueError):
+        response_data = {}
+    response_code = response_data.get("code") if isinstance(response_data, dict) else None
     match = re.search(r'"?code"?\s*[:=]\s*(-?\d+)', error_text, re.IGNORECASE)
-    code = match.group(1) if match else ""
+    code = str(response_code) if isinstance(response_code, (int, str)) else (match.group(1) if match else "")
+    response_message = response_data.get("msg", "") if isinstance(response_data, dict) else ""
+    if isinstance(response_message, str):
+        error_text = f"{error_text} {response_message.lower()}"
     if code == "-2015" or "invalid api-key, ip, or permissions" in error_text:
         return "Binance rejected the API key, IP, or permissions (-2015). Use an active Spot Testnet key pair and check its IP restrictions and Spot permission."
     if code == "-2014" or "api-key format invalid" in error_text:
@@ -42,6 +55,8 @@ def account_access_message(exc: Exception) -> str:
     if isinstance(exc, ccxt.NetworkError):
         return "Binance Testnet could not be reached. Check service networking and retry after it recovers."
     suffix = f" (Binance error {code})" if code else ""
+    if not code and isinstance(http_status, int):
+        suffix = f" (HTTP {http_status})"
     return (
         f"Binance Testnet rejected the authenticated account request{suffix}. In Railway, verify that API_KEY and "
         "API_SECRET are the matching, active Spot Testnet pair, with Spot permission and any required IP access. "
@@ -149,7 +164,10 @@ class ExchangeConnector:
                     }
             return holdings
         except ccxt.BaseError as e:
-            safe_message = account_access_message(e)
+            safe_message = account_access_message(
+                e, getattr(self.exchange, "last_http_response", None),
+                getattr(self.exchange, "last_http_status", None),
+            )
             logger.error("Failed to fetch balance (%s): %s", type(e).__name__, safe_message)
             raise AccountAccessError(safe_message) from e
 
@@ -160,7 +178,10 @@ class ExchangeConnector:
             orders = self.exchange.fetch_open_orders()
             return balance, orders
         except ccxt.BaseError as exc:
-            safe_message = account_access_message(exc)
+            safe_message = account_access_message(
+                exc, getattr(self.exchange, "last_http_response", None),
+                getattr(self.exchange, "last_http_status", None),
+            )
             logger.error("Private account reconciliation failed (%s): %s", type(exc).__name__, safe_message)
             raise AccountAccessError(safe_message) from exc
 
@@ -169,7 +190,10 @@ class ExchangeConnector:
         try:
             return self.exchange.fetch_balance()
         except ccxt.BaseError as exc:
-            safe_message = account_access_message(exc)
+            safe_message = account_access_message(
+                exc, getattr(self.exchange, "last_http_response", None),
+                getattr(self.exchange, "last_http_status", None),
+            )
             logger.error("Private balance request failed (%s): %s", type(exc).__name__, safe_message)
             raise AccountAccessError(safe_message) from exc
 
