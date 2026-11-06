@@ -175,6 +175,49 @@ class TestTradingBot(unittest.TestCase):
         self.assertNotEqual(first, different)
         self.assertLessEqual(len(first), 36)
 
+    def test_rolling_equity_drawdown_halts_entries(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(max_daily_loss_pct=10.0, max_rolling_drawdown_pct=5.0), persistence_dir=persistence_dir)
+            self.assertTrue(rm.monitor_equity(1000.0))
+            self.assertFalse(rm.monitor_equity(940.0))
+            self.assertIn("rolling", rm._halt_reason.lower())
+
+    def test_consecutive_losses_latch_the_risk_manager(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(max_daily_loss_pct=5.0, max_consecutive_losses=2), persistence_dir=persistence_dir)
+            rm.open_position("BTC/USDT", 100.0, 1.0)
+            rm.close_position("BTC/USDT", 99.0, "test loss")
+            rm.open_position("ETH/USDT", 100.0, 1.0)
+            rm.close_position("ETH/USDT", 99.0, "test loss")
+            self.assertTrue(rm._is_halted)
+            self.assertEqual(rm._consecutive_losses, 2)
+
+    def test_seeded_testnet_inventory_is_baselined_not_mistaken_for_a_position(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]))
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "1.25", "USDT": "10000"}}, [])
+            bot.exchange.exchange.load_markets.return_value = None
+            bot.exchange.exchange.market.return_value = {"precision": {"amount": 8}}
+            bot.exchange.exchange.precisionMode = 2
+            bot.exchange.amount_to_precision.return_value = "1.00000000"
+            bot._last_reconciliation_ok = False
+            self.assertTrue(bot._reconcile_exchange_state())
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"BTC": "1.25"})
+
+    def test_closed_candle_return_correlation_is_aligned_by_timestamp(self):
+        candles_a, candles_b = [], []
+        for i in range(40):
+            price_a = 100 + i * 2 + (i % 3)
+            price_b = 50 + i * 1 + ((i % 3) / 2)
+            candles_a.append([i + 1, price_a, price_a, price_a, price_a, 1])
+            candles_b.append([i + 1, price_b, price_b, price_b, price_b, 1])
+        self.assertGreater(TradingBot._return_correlation(candles_a, candles_b), 0.9)
+
     def test_non_finite_risk_configuration_is_rejected(self):
         from config import BotConfig, StrategyConfig
         config = BotConfig(
@@ -227,6 +270,50 @@ class TestTradingBot(unittest.TestCase):
         connector.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("secret omitted")
         with self.assertRaisesRegex(RuntimeError, "reconciliation is unavailable"):
             connector.fetch_account_snapshot()
+
+    def test_native_stop_is_submitted_as_market_stop_with_persistable_client_id(self):
+        from unittest.mock import Mock
+        connector = object.__new__(ExchangeConnector)
+        connector.exchange = Mock()
+        connector.price_to_precision = Mock(return_value="98.00")
+        connector.exchange.create_order.return_value = {"id": "stop-1", "status": "open"}
+
+        result = connector.place_native_stop_loss("BTC/USDT", "0.1", 98.0, "stop-client-1")
+
+        self.assertEqual(result["id"], "stop-1")
+        connector.exchange.create_order.assert_called_once_with(
+            "BTC/USDT", "market", "sell", 0.1, None,
+            {"stopLossPrice": "98.00", "clientOrderId": "stop-client-1"},
+        )
+
+    def test_terminal_partial_sell_reconciles_and_reprotects_remaining_position(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.1"})
+            bot.risk_manager.store.create_order_intent("sell-client", "BTC/USDT", "sell", "0.2", {})
+            bot.risk_manager.store.update_order("sell-client", "SUBMITTED")
+            bot.risk_manager.store.update_order("sell-client", "PARTIAL_CLOSED", filled="0.05")
+            position = bot.risk_manager.open_position("BTC/USDT", 100.0, 0.2, order_id="buy-1")
+            position.stop_order_id = "old-stop"
+            position.stop_client_order_id = "old-stop-client"
+            bot.risk_manager._save_positions()
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "0.25"}}, [])
+            bot.exchange.place_native_stop_loss.return_value = {"id": "new-stop", "status": "open"}
+
+            recovered = bot._recover_terminal_partial_sell(
+                "BTC/USDT", {"id": "sell-1", "status": "canceled", "filled": "0.05"},
+                "sell-client", "0.2",
+            )
+
+            self.assertTrue(recovered)
+            self.assertAlmostEqual(bot.risk_manager.open_positions["BTC/USDT"].amount, 0.15)
+            self.assertEqual(bot.risk_manager.open_positions["BTC/USDT"].stop_order_id, "new-stop")
+            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
 
 
     def test_missing_open_position_price_halts_new_trading(self):

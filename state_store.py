@@ -16,12 +16,12 @@ from pathlib import Path
 class StateStore:
     ORDER_TRANSITIONS = {
         "PENDING": {"SUBMITTED", "UNKNOWN", "REJECTED"},
-        "SUBMITTED": {"UNKNOWN", "OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
-        "UNKNOWN": {"UNKNOWN", "OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
-        "OPEN": {"UNKNOWN", "OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
-        "PARTIALLY_FILLED": {"UNKNOWN", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
+        "SUBMITTED": {"UNKNOWN", "OPEN", "PARTIALLY_FILLED", "PARTIAL_CLOSED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
+        "UNKNOWN": {"UNKNOWN", "OPEN", "PARTIALLY_FILLED", "PARTIAL_CLOSED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
+        "OPEN": {"UNKNOWN", "OPEN", "PARTIALLY_FILLED", "PARTIAL_CLOSED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
+        "PARTIALLY_FILLED": {"UNKNOWN", "PARTIALLY_FILLED", "PARTIAL_CLOSED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"},
     }
-    TERMINAL = {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}
+    TERMINAL = {"FILLED", "PARTIAL_CLOSED", "CANCELED", "REJECTED", "EXPIRED"}
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -108,13 +108,13 @@ class StateStore:
 
     def mark_order_applied(self, client_order_id):
         with self._lock, closing(self._connect()) as conn:
-            conn.execute("UPDATE order_intents SET applied=1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE client_order_id=? AND state IN ('FILLED','CANCELED','REJECTED','EXPIRED')", (client_order_id,))
+            conn.execute("UPDATE order_intents SET applied=1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE client_order_id=? AND state IN ('FILLED','PARTIAL_CLOSED','CANCELED','REJECTED','EXPIRED')", (client_order_id,))
             if conn.total_changes != 1:
                 raise ValueError("Only terminal orders can be marked applied")
 
     def unresolved_orders(self):
         with closing(self._connect()) as conn:
-            rows = conn.execute("SELECT * FROM order_intents WHERE state NOT IN ('FILLED','CANCELED','REJECTED','EXPIRED') OR applied=0 ORDER BY created_at").fetchall()
+            rows = conn.execute("SELECT * FROM order_intents WHERE state NOT IN ('FILLED','PARTIAL_CLOSED','CANCELED','REJECTED','EXPIRED') OR applied=0 ORDER BY created_at").fetchall()
             return [dict(row) for row in rows]
 
     def append_event(self, event_type, details):

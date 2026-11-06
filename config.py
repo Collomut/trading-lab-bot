@@ -33,6 +33,8 @@ class RiskConfig:
     take_profit_pct: float = float(os.getenv("TAKE_PROFIT_PCT", "3.0"))
     max_daily_loss_pct: float = float(os.getenv("MAX_DAILY_LOSS_PCT", "3.0"))
     position_size_pct: float = float(os.getenv("POSITION_SIZE_PCT", "10.0"))
+    max_rolling_drawdown_pct: float = float(os.getenv("MAX_ROLLING_DRAWDOWN_PCT", "5.0"))
+    max_consecutive_losses: int = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3"))
 
 
 @dataclass
@@ -64,6 +66,7 @@ class BotConfig:
     data_dir: str = os.getenv("DATA_DIR", "data")
     max_spread_bps: float = float(os.getenv("MAX_SPREAD_BPS", "20"))
     max_slippage_bps: float = float(os.getenv("MAX_SLIPPAGE_BPS", "30"))
+    max_pairwise_correlation: float = float(os.getenv("MAX_PAIRWISE_CORRELATION", "0.85"))
 
     def validate(self):
         """Validate configuration values."""
@@ -75,11 +78,14 @@ class BotConfig:
             ("TAKE_PROFIT_PCT", self.risk.take_profit_pct),
             ("MAX_DAILY_LOSS_PCT", self.risk.max_daily_loss_pct),
             ("POSITION_SIZE_PCT", self.risk.position_size_pct),
+            ("MAX_ROLLING_DRAWDOWN_PCT", self.risk.max_rolling_drawdown_pct),
         ):
             if not math.isfinite(value):
                 errors.append(f"{label} must be finite")
         if not isinstance(self.risk.max_open_positions, int) or isinstance(self.risk.max_open_positions, bool):
             errors.append("MAX_OPEN_POSITIONS must be an integer")
+        if not isinstance(self.risk.max_consecutive_losses, int) or isinstance(self.risk.max_consecutive_losses, bool):
+            errors.append("MAX_CONSECUTIVE_LOSSES must be an integer")
 
         if self.exchange.paper_trading:
             if self.exchange.paper_environment not in {"testnet", "demo"}:
@@ -130,6 +136,8 @@ class BotConfig:
             errors.append("MAX_SPREAD_BPS must be finite and between 0 and 100")
         if not math.isfinite(self.max_slippage_bps) or not 0 < self.max_slippage_bps <= 100:
             errors.append("MAX_SLIPPAGE_BPS must be finite and between 0 and 100")
+        if not math.isfinite(self.max_pairwise_correlation) or not 0.5 <= self.max_pairwise_correlation < 1:
+            errors.append("MAX_PAIRWISE_CORRELATION must be finite and between 0.5 and 1")
         if not math.isfinite(self.risk.take_profit_pct) or self.risk.take_profit_pct <= 0:
             errors.append("TAKE_PROFIT_PCT must be a finite value greater than 0")
 
@@ -139,6 +147,10 @@ class BotConfig:
             errors.append("MAX_OPEN_POSITIONS must be at least 1")
         if self.risk.max_daily_loss_pct <= 0 or self.risk.max_daily_loss_pct > 5:
             errors.append("MAX_DAILY_LOSS_PCT must be greater than 0 and no more than 5%")
+        if self.risk.max_rolling_drawdown_pct <= 0 or self.risk.max_rolling_drawdown_pct > 10:
+            errors.append("MAX_ROLLING_DRAWDOWN_PCT must be greater than 0 and no more than 10%")
+        if not 1 <= self.risk.max_consecutive_losses <= 20:
+            errors.append("MAX_CONSECUTIVE_LOSSES must be between 1 and 20")
         if not (0 < self.risk.stop_loss_pct <= 10):
             errors.append("STOP_LOSS_PCT must be greater than 0 and no more than 10%")
         if not (0 < self.risk.position_size_pct <= 50):

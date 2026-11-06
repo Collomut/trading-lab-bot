@@ -78,6 +78,8 @@ class WebDashboard:
         self.app.router.add_get('/api/candles', self.handle_candles)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
         self.app.router.add_post('/api/exit-only', self.handle_exit_only)
+        self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
+        self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
 
     async def handle_terms(self, request):
         """Serve the terms and glossary page."""
@@ -269,6 +271,7 @@ class WebDashboard:
             "halt_reason": risk._halt_reason,
             "entry_mode": risk.entry_mode(),
             "exchange_reconciled": self.bot._last_reconciliation_ok,
+            "testnet_smoke_attempted": risk.store.read_state("testnet_smoke_trade") is not None,
             "prices": prices,
             "market_summary": market_summary,
             "strategy_name": self.config.strategy.name.upper(),
@@ -335,6 +338,33 @@ class WebDashboard:
             return web.json_response({"error": "Same-origin request required."}, status=403)
         self.bot.risk_manager.set_exit_only()
         return web.json_response({"entry_mode": "EXIT_ONLY", "message": "New entries paused; existing positions remain monitored."})
+
+    async def handle_emergency_stop(self, request):
+        origin = request.headers.get("Origin", "")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
+        if not origin or not hmac.compare_digest(origin, request_origin):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        loop = asyncio.get_event_loop()
+        success, message = await loop.run_in_executor(None, self.bot.emergency_stop)
+        status = 200 if success else 503
+        return web.json_response({"success": success, "message": message}, status=status)
+
+    async def handle_testnet_smoke_trade(self, request):
+        origin = request.headers.get("Origin", "")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
+        if not origin or not hmac.compare_digest(origin, request_origin):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        if not self.config.exchange.paper_trading or self.config.exchange.paper_environment != "testnet":
+            return web.json_response({"error": "This one-time smoke trade is available only on Binance Spot Testnet."}, status=403)
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(None, self.bot.run_testnet_smoke_trade)
+            return web.json_response(result)
+        except Exception as exc:
+            logger.error("Testnet smoke trade did not complete (%s)", type(exc).__name__)
+            return web.json_response({"error": f"Smoke trade did not complete ({type(exc).__name__}); inspect the service logs."}, status=409)
 
     def run(self):
         print(f"\n🚀 Trading Bot Web Dashboard launching on port {self.port}...")

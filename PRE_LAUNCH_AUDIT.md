@@ -6,15 +6,15 @@
 
 | Criterion | Status | Evidence / remaining work |
 |---|---|---|
-| Stable client order ID and pre-submit journal | PARTIAL | `TradingBot._client_order_id` and `_submit_market_order`; SQLite uniqueness prevents resubmission. An ambiguous outcome is halted, not automatically queried/resolved at the exchange. |
-| Crash recovery / cold-start reconciliation | PARTIAL | `StateStore` persists order intents, state and positions; `TradingBot._reconcile_exchange_state` checks authenticated balances, open orders and unresolved intents before each cycle. Unresolved cases need operator reconciliation. |
-| Order lifecycle and partial fills | PARTIAL | `StateStore.ORDER_TRANSITIONS` records lifecycle. Incomplete fills halt. Protective quantities are not automatically resized and recovered. |
-| Orphan orders / self-trade prevention | PARTIAL | Any open order blocks trading; automatic cancellation and exchange STP settings are not implemented. |
+| Stable client order ID and pre-submit journal | PARTIAL | `TradingBot._client_order_id` and `_submit_market_order` persist intent before submit and query by client ID after an ambiguous response. Unresolved outcomes halt; safe automatic retry is deliberately absent. |
+| Crash recovery / cold-start reconciliation | PARTIAL | `StateStore` persists order intents, state and positions; `TradingBot._reconcile_exchange_state` captures a configured-asset baseline, checks subsequent balances/open orders, and blocks unresolved intents. Unresolved cases need operator reconciliation; unconfigured assets are not reconciled. |
+| Order lifecycle and partial fills | PARTIAL | `StateStore.ORDER_TRANSITIONS` records lifecycle. A terminal partial buy is tracked and protected by a native stop, then halted for review. Partial sells halt for manual reconciliation; fees and realized partial P&L are not fully accounted. |
+| Orphan orders / self-trade prevention | PARTIAL | Any unrecognized open order blocks trading. Market orders use the exchange's symbol/account STP policy instead of forcing a mode unsupported by some symbols. Orphan orders are not automatically cancelled by routine reconciliation. |
 | Concurrent state changes | PARTIAL | `TradingBot.run_cycle` serializes cycles in-process and SQLite serializes writes. No WebSocket consumer exists; this is not cross-replica coordination. |
 | Decimal arithmetic / market filters | PARTIAL | Entry amount precision, limits, spread and visible depth are checked before orders. Strategy/risk/PnL still use floats; maximum cost, exact fee and all exchange filters are not modeled end-to-end. |
 | Rate limits and network recovery | PARTIAL | CCXT `enableRateLimit` is enabled; there is no emergency-priority budget or explicit 429/418 circuit/backoff policy. |
 | API-key permissions / secret handling | PARTIAL | Secrets come from environment variables and `.env` is ignored. Withdrawal/transfer restrictions and IP allowlisting must be configured and verified at the exchange. |
-| Database failure while a position is open | CRITICAL | A failed state write blocks further orders, but local stop monitoring cannot protect an open position during process, network, or database failure. |
+| Database failure while a position is open | CRITICAL | A persisted Binance stop can protect an already accepted order if the process or database fails, but stop placement and position persistence are not atomic. Failure in that gap or loss of exchange connectivity remains unprotected. |
 | Immutable forensic event logging | PARTIAL | SQLite records order intents and selected audit events; logs are not immutable/rotated and do not retain every raw request, response, latency, and decision snapshot. |
 
 ## Trading validity and execution
@@ -25,19 +25,20 @@
 | Out-of-sample edge and regime robustness | CRITICAL | The replay is exploratory; no untouched multi-regime/out-of-sample study or parameter sensitivity evidence exists. |
 | Fees, funding and realistic slippage in backtest | CRITICAL | No validated net-of-cost performance results. |
 | Spread and book-depth entry checks | PARTIAL | `TradingBot._handle_buy_signal` rejects wide spreads and insufficient visible asks within a slippage bound. No executable VWAP model or adverse-selection study. |
-| Exchange maintenance, rejected exit and wick fallback | CRITICAL | Exits are process-monitored market orders using last price. No exchange-side stop, mark-price trigger, or verified fallback loop. |
-| Exchange-native protective stop | CRITICAL | No stop is placed at the exchange. The process-managed threshold is not protection against an outage. Live mode stays disabled. |
+| Exchange maintenance, rejected exit and wick fallback | PARTIAL | A Binance Spot `STOP_LOSS` market order is placed for each tracked position after entry; software trailing/take-profit exits still depend on the running process, and no independent fallback loop or exchange-side OCO exists. Testnet acceptance and fill behavior remain unverified. |
+| Exchange-native protective stop | PARTIAL | Native stop placement, durable stop-ID storage, reconciliation and stop-fill recognition are implemented. The stop is not atomic with the buy, its testnet behavior has not yet been verified, and there is no exchange-side take-profit/OCO. A stop-market order can fill materially beyond its trigger in a fast market. |
 | Per-trade hard risk ceiling | PASS | Risk config caps `MAX_RISK_PER_TRADE` at 2%; sizing is rechecked after exchange rounding and position exposure is capped. This is a modeled threshold, not a guaranteed loss limit. |
-| Daily/rolling equity drawdown | PARTIAL | Daily realized-loss halt exists; unrealized equity and rolling peak-to-trough drawdown are not covered. |
-| Consecutive-loss pause / correlation cap | CRITICAL | Neither control exists. |
-| Volatility sizing | PARTIAL | ATR influences stop distance and therefore size; no independent volatility shock or portfolio correlation controller. |
+| Daily/rolling equity drawdown | PARTIAL | `RiskManager.monitor_equity` persists daily starting equity and a rolling peak. Valuation covers USDT and configured base assets, not every possible account asset or fee/rebate. |
+| Consecutive-loss pause | PARTIAL | `RiskManager.close_position` persists loss streaks and halts after `MAX_CONSECUTIVE_LOSSES`. Fees and partial exits are not included in realized loss reliably, so this gate needs complete accounting before it can be treated as a pass. |
+| Cross-asset correlation cap | PARTIAL | `TradingBot._has_correlated_open_position` estimates aligned closed-candle return correlation and blocks highly correlated entries. Correlation is noisy; there is no portfolio covariance model. |
+| Volatility sizing | PARTIAL | ATR influences stop distance and therefore size; no separate volatility shock or portfolio covariance controller. |
 | Leverage / liquidation | PASS (not applicable) | The connector is Binance spot only; margin, futures and leverage are not enabled. |
 
 ## Operations and accounting
 
 | Criterion | Status | Evidence / remaining work |
 |---|---|---|
-| Independent kill switch that cancels/closes | CRITICAL | The dashboard has an authenticated, same-origin exit-only pause. It does not cancel exchange orders, market-close positions, or terminate the service. |
+| Emergency stop that cancels/closes | PARTIAL | The authenticated same-origin control cancels exchange orders, attempts to close bot-tracked positions, then latches a halt. It depends on the same service/API/network, does not terminate Railway, and does not sweep untracked inventory. |
 | Exit-only mode | PASS | `/api/exit-only` durably disables new entries; existing tracked positions continue through stop/strategy exit monitoring. No UI resume control is provided. |
 | Manual exchange intervention | PARTIAL | Balance/open-order mismatch blocks new orders. Automatic position import/adoption and safe external-close accounting are not implemented. |
 | Safe hot reload | CRITICAL | Configuration changes require a restart; in-flight risk limits are not dynamically reconciled. |
@@ -49,9 +50,9 @@
 
 ## Deployment gates
 
-1. Keep `PAPER_TRADING=true`; use only dedicated Demo or Spot Testnet keys. The current service has had Demo authentication failures, so no account is verified until strict balance/open-order reconciliation succeeds.
+1. Keep `PAPER_TRADING=true` and `PAPER_ENVIRONMENT=testnet`; use only dedicated Spot Testnet keys. Railway config is set to Testnet, but key validity and authenticated account reconciliation are unverified until the deployed build reports a successful private account snapshot.
 2. Mount one Railway Volume at `/app/data`, set `DATA_DIR=/app/data`, and keep exactly one bot replica. SQLite here is a single-worker store, not shared multi-replica storage.
-3. Treat the exchange-side stop, equity drawdown guard, full fee reconciliation, kill switch, statistical validation, and 14-day soak as launch blockers. Do not enable real-money trading based on this audit or a successful test suite.
+3. Treat the exchange-side stop, full fee reconciliation, complete account-equity valuation, independent kill/monitoring, statistical validation, and 14-day soak as launch blockers. Do not enable real-money trading based on this audit or a successful test suite.
 
 ## Evidence index
 

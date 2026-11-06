@@ -24,8 +24,10 @@ Railway files outside a mounted volume are ephemeral. The bot stores positions, 
 6. **Transactional State & Order Journal**: Persists positions/risk state in SQLite and records a deterministic client ID before submitting an order. An ambiguous or unapplied order intent halts trading for reconciliation rather than being retried.
 7. **Entry Preflight**: Uses exchange amount precision/limits and checks top-of-book spread and visible depth before entries. Values are configurable with `MAX_SPREAD_BPS` and `MAX_SLIPPAGE_BPS`.
 8. **Exit-only control**: The overview page can durably pause new entries while the worker continues monitoring tracked positions.
-9. **Multi-Timeframe Support**: Supports common exchange candle intervals; performance is not established across them.
-10. **Optional Telegram Alerts**: Sends buy/sell/stop-loss notifications directly to your phone.
+9. **Risk circuit breakers**: Daily and peak-to-trough equity loss, consecutive losses, and highly correlated open positions can block entries.
+10. **Emergency stop**: The authenticated dashboard control attempts to cancel open exchange orders and close bot-tracked positions, then latches a halt. It is not an exchange-independent kill switch.
+11. **Multi-Timeframe Support**: Supports common exchange candle intervals; performance is not established across them.
+12. **Optional Telegram Alerts**: Sends buy/sell/stop-loss notifications directly to your phone.
 
 ---
 
@@ -88,6 +90,8 @@ MAX_OPEN_POSITIONS=3      # Max 3 simultaneous trades
 STOP_LOSS_PCT=2.0         # 2% initial stop loss
 TAKE_PROFIT_PCT=3.0       # 3% take profit
 MAX_DAILY_LOSS_PCT=3.0    # Circuit breaker: halts trading if down 3% in a day
+MAX_ROLLING_DRAWDOWN_PCT=5.0 # Circuit breaker from persisted rolling equity peak
+MAX_CONSECUTIVE_LOSSES=3  # Pause entries after consecutive losing closes
 POSITION_SIZE_PCT=10.0    # Max 10% portfolio per trade
 
 # Strategy

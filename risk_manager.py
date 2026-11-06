@@ -32,6 +32,8 @@ class Position:
     stop_loss_price: float
     take_profit_price: float
     order_id: str = ""
+    stop_order_id: str = ""
+    stop_client_order_id: str = ""
     highest_price: float = 0.0  # For trailing stop
     break_even_activated: bool = False
 
@@ -102,6 +104,9 @@ class RiskManager:
         self.open_positions: dict[str, Position] = {}
         self.trade_history: list[TradeRecord] = []
         self._daily_loss = 0.0
+        self._daily_starting_equity = 0.0
+        self._rolling_peak_equity = 0.0
+        self._consecutive_losses = 0
         self._daily_loss_reset_date = datetime.now(timezone.utc).date()
         self._is_halted = False
         self._halt_reason = ""
@@ -127,14 +132,25 @@ class RiskManager:
                 return
             state_date = datetime.fromisoformat(state["date"]).date()
             today = datetime.now(timezone.utc).date()
+            daily_loss = float(state.get("daily_loss", 0.0))
+            daily_start = float(state.get("daily_starting_equity", 0.0))
+            rolling_peak = float(state.get("rolling_peak_equity", 0.0))
+            is_halted = state.get("is_halted", False)
+            consecutive = int(state.get("consecutive_losses", 0))
+            if (not math.isfinite(daily_loss) or not isinstance(is_halted, bool) or
+                    not math.isfinite(daily_start) or daily_start < 0 or
+                    not math.isfinite(rolling_peak) or rolling_peak < 0 or consecutive < 0):
+                raise ValueError("daily equity risk state contains invalid values")
+            self._rolling_peak_equity = rolling_peak
+            self._consecutive_losses = consecutive
+            if self._consecutive_losses >= self.config.max_consecutive_losses:
+                self._is_halted = True
+                self._halt_reason = f"Consecutive loss limit persists ({self._consecutive_losses}); entries paused"
             if state_date == today:
-                daily_loss = float(state.get("daily_loss", 0.0))
-                is_halted = state.get("is_halted", False)
-                if not math.isfinite(daily_loss) or not isinstance(is_halted, bool):
-                    raise ValueError("daily risk state contains invalid values")
                 self._daily_loss = daily_loss
                 self._is_halted = is_halted
                 self._halt_reason = str(state.get("halt_reason", ""))
+                self._daily_starting_equity = daily_start
                 self._daily_loss_reset_date = today
         except Exception as exc:
             # Fail closed: corrupt state should prevent new orders until reconciled.
@@ -146,6 +162,9 @@ class RiskManager:
         state = {
             "date": datetime.now(timezone.utc).date().isoformat(),
             "daily_loss": self._daily_loss,
+            "daily_starting_equity": self._daily_starting_equity,
+            "rolling_peak_equity": self._rolling_peak_equity,
+            "consecutive_losses": self._consecutive_losses,
             "is_halted": self._is_halted,
             "halt_reason": self._halt_reason,
         }
@@ -237,11 +256,36 @@ class RiskManager:
                 )
             self._daily_loss = 0.0
             self._daily_loss_reset_date = today
-            if self._is_halted and "daily loss" in self._halt_reason.lower():
+            self._daily_starting_equity = 0.0
+            if self._is_halted and ("daily loss" in self._halt_reason.lower() or "daily equity drawdown" in self._halt_reason.lower()):
                 self._is_halted = False
                 self._halt_reason = ""
                 logger.info("✅ Trading resumed — new day, daily loss limit reset")
             self._save_daily_state()
+
+    def monitor_equity(self, equity: float) -> bool:
+        """Persist daily and rolling equity peaks and halt on threshold breaches."""
+        if not isinstance(equity, (int, float)) or not math.isfinite(equity) or equity <= 0:
+            self.halt("Account equity unavailable or invalid; operator review required")
+            return False
+        if self._daily_starting_equity <= 0:
+            self._daily_starting_equity = float(equity)
+        if self._rolling_peak_equity <= 0:
+            self._rolling_peak_equity = float(equity)
+        self._rolling_peak_equity = max(self._rolling_peak_equity, float(equity))
+        daily_drawdown = max(0.0, (self._daily_starting_equity - equity) / self._daily_starting_equity * 100)
+        rolling_drawdown = max(0.0, (self._rolling_peak_equity - equity) / self._rolling_peak_equity * 100)
+        try:
+            self._save_daily_state()
+        except Exception:
+            return False
+        if daily_drawdown >= self.config.max_daily_loss_pct:
+            self.halt(f"Daily equity drawdown limit reached: {daily_drawdown:.2f}%")
+            return False
+        if rolling_drawdown >= self.config.max_rolling_drawdown_pct:
+            self.halt(f"Rolling peak-to-trough drawdown limit reached: {rolling_drawdown:.2f}%")
+            return False
+        return True
 
     def can_open_position(self, symbol: str, portfolio_value: float) -> tuple[bool, str]:
         """Check if opening a new position complies with risk rules."""
@@ -360,6 +404,33 @@ class RiskManager:
         )
         return position
 
+    def attach_exchange_stop(self, symbol: str, order_id: str, client_order_id: str) -> bool:
+        """Persist the exchange-native protective stop reference on the position."""
+        position = self.open_positions.get(symbol)
+        if not position or not order_id or not client_order_id:
+            self.halt(f"Exchange stop could not be attached to tracked position {symbol}")
+            return False
+        position.stop_order_id = str(order_id)
+        position.stop_client_order_id = str(client_order_id)
+        if not self._save_positions():
+            return False
+        return True
+
+    def clear_exchange_stop(self, symbol: str) -> bool:
+        position = self.open_positions.get(symbol)
+        if not position:
+            return False
+        position.stop_order_id = ""
+        position.stop_client_order_id = ""
+        return self._save_positions()
+
+    def update_position_amount(self, symbol: str, amount: float) -> bool:
+        position = self.open_positions.get(symbol)
+        if not position or not math.isfinite(float(amount)) or amount <= 0:
+            return False
+        position.amount = float(amount)
+        return self._save_positions()
+
     def close_position(
         self,
         symbol: str,
@@ -395,12 +466,15 @@ class RiskManager:
         )
         self.trade_history.append(record)
         self._daily_loss += pnl
+        self._consecutive_losses = self._consecutive_losses + 1 if pnl < 0 else 0
         try:
             self._save_daily_state()
         except Exception:
             # The exit is already durable, but daily drawdown state is not.
             # Preserve the completed close and prevent any further entries.
             return record
+        if self._consecutive_losses >= self.config.max_consecutive_losses:
+            self.halt(f"Consecutive loss limit reached ({self._consecutive_losses}); entries paused")
 
         emoji = "💰" if pnl >= 0 else "💸"
         logger.info(

@@ -130,6 +130,10 @@ class ExchangeConnector:
         self.exchange.load_markets()
         return self.exchange.amount_to_precision(symbol, str(amount))
 
+    def price_to_precision(self, symbol: str, price) -> str:
+        self.exchange.load_markets()
+        return self.exchange.price_to_precision(symbol, str(price))
+
     def get_market_limits(self, symbol: str) -> dict:
         self.exchange.load_markets()
         market = self.exchange.market(symbol)
@@ -149,6 +153,34 @@ class ExchangeConnector:
         except ccxt.BaseError as exc:
             logger.error("Order book unavailable for %s (%s)", symbol, type(exc).__name__)
             raise RuntimeError("Order book preflight is unavailable") from exc
+
+    def place_native_stop_loss(self, symbol: str, amount, stop_price, client_order_id: str) -> dict:
+        """Place a Binance Spot STOP_LOSS market order on the exchange."""
+        try:
+            return self.exchange.create_order(
+                symbol, "market", "sell", float(amount), None,
+                {
+                    "stopLossPrice": self.price_to_precision(symbol, stop_price),
+                    "clientOrderId": client_order_id,
+                },
+            )
+        except ccxt.BaseError as exc:
+            logger.error("Native stop placement failed for %s (%s)", symbol, type(exc).__name__)
+            raise RuntimeError("Exchange-native stop was not confirmed") from exc
+
+    def fetch_order(self, order_id: str, symbol: str) -> dict:
+        try:
+            return self.exchange.fetch_order(order_id, symbol)
+        except ccxt.BaseError as exc:
+            logger.error("Order status lookup failed for %s (%s)", symbol, type(exc).__name__)
+            raise RuntimeError("Exchange order status is unavailable") from exc
+
+    def fetch_order_by_client_id(self, client_order_id: str, symbol: str) -> dict:
+        try:
+            return self.exchange.fetch_order(None, symbol, {"origClientOrderId": client_order_id})
+        except ccxt.BaseError as exc:
+            logger.error("Client-order reconciliation failed for %s (%s)", symbol, type(exc).__name__)
+            raise RuntimeError("Client order status is unavailable") from exc
 
     def get_usdt_balance(self) -> float:
         """Get available USDT balance."""
@@ -206,7 +238,9 @@ class ExchangeConnector:
             Order details dict or None on failure
         """
         try:
-            params = {"newClientOrderId": client_order_id} if client_order_id else {}
+            # Let the symbol/account's Binance STP policy apply. Supported
+            # modes vary by symbol; hard-coding one can reject every order.
+            params = {"clientOrderId": client_order_id} if client_order_id else {}
             order = self.exchange.create_market_buy_order(symbol, amount, params)
             cost = order.get("cost", 0)
             price = order.get("average", order.get("price", 0))
@@ -237,7 +271,7 @@ class ExchangeConnector:
             Order details dict or None on failure
         """
         try:
-            params = {"newClientOrderId": client_order_id} if client_order_id else {}
+            params = {"clientOrderId": client_order_id} if client_order_id else {}
             order = self.exchange.create_market_sell_order(symbol, amount, params)
             cost = order.get("cost", 0)
             price = order.get("average", order.get("price", 0))
