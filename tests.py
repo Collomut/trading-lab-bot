@@ -160,6 +160,21 @@ class TestTradingBot(unittest.TestCase):
             {"status": "closed", "filled": None}, 1.0
         ))
 
+    def test_base_asset_fee_is_removed_from_tracked_fill_quantity(self):
+        net = TradingBot._net_base_filled({
+            "filled": "1.000", "fees": [{"currency": "BTC", "cost": "0.001"}],
+        }, "BTC/USDT")
+        self.assertEqual(str(net), "0.999")
+        self.assertIsNone(TradingBot._net_base_filled({"filled": "1.0"}, "BTC/USDT"))
+
+    def test_client_order_id_is_deterministic_and_exchange_sized(self):
+        first = TradingBot._client_order_id("BTC/USDT", "buy", "candle-123")
+        second = TradingBot._client_order_id("BTC/USDT", "buy", "candle-123")
+        different = TradingBot._client_order_id("BTC/USDT", "buy", "candle-124")
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, different)
+        self.assertLessEqual(len(first), 36)
+
     def test_non_finite_risk_configuration_is_rejected(self):
         from config import BotConfig, StrategyConfig
         config = BotConfig(
@@ -173,10 +188,45 @@ class TestTradingBot(unittest.TestCase):
     def test_position_persistence_failure_halts_new_entries(self):
         with TemporaryDirectory() as persistence_dir:
             rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
-            with patch.object(Path, "replace", side_effect=OSError("disk unavailable")):
+            with patch.object(rm.store, "write_positions", side_effect=OSError("disk unavailable")):
                 rm.open_position("BTC/USDT", 100.0, 0.1)
             self.assertTrue(rm._is_halted)
             self.assertIn("could not be saved", rm._halt_reason)
+
+    def test_sqlite_positions_and_risk_state_survive_restart(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            first.open_position("BTC/USDT", 100.0, 0.1)
+            first.halt("test durable halt")
+            second = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertIn("BTC/USDT", second.open_positions)
+            self.assertTrue(second._is_halted)
+            self.assertEqual(second._halt_reason, "test durable halt")
+            self.assertEqual(second.store.quick_check(), "ok")
+
+    def test_order_intent_is_unique_and_unresolved_until_applied(self):
+        import sqlite3
+        from state_store import StateStore
+        with TemporaryDirectory() as persistence_dir:
+            store = StateStore(Path(persistence_dir) / "state.sqlite3")
+            store.create_order_intent("stable-id", "BTC/USDT", "buy", "0.1", {"side": "buy"})
+            store.update_order("stable-id", "SUBMITTED")
+            store.update_order("stable-id", "UNKNOWN")
+            self.assertEqual(len(store.unresolved_orders()), 1)
+            with self.assertRaises(sqlite3.IntegrityError):
+                store.create_order_intent("stable-id", "BTC/USDT", "buy", "0.1", {"side": "buy"})
+            store.update_order("stable-id", "FILLED", filled="0.1", average="100")
+            store.mark_order_applied("stable-id")
+            self.assertEqual(store.unresolved_orders(), [])
+
+    def test_exchange_reconciliation_error_is_not_treated_as_empty_balance(self):
+        from unittest.mock import Mock
+        import ccxt
+        connector = object.__new__(ExchangeConnector)
+        connector.exchange = Mock()
+        connector.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("secret omitted")
+        with self.assertRaisesRegex(RuntimeError, "reconciliation is unavailable"):
+            connector.fetch_account_snapshot()
 
 
     def test_missing_open_position_price_halts_new_trading(self):

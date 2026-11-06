@@ -116,6 +116,40 @@ class ExchangeConnector:
             logger.error("Failed to fetch balance (%s)", type(e).__name__)
             return {}
 
+    def fetch_account_snapshot(self) -> tuple[dict, list]:
+        """Strict authenticated snapshot; private API failures must not look empty."""
+        try:
+            balance = self.exchange.fetch_balance()
+            orders = self.exchange.fetch_open_orders()
+            return balance, orders
+        except ccxt.BaseError as exc:
+            logger.error("Private account reconciliation failed (%s)", type(exc).__name__)
+            raise RuntimeError("Account reconciliation is unavailable") from exc
+
+    def amount_to_precision(self, symbol: str, amount) -> str:
+        self.exchange.load_markets()
+        return self.exchange.amount_to_precision(symbol, str(amount))
+
+    def get_market_limits(self, symbol: str) -> dict:
+        self.exchange.load_markets()
+        market = self.exchange.market(symbol)
+        limits = market.get("limits", {})
+        amount = limits.get("amount", {}) or {}
+        cost = limits.get("cost", {}) or {}
+        return {
+            "min_amount": amount.get("min"), "max_amount": amount.get("max"),
+            "min_cost": cost.get("min"), "max_cost": cost.get("max"),
+            "active": market.get("active", True),
+        }
+
+    def get_order_book(self, symbol: str, limit: int = 20) -> dict:
+        """Fetch L2 liquidity for entry preflight; unavailable means no entry."""
+        try:
+            return self.exchange.fetch_order_book(symbol, limit=limit)
+        except ccxt.BaseError as exc:
+            logger.error("Order book unavailable for %s (%s)", symbol, type(exc).__name__)
+            raise RuntimeError("Order book preflight is unavailable") from exc
+
     def get_usdt_balance(self) -> float:
         """Get available USDT balance."""
         balance = self.get_balance()
@@ -160,7 +194,7 @@ class ExchangeConnector:
         ticker = self.get_ticker(symbol)
         return ticker.get("last", 0.0)
 
-    def place_market_buy(self, symbol: str, amount: float) -> dict | None:
+    def place_market_buy(self, symbol: str, amount, client_order_id: str | None = None) -> dict | None:
         """
         Place a market buy order.
 
@@ -172,7 +206,8 @@ class ExchangeConnector:
             Order details dict or None on failure
         """
         try:
-            order = self.exchange.create_market_buy_order(symbol, amount)
+            params = {"newClientOrderId": client_order_id} if client_order_id else {}
+            order = self.exchange.create_market_buy_order(symbol, amount, params)
             cost = order.get("cost", 0)
             price = order.get("average", order.get("price", 0))
             logger.info(
@@ -190,7 +225,7 @@ class ExchangeConnector:
             logger.error("Buy order outcome is unknown for %s; manual reconciliation required", symbol)
             raise RuntimeError("Exchange did not confirm buy order outcome") from e
 
-    def place_market_sell(self, symbol: str, amount: float) -> dict | None:
+    def place_market_sell(self, symbol: str, amount, client_order_id: str | None = None) -> dict | None:
         """
         Place a market sell order.
 
@@ -202,7 +237,8 @@ class ExchangeConnector:
             Order details dict or None on failure
         """
         try:
-            order = self.exchange.create_market_sell_order(symbol, amount)
+            params = {"newClientOrderId": client_order_id} if client_order_id else {}
+            order = self.exchange.create_market_sell_order(symbol, amount, params)
             cost = order.get("cost", 0)
             price = order.get("average", order.get("price", 0))
             logger.info(

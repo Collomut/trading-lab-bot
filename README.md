@@ -8,11 +8,11 @@ A cryptocurrency trading research and paper-trading project written in Python.
 
 ## Safety status
 
-This repository is an educational paper-trading project. It is **not ready to place real orders**. Live order placement is deliberately blocked in this build; do not enable real exchange keys. The rules-based strategy and the short sample backtest have not established a profitable edge.
+This repository is an educational paper-trading project. It is **not ready to place real orders**. Live order placement is deliberately blocked in this build; do not enable real exchange keys. The rules-based strategy and the short sample backtest have not established a profitable edge. Passing software checks is not evidence of a trading edge or safe live execution.
 
-Before exposing the Railway service, set `DASHBOARD_TOKEN` to a long random secret and mount a Railway Volume at `/app/data` with `DATA_DIR=/app/data`. All dashboard routes require HTTP Basic authentication (username `operator`, password the token). Without the token the dashboard returns 503 and the bot configuration validation prevents trading.
+Before exposing the Railway service, set `DASHBOARD_TOKEN` to a long random secret and mount a Railway Volume at `/app/data` with `DATA_DIR=/app/data`. Run exactly one worker/replica: local SQLite state is transactional for one process and is not a distributed database. All dashboard routes require HTTP Basic authentication (username `operator`, password the token). Without the token the dashboard returns 503 and the bot configuration validation prevents trading.
 
-Railway files outside a mounted volume are ephemeral, so open-position and risk state can disappear on a redeploy. The volume is required for restart persistence, but it does not make local JSON state transactional or reconcile it with the exchange. Do not treat persistence as proof that positions are safely managed.
+Railway files outside a mounted volume are ephemeral. The bot stores positions, daily risk state, order intents, and audit events in `bot_state.sqlite3` under `DATA_DIR`; mount the volume before starting it. Startup and each trading cycle require authenticated balance/open-order reconciliation. A mismatch or API outage halts all orders. This local state does not create exchange-side protection, and a persistent local stop still cannot execute while the process or network is down.
 
 ## Implemented features (paper trading only)
 
@@ -21,9 +21,11 @@ Railway files outside a mounted volume are ephemeral, so open-position and risk 
 3. **ATR-Aware Sizing**: Calculates Average True Range (ATR) to avoid getting shaken out by normal market wicks.
 4. **Fixed Market-Regime Gate**: The combined strategy pauses new buys when ADX is below `MIN_TREND_ADX` or ATR exceeds `MAX_ATR_PCT`. It does not alter thresholds automatically; exits and SELL signals remain available.
 5. **Volume Confirmation**: Rejects fakeout signals during low-volume market dead zones.
-6. **Disk Persistence**: Actively writes open positions to `data/open_positions.json`. If your computer restarts, the bot restores its tracking automatically.
-7. **Multi-Timeframe Support**: Supports common exchange candle intervals; performance is not established across them.
-8. **Optional Telegram Alerts**: Sends buy/sell/stop-loss notifications directly to your phone.
+6. **Transactional State & Order Journal**: Persists positions/risk state in SQLite and records a deterministic client ID before submitting an order. An ambiguous or unapplied order intent halts trading for reconciliation rather than being retried.
+7. **Entry Preflight**: Uses exchange amount precision/limits and checks top-of-book spread and visible depth before entries. Values are configurable with `MAX_SPREAD_BPS` and `MAX_SLIPPAGE_BPS`.
+8. **Exit-only control**: The overview page can durably pause new entries while the worker continues monitoring tracked positions.
+9. **Multi-Timeframe Support**: Supports common exchange candle intervals; performance is not established across them.
+10. **Optional Telegram Alerts**: Sends buy/sell/stop-loss notifications directly to your phone.
 
 ---
 
@@ -106,7 +108,8 @@ TELEGRAM_CHAT_ID=
 This build intentionally blocks live trading even if `PAPER_TRADING=false`. Do not bypass that guard. A future live-capable version would first need exchange-side protective orders, order/fill reconciliation, durable transactional storage, reliable kill switches, robust out-of-sample evaluation, and a separately reviewed operational runbook. Testnet and paper trading do not guarantee live execution behavior.
 
 - The dashboard requires a high-entropy `DASHBOARD_TOKEN` in Railway; without it, requests fail closed.
-- Mount a Railway Volume at `/app/data` and set `DATA_DIR=/app/data`; otherwise local JSON state and logs can be lost on redeploy.
+- Mount a Railway Volume at `/app/data` and set `DATA_DIR=/app/data`; otherwise SQLite state and logs can be lost on redeploy.
+- Keep a single Railway replica. SQLite on a mounted volume is not safe as shared state for multiple bot workers.
 - Use dedicated Binance Demo Mode keys when `PAPER_ENVIRONMENT=demo`; use Spot Testnet keys when `PAPER_ENVIRONMENT=testnet`. Never use live account keys for paper mode.
-- Demo Mode is a better execution rehearsal than Spot Testnet, but it does not prove profitability or guarantee live fills. The app does not reconcile positions with the exchange and does not place exchange-side stop orders.
+- Demo Mode is a better execution rehearsal than Spot Testnet, but it does not prove profitability or guarantee live fills. The app reconciles configured asset balances and open orders, but it does not place exchange-side stop orders; local stop management is unavailable during an outage.
 - Do not grant withdrawal permission to exchange API keys.

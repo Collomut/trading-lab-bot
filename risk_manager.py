@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from config import RiskConfig
+from state_store import StateStore
 
 logger = logging.getLogger("bot.risk")
 
@@ -96,6 +97,7 @@ class RiskManager:
         self.config = config
         self.persistence_path = Path(persistence_dir) / "open_positions.json"
         self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
+        self.store = StateStore(self.persistence_path.parent / "bot_state.sqlite3")
 
         self.open_positions: dict[str, Position] = {}
         self.trade_history: list[TradeRecord] = []
@@ -116,9 +118,13 @@ class RiskManager:
     def _load_daily_state(self):
         """Restore realized daily drawdown and halt state across restarts."""
         try:
-            if not self.daily_state_path.exists():
+            state = self.store.read_state("daily_risk")
+            # One-time migration from the legacy JSON state file.
+            if state is None and self.daily_state_path.exists():
+                state = json.loads(self.daily_state_path.read_text(encoding="utf-8"))
+                self.store.write_state("daily_risk", state)
+            if state is None:
                 return
-            state = json.loads(self.daily_state_path.read_text(encoding="utf-8"))
             state_date = datetime.fromisoformat(state["date"]).date()
             today = datetime.now(timezone.utc).date()
             if state_date == today:
@@ -143,10 +149,8 @@ class RiskManager:
             "is_halted": self._is_halted,
             "halt_reason": self._halt_reason,
         }
-        temp = self.daily_state_path.with_suffix(".tmp")
         try:
-            temp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-            temp.replace(self.daily_state_path)
+            self.store.write_state("daily_risk", state)
         except Exception as exc:
             self._is_halted = True
             self._halt_reason = "Daily risk state could not be saved; operator reconciliation required"
@@ -155,21 +159,15 @@ class RiskManager:
 
     def _save_positions(self) -> bool:
         """Atomically persist positions; state failure halts new trading."""
-        temp_path = self.persistence_path.with_suffix(".tmp")
         try:
             data = {sym: pos.to_dict() for sym, pos in self.open_positions.items()}
-            temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            temp_path.replace(self.persistence_path)
+            self.store.write_positions(data)
             logger.debug("Saved %s positions to %s", len(self.open_positions), self.persistence_path)
             return True
         except Exception as exc:
             self._is_halted = True
             self._halt_reason = "Open-position state could not be saved; operator reconciliation required"
             logger.error("Failed to persist open positions: %s", exc)
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
             return False
 
     def halt(self, reason: str):
@@ -183,10 +181,14 @@ class RiskManager:
 
     def _load_positions(self):
         """Load positions from disk upon bot startup."""
-        if self.persistence_path.exists():
-            try:
-                with open(self.persistence_path, "r") as f:
-                    data = json.load(f)
+        try:
+            data = self.store.read_positions()
+            if not data and self.persistence_path.exists():
+                data = json.loads(self.persistence_path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("open-position state must be an object")
+                self.store.write_positions(data)
+            if data:
                 if not isinstance(data, dict):
                     raise ValueError("open-position state must be an object")
                 for sym, pos_data in data.items():
@@ -204,10 +206,25 @@ class RiskManager:
                     self.open_positions[sym] = position
                 if self.open_positions:
                     logger.info(f"🔄 Restored {len(self.open_positions)} active position(s) from disk: {list(self.open_positions.keys())}")
-            except Exception as e:
+            unresolved = self.store.unresolved_orders()
+            if unresolved:
                 self._is_halted = True
-                self._halt_reason = "Open-position state is unreadable; operator reconciliation required"
-                logger.error("Failed to load persisted positions; new entries halted: %s", e)
+                self._halt_reason = "Unresolved order intent exists; exchange reconciliation required"
+                logger.critical("Startup halted with %s unresolved or unapplied order intent(s)", len(unresolved))
+        except Exception as e:
+            self._is_halted = True
+            self._halt_reason = "Open-position state is unreadable; operator reconciliation required"
+            logger.error("Failed to load persisted positions; new entries halted: %s", type(e).__name__)
+
+    def resume_after_reconciliation(self):
+        """Only clear transient exchange-reconciliation halts after clean state."""
+        if not self._is_halted or not self._halt_reason.startswith("Exchange reconciliation failed:"):
+            return False
+        if self.store.unresolved_orders():
+            return False
+        self._is_halted, self._halt_reason = False, ""
+        self._save_daily_state()
+        return True
 
     def _reset_daily_if_needed(self):
         """Reset daily loss counter at the start of each UTC day."""
@@ -229,6 +246,10 @@ class RiskManager:
     def can_open_position(self, symbol: str, portfolio_value: float) -> tuple[bool, str]:
         """Check if opening a new position complies with risk rules."""
         self._reset_daily_if_needed()
+
+        mode = self.store.read_state("entry_mode") or "ACTIVE"
+        if mode != "ACTIVE":
+            return False, "Entry-only pause is active; existing positions continue to be monitored and exited"
 
         if self._is_halted:
             return False, f"Trading halted: {self._halt_reason}"
@@ -254,6 +275,14 @@ class RiskManager:
             return False, self._halt_reason
 
         return True, "OK"
+
+    def set_exit_only(self):
+        """Durably stop new entries while retaining existing position monitoring."""
+        self.store.write_state("entry_mode", "EXIT_ONLY")
+        self.store.append_event("mode_changed", {"mode": "EXIT_ONLY"})
+
+    def entry_mode(self):
+        return self.store.read_state("entry_mode") or "ACTIVE"
 
     def calculate_position_size(
         self,

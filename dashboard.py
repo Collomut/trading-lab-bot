@@ -77,6 +77,7 @@ class WebDashboard:
         self.app.router.add_get('/api/status', self.handle_status)
         self.app.router.add_get('/api/candles', self.handle_candles)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
+        self.app.router.add_post('/api/exit-only', self.handle_exit_only)
 
     async def handle_terms(self, request):
         """Serve the terms and glossary page."""
@@ -168,7 +169,14 @@ class WebDashboard:
         risk = self.bot.risk_manager
 
         # 1. Fetch available cash
-        usdt_balance = await loop.run_in_executor(None, exchange.get_usdt_balance)
+        try:
+            account, _ = await loop.run_in_executor(None, exchange.fetch_account_snapshot)
+            usdt_balance = float((account.get("free") or {}).get("USDT") or 0.0)
+            account_available = True
+        except Exception:
+            # Do not report a failed private API call as a genuine zero balance.
+            usdt_balance = 0.0
+            account_available = False
 
         # 2. Fetch live prices
         prices = {}
@@ -234,6 +242,7 @@ class WebDashboard:
             "exchange": self.config.exchange.name,
             "net_worth": round(total_net_worth, 2) if total_net_worth is not None else None,
             "cash_balance": round(usdt_balance, 2),
+            "account_available": account_available,
             "initial_balance": self.initial_balance,
             "total_gain_loss": round(total_gain_loss, 2),
             "total_gain_loss_pct": round(gain_loss_pct, 2),
@@ -258,6 +267,8 @@ class WebDashboard:
             "max_atr_pct": self.config.strategy.max_atr_pct,
             "halted": risk._is_halted,
             "halt_reason": risk._halt_reason,
+            "entry_mode": risk.entry_mode(),
+            "exchange_reconciled": self.bot._last_reconciliation_ok,
             "prices": prices,
             "market_summary": market_summary,
             "strategy_name": self.config.strategy.name.upper(),
@@ -315,6 +326,15 @@ class WebDashboard:
         except Exception:
             logger.exception("Manual dashboard cycle failed")
             return web.json_response({"error": "Cycle failed; inspect service logs."}, status=500)
+
+    async def handle_exit_only(self, request):
+        origin = request.headers.get("Origin", "")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
+        if not origin or not hmac.compare_digest(origin, request_origin):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        self.bot.risk_manager.set_exit_only()
+        return web.json_response({"entry_mode": "EXIT_ONLY", "message": "New entries paused; existing positions remain monitored."})
 
     def run(self):
         print(f"\n🚀 Trading Bot Web Dashboard launching on port {self.port}...")

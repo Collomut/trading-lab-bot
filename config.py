@@ -62,6 +62,8 @@ class BotConfig:
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     dashboard_token: str = os.getenv("DASHBOARD_TOKEN", "")
     data_dir: str = os.getenv("DATA_DIR", "data")
+    max_spread_bps: float = float(os.getenv("MAX_SPREAD_BPS", "20"))
+    max_slippage_bps: float = float(os.getenv("MAX_SLIPPAGE_BPS", "30"))
 
     def validate(self):
         """Validate configuration values."""
@@ -122,6 +124,12 @@ class BotConfig:
             errors.append("TRADING_PAIRS must not contain duplicates")
         if any("/" not in pair or len(pair.split("/")) != 2 for pair in normalized_pairs):
             errors.append("Each TRADING_PAIRS item must use BASE/QUOTE format")
+        if any(pair.split("/")[-1].upper() != "USDT" for pair in normalized_pairs if "/" in pair):
+            errors.append("All configured pairs must be USDT-quoted; portfolio sizing is USDT-based")
+        if not math.isfinite(self.max_spread_bps) or not 0 < self.max_spread_bps <= 100:
+            errors.append("MAX_SPREAD_BPS must be finite and between 0 and 100")
+        if not math.isfinite(self.max_slippage_bps) or not 0 < self.max_slippage_bps <= 100:
+            errors.append("MAX_SLIPPAGE_BPS must be finite and between 0 and 100")
         if not math.isfinite(self.risk.take_profit_pct) or self.risk.take_profit_pct <= 0:
             errors.append("TAKE_PROFIT_PCT must be a finite value greater than 0")
 
