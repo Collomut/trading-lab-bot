@@ -103,9 +103,10 @@ class RiskManager:
         self._is_halted = False
         self._halt_reason = ""
 
-        # Load persisted positions if available
-        self._load_positions()
+        # Restore both risk state stores before allowing any entries. Position
+        # state is also a risk control: unreadable state must halt new entries.
         self._load_daily_state()
+        self._load_positions()
 
     @property
     def daily_state_path(self) -> Path:
@@ -162,7 +163,9 @@ class RiskManager:
                 if self.open_positions:
                     logger.info(f"🔄 Restored {len(self.open_positions)} active position(s) from disk: {list(self.open_positions.keys())}")
             except Exception as e:
-                logger.error(f"Failed to load persisted positions: {e}")
+                self._is_halted = True
+                self._halt_reason = "Open-position state is unreadable; operator reconciliation required"
+                logger.error("Failed to load persisted positions; new entries halted: %s", e)
 
     def _reset_daily_if_needed(self):
         """Reset daily loss counter at the start of each UTC day."""

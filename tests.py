@@ -7,6 +7,8 @@ import unittest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from strategies import (
     Signal,
@@ -79,6 +81,18 @@ class TestTradingBot(unittest.TestCase):
         # Position size capped at 10% ($1,000) -> 10 units
         size = rm.calculate_position_size(portfolio, entry_price, sl_price)
         self.assertAlmostEqual(size, 10.0)
+
+    def test_corrupt_position_state_halts_new_entries(self):
+        with TemporaryDirectory() as persistence_dir:
+            state_path = Path(persistence_dir) / "open_positions.json"
+            state_path.write_text("{broken", encoding="utf-8")
+
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            can_open, reason = rm.can_open_position("BTC/USDT", 10_000.0)
+
+            self.assertFalse(can_open)
+            self.assertTrue(rm._is_halted)
+            self.assertIn("unreadable", reason.lower())
 
     def test_risk_manager_break_even_and_trailing_stop(self):
         config = RiskConfig(stop_loss_pct=2.0, take_profit_pct=3.0)
