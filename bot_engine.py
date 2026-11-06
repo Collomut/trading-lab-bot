@@ -375,7 +375,13 @@ class TradingBot:
             else:
                 self._last_account_error = "Account reconciliation failed. Check exchange permissions and service logs."
                 reason = f"Exchange reconciliation failed: {type(exc).__name__}"
-            self.risk_manager.halt(reason)
+            current_halt = self.risk_manager._halt_reason
+            if self.risk_manager._is_halted and not current_halt.startswith("Exchange reconciliation failed:"):
+                # A transient API failure must not erase an earlier circuit
+                # breaker, emergency-stop latch, or manual-review halt.
+                self.risk_manager._save_daily_state()
+            else:
+                self.risk_manager.halt(reason)
             try:
                 self.risk_manager.store.append_event("reconciliation_failed", {"reason": reason})
             except Exception:
@@ -844,7 +850,7 @@ class TradingBot:
         finally:
             self._cycle_lock.release()
 
-    def resume_entries(self) -> tuple[bool, str]:
+    def resume_entries(self, acknowledge_manual_halt: bool = False) -> tuple[bool, str]:
         """Resume a deliberate entry pause only after a fresh clean account reconciliation."""
         if not self._cycle_lock.acquire(timeout=10):
             return False, "The trading worker is busy. Wait for the current account check and try again."
@@ -855,7 +861,13 @@ class TradingBot:
                 reason = self._last_account_error or self.risk_manager._halt_reason
                 return False, f"Cannot resume: account reconciliation failed. {reason}"
             if self.risk_manager._is_halted:
-                return False, f"Cannot resume while a safety halt is active: {self.risk_manager._halt_reason}"
+                emergency_stop_needs_review = self.risk_manager._halt_reason.startswith("Emergency stop")
+                if not (acknowledge_manual_halt and emergency_stop_needs_review):
+                    return False, f"Cannot resume while a safety halt is active: {self.risk_manager._halt_reason}"
+                if self.risk_manager.open_positions or self.risk_manager.store.unresolved_orders():
+                    return False, "Manual recovery is blocked while positions or unresolved orders remain. Inspect the Testnet account."
+                if not self.risk_manager.acknowledge_emergency_stop_review():
+                    return False, "The emergency-stop review could not be saved; trading remains halted."
             self.risk_manager.store.write_state("entry_mode", "ACTIVE")
             self.risk_manager.store.append_event("mode_changed", {"mode": "ACTIVE", "source": "operator_resume"})
             return True, "Entries resumed after successful account reconciliation."

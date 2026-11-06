@@ -39,7 +39,7 @@
 | Criterion | Status | Evidence / remaining work |
 |---|---|---|
 | Emergency stop that cancels/closes | PARTIAL | The authenticated same-origin control cancels exchange orders, attempts to close bot-tracked positions, then latches a halt. It depends on the same service/API/network, does not terminate Railway, and does not sweep untracked inventory. |
-| Exit-only mode | PASS | `/api/exit-only` durably disables new entries; existing tracked positions continue through stop/strategy exit monitoring. `/api/resume` takes the same trading lock and requires fresh successful account reconciliation; safety halts cannot be cleared by this control. |
+| Exit-only mode | PASS | `/api/exit-only` durably disables new entries; existing tracked positions continue through stop/strategy exit monitoring. `/api/resume` takes the same trading lock and requires fresh successful account reconciliation. A latched emergency-stop halt additionally requires explicit operator review, no open bot positions, and no unresolved orders; other risk halts cannot be cleared through this control. |
 | Manual exchange intervention | PARTIAL | Balance/open-order mismatch blocks new orders. Automatic position import/adoption and safe external-close accounting are not implemented. |
 | Safe hot reload | CRITICAL | Configuration changes require a restart; in-flight risk limits are not dynamically reconciled. |
 | External heartbeat / alert routing | PARTIAL | Optional Telegram notifications exist; no independent dead-man monitor or SMS/phone paging is configured by code. |

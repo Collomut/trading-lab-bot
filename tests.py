@@ -313,6 +313,15 @@ class TestTradingBot(unittest.TestCase):
             self.assertTrue(success)
             self.assertEqual(bot.risk_manager.entry_mode(), "ACTIVE")
 
+            bot.risk_manager.set_exit_only()
+            bot.risk_manager.halt("Emergency stop could not verify/cancel exchange orders; operator action required")
+            success, _ = bot.resume_entries()
+            self.assertFalse(success, "Emergency-stop halts must require explicit operator review")
+            success, message = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertTrue(success)
+            self.assertEqual(bot.risk_manager.entry_mode(), "ACTIVE")
+            self.assertFalse(bot.risk_manager._is_halted)
+
     def test_native_stop_is_submitted_as_market_stop_with_persistable_client_id(self):
         from unittest.mock import Mock
         connector = object.__new__(ExchangeConnector)

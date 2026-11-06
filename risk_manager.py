@@ -325,6 +325,25 @@ class RiskManager:
         self.store.write_state("entry_mode", "EXIT_ONLY")
         self.store.append_event("mode_changed", {"mode": "EXIT_ONLY"})
 
+    def acknowledge_emergency_stop_review(self) -> bool:
+        """Clear only a latched emergency-stop halt after the operator review flow."""
+        if not self._is_halted or not self._halt_reason.startswith("Emergency stop"):
+            return False
+        previous_reason = self._halt_reason
+        self._is_halted, self._halt_reason = False, ""
+        try:
+            self.store.append_event("emergency_stop_review_acknowledged", {"previous_reason": previous_reason})
+            self._save_daily_state()
+            return True
+        except Exception:
+            self._is_halted = True
+            self._halt_reason = "Emergency-stop review could not be saved; operator action required"
+            try:
+                self._save_daily_state()
+            except Exception:
+                pass
+            return False
+
     def entry_mode(self):
         return self.store.read_state("entry_mode") or "ACTIVE"
 

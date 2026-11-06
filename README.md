@@ -70,7 +70,7 @@ python main.py --interval 60
 - The overview shows **Available USDT** separately from **Tracked value**. `Unavailable` means the private Binance balance request failed; `$0.00` means Binance returned a real zero balance.
 - For Testnet, `API_KEY` and `API_SECRET` must be the matching pair created for **Binance Spot Testnet**. Demo and live keys do not authenticate against the Testnet endpoint. Never paste either secret into chat or logs.
 - **Pause entries** stops new buys while existing positions continue to be monitored. The button changes to **Resume entries**. Resume is disabled until the account reconciles cleanly; a safety halt or failed account check cannot be bypassed from this control.
-- **Emergency stop** is a latched safety action. If it cannot verify the account or close positions, inspect the Binance Testnet account and service logs before trying to resume.
+- **Emergency stop** is a latched safety action. If it cannot verify the account or close positions, a separate **Review & resume** action appears only after a fresh clean account check and only when no bot positions or unresolved orders remain. The operator must confirm they reviewed the Testnet account. Other risk halts cannot be bypassed from the dashboard.
 
 ---
 

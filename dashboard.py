@@ -279,6 +279,11 @@ class WebDashboard:
             "entry_mode": risk.entry_mode(),
             "exchange_reconciled": self.bot._last_reconciliation_ok,
             "resume_available": risk.entry_mode() == "EXIT_ONLY" and not risk._is_halted and account_available and self.bot._last_reconciliation_ok,
+            "manual_resume_available": (
+                risk.entry_mode() == "EXIT_ONLY" and risk._is_halted and
+                risk._halt_reason.startswith("Emergency stop") and not positions and
+                not risk.store.unresolved_orders() and account_available and self.bot._last_reconciliation_ok
+            ),
             "testnet_smoke_attempted": risk.store.read_state("testnet_smoke_trade") is not None,
             "prices": prices,
             "market_summary": market_summary,
@@ -358,8 +363,15 @@ class WebDashboard:
         request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
         if not origin or not hmac.compare_digest(origin, request_origin):
             return web.json_response({"error": "Same-origin request required."}, status=403)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
         loop = asyncio.get_event_loop()
-        success, message = await loop.run_in_executor(None, self.bot.resume_entries)
+        manual_review_confirmed = isinstance(payload, dict) and payload.get("manual_review_confirmed") is True
+        success, message = await loop.run_in_executor(
+            None, self.bot.resume_entries, manual_review_confirmed
+        )
         return web.json_response({
             "success": success,
             "entry_mode": self.bot.risk_manager.entry_mode(),
