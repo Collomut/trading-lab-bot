@@ -20,47 +20,96 @@ class AccountAccessError(RuntimeError):
     """Safe, actionable account-access failure without echoing credentials."""
 
 
+def extract_ccxt_response_metadata(exchange_obj, exc: Exception | None = None) -> tuple[dict | str | None, int | None]:
+    """Safely extract response body and numeric HTTP status code from a CCXT exchange object and exception."""
+    body = None
+    http_status = None
+
+    if exchange_obj is not None:
+        # Prefer parsed JSON dict if available, otherwise raw HTTP body.
+        # Check snake_case (CCXT Python standard) and camelCase as fallback.
+        body = (
+            getattr(exchange_obj, "last_json_response", None)
+            or getattr(exchange_obj, "lastJsonResponse", None)
+            or getattr(exchange_obj, "last_http_response", None)
+            or getattr(exchange_obj, "lastHttpResponse", None)
+        )
+        raw_status = getattr(exchange_obj, "last_http_status", None)
+        if isinstance(raw_status, int):
+            http_status = raw_status
+
+    if http_status is None and exc is not None:
+        status_match = re.search(r'\b(400|401|403|404|418|429|500|502|503|504)\b', str(exc))
+        if status_match:
+            try:
+                http_status = int(status_match.group(1))
+            except ValueError:
+                pass
+
+    return body, http_status
+
+
 def account_access_message(exc: Exception, response_body=None, http_status=None) -> str:
-    # Binance/CCXT errors can keep the useful code in the exchange's last response
-    # even when the exception string omits it. Read only code/message for diagnosis;
-    # never log or return the raw body, URL, headers, or request signature.
-    error_text = str(exc).lower()
+    """Safe, actionable account-access failure diagnosis without echoing credentials.
+
+    Surfaces only allowlisted Binance error codes, HTTP status, and sanitized
+    guidance. Never reflects raw URLs, request signatures, headers, or full bodies.
+    """
+    error_text = str(exc).lower() if exc else ""
+    response_data = {}
     if isinstance(response_body, dict):
         response_data = response_body
-    else:
-        response_text = response_body if isinstance(response_body, str) else ""
+    elif isinstance(response_body, str) and response_body.strip():
         try:
-            response_data = json.loads(response_text) if response_text else {}
+            parsed = json.loads(response_body)
+            if isinstance(parsed, dict):
+                response_data = parsed
         except (TypeError, ValueError):
-            response_data = {}
+            pass
+
     response_code = response_data.get("code") if isinstance(response_data, dict) else None
     match = re.search(r'"?code"?\s*[:=]\s*(-?\d+)', error_text, re.IGNORECASE)
     code = str(response_code) if isinstance(response_code, (int, str)) else (match.group(1) if match else "")
-    response_message = response_data.get("msg", "") if isinstance(response_data, dict) else ""
-    if isinstance(response_message, str):
-        error_text = f"{error_text} {response_message.lower()}"
-    if code == "-2015" or "invalid api-key, ip, or permissions" in error_text:
+    response_message = str(response_data.get("msg", "")).lower() if isinstance(response_data, dict) else ""
+    combined_text = f"{error_text} {response_message}".strip()
+
+    valid_http_status = http_status if isinstance(http_status, int) else None
+    if valid_http_status is None and exc:
+        status_match = re.search(r'\b(400|401|403|404|418|429|500|502|503|504)\b', error_text)
+        if status_match:
+            try:
+                valid_http_status = int(status_match.group(1))
+            except ValueError:
+                pass
+
+    if code == "-2015" or "invalid api-key, ip, or permissions" in combined_text:
         return "Binance rejected the API key, IP, or permissions (-2015). Use an active Spot Testnet key pair and check its IP restrictions and Spot permission."
-    if code == "-2014" or "api-key format invalid" in error_text:
+    if code == "-2014" or "api-key format invalid" in combined_text:
         return "Binance says the API key format is invalid (-2014). Re-enter the complete Spot Testnet API key without spaces."
-    if code == "-1022" or "signature for this request is not valid" in error_text:
+    if code == "-1022" or "signature for this request is not valid" in combined_text:
         return "Binance rejected the request signature (-1022). API_SECRET does not match this API_KEY; re-enter the matching Spot Testnet pair."
-    if code == "-1021" or "timestamp for this request is outside" in error_text or "timestamp for this request was" in error_text:
+    if code == "-1021" or "timestamp for this request is outside" in combined_text or "timestamp for this request was" in combined_text:
         return "Binance rejected the request timestamp (-1021). Check server clock synchronization and retry."
-    if isinstance(exc, ccxt.AuthenticationError):
+    if code == "-1003" or valid_http_status in (418, 429) or isinstance(exc, ccxt.RateLimitExceeded):
+        return "Binance Testnet rate-limited the account request. The bot is waiting and will retry."
+    if code == "-2010" or "account has insufficient balance" in combined_text:
+        return "Binance reported insufficient balance or rejected the trade rules (-2010)."
+
+    if valid_http_status == 403 or isinstance(exc, ccxt.PermissionDenied):
+        status_label = f" (HTTP {valid_http_status})" if valid_http_status else ""
+        return f"Binance denied account access{status_label}. Check the Testnet key permissions, WAF rules, and any IP restrictions."
+    if valid_http_status == 401 or isinstance(exc, ccxt.AuthenticationError):
+        status_label = f" (HTTP {valid_http_status})" if valid_http_status else ""
         return (
-            "Binance rejected Testnet authentication. Check that API_KEY and API_SECRET are the matching pair "
+            f"Binance rejected Testnet authentication{status_label}. Check that API_KEY and API_SECRET are the matching pair "
             "created for Spot Testnet, are active, and have Spot trading permission. Do not use Demo or live keys."
         )
-    if isinstance(exc, ccxt.PermissionDenied):
-        return "Binance denied account access. Check the Testnet key permissions and any IP restrictions."
-    if isinstance(exc, ccxt.RateLimitExceeded):
-        return "Binance Testnet rate-limited the account request. The bot is waiting and will retry."
     if isinstance(exc, ccxt.NetworkError):
         return "Binance Testnet could not be reached. Check service networking and retry after it recovers."
+
     suffix = f" (Binance error {code})" if code else ""
-    if not code and isinstance(http_status, int):
-        suffix = f" (HTTP {http_status})"
+    if not code and isinstance(valid_http_status, int):
+        suffix = f" (HTTP {valid_http_status})"
     return (
         f"Binance Testnet rejected the authenticated account request{suffix}. In Railway, verify that API_KEY and "
         "API_SECRET are the matching, active Spot Testnet pair, with Spot permission and any required IP access. "
@@ -232,6 +281,9 @@ class ExchangeConnector:
             "apiKey": api_key,
             "secret": api_secret,
             "enableRateLimit": True,
+            "enableLastJsonResponse": True,
+            "enableLastHttpResponse": True,
+            "enableLastResponseHeaders": True,
             "options": {
                 "defaultType": "spot",
                 "adjustForTimeDifference": True,
@@ -241,6 +293,9 @@ class ExchangeConnector:
                 },
             },
         })
+        exchange.enableLastJsonResponse = True
+        exchange.enableLastHttpResponse = True
+        exchange.enableLastResponseHeaders = True
         exchange.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
         if "fetchOpenOrders" not in exchange.options:
             exchange.options["fetchOpenOrders"] = {}
@@ -285,10 +340,8 @@ class ExchangeConnector:
                     }
             return holdings
         except ccxt.BaseError as e:
-            safe_message = account_access_message(
-                e, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
-                getattr(self.exchange, "status", None),
-            )
+            body, status_code = extract_ccxt_response_metadata(self.exchange, e)
+            safe_message = account_access_message(e, body, status_code)
             cfg = getattr(self, "config", None)
             if (cfg and getattr(cfg, "paper_trading", False) and
                     getattr(cfg, "fallback_to_simulation", True) and
@@ -316,10 +369,8 @@ class ExchangeConnector:
                     raise
             return balance, orders
         except ccxt.BaseError as exc:
-            safe_message = account_access_message(
-                exc, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
-                getattr(self.exchange, "status", None),
-            )
+            body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+            safe_message = account_access_message(exc, body, status_code)
             cfg = getattr(self, "config", None)
             if (cfg and getattr(cfg, "paper_trading", False) and
                     getattr(cfg, "fallback_to_simulation", True) and
@@ -338,10 +389,8 @@ class ExchangeConnector:
         try:
             return self.exchange.fetch_balance()
         except ccxt.BaseError as exc:
-            safe_message = account_access_message(
-                exc, getattr(self.exchange, "lastJsonResponse", None) or getattr(self.exchange, "lastHttpResponse", None),
-                getattr(self.exchange, "status", None),
-            )
+            body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+            safe_message = account_access_message(exc, body, status_code)
             cfg = getattr(self, "config", None)
             if (cfg and getattr(cfg, "paper_trading", False) and
                     getattr(cfg, "fallback_to_simulation", True) and
@@ -352,6 +401,59 @@ class ExchangeConnector:
                 return self._get_simulated_balance_dict()
             logger.error("Private balance request failed (%s): %s", type(exc).__name__, safe_message)
             raise AccountAccessError(safe_message) from exc
+
+    def diagnose_account_access(self) -> dict:
+        """Read-only account diagnostic testing balance and open-order access separately.
+
+        Returns sanitized status, error code, and non-sensitive diagnostic messages.
+        Never submits, cancels, or modifies orders.
+        """
+        result = {
+            "environment": self.config.paper_environment if self.config.paper_trading else "live",
+            "paper_trading": self.config.paper_trading,
+            "balance_ok": False,
+            "balance_error": None,
+            "orders_ok": False,
+            "orders_error": None,
+            "overall_status": "FAILED",
+        }
+        if self._is_simulated():
+            result["balance_ok"] = True
+            result["orders_ok"] = True
+            result["overall_status"] = "SIMULATED_WALLET"
+            return result
+
+        # 1. Test balance access independently
+        try:
+            self.exchange.fetch_balance()
+            result["balance_ok"] = True
+        except ccxt.BaseError as exc:
+            body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+            result["balance_error"] = account_access_message(exc, body, status_code)
+
+        # 2. Test open-order access independently
+        try:
+            self.exchange.fetch_open_orders()
+            result["orders_ok"] = True
+        except ccxt.ExchangeError as ee:
+            err_s = str(ee).lower()
+            if "warnwithoutsymbol" in err_s or "fetchopenorders" in err_s:
+                result["orders_ok"] = True
+            else:
+                body, status_code = extract_ccxt_response_metadata(self.exchange, ee)
+                result["orders_error"] = account_access_message(ee, body, status_code)
+        except ccxt.BaseError as exc:
+            body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
+            result["orders_error"] = account_access_message(exc, body, status_code)
+
+        if result["balance_ok"] and result["orders_ok"]:
+            result["overall_status"] = "AUTHENTICATED_AND_RECONCILED"
+        elif result["balance_ok"]:
+            result["overall_status"] = "BALANCE_ONLY_ORDER_PERMISSION_MISSING"
+        else:
+            result["overall_status"] = "AUTHENTICATION_FAILED"
+
+        return result
 
     def amount_to_precision(self, symbol: str, amount) -> str:
         self.exchange.load_markets()

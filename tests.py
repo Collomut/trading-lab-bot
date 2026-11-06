@@ -273,10 +273,24 @@ class TestTradingBot(unittest.TestCase):
 
     def test_account_authentication_failure_is_actionable_without_echoing_secrets(self):
         import ccxt
-        from exchange import AccountAccessError
+        from exchange import AccountAccessError, account_access_message, extract_ccxt_response_metadata
         from unittest.mock import Mock
+
+        # 1. CCXT response metadata extraction test
+        mock_ex = Mock()
+        mock_ex.last_json_response = {"code": -2014, "msg": "API-key format invalid."}
+        mock_ex.last_http_response = '{"code": -2014, "msg": "API-key format invalid."}'
+        mock_ex.last_http_status = 400
+        body, status = extract_ccxt_response_metadata(mock_ex)
+        self.assertEqual(body, {"code": -2014, "msg": "API-key format invalid."})
+        self.assertEqual(status, 400)
+
+        # 2. Live snapshot test asserting secrets do not leak
         connector = object.__new__(ExchangeConnector)
         connector.exchange = Mock()
+        connector.exchange.last_json_response = None
+        connector.exchange.last_http_response = None
+        connector.exchange.last_http_status = None
         connector.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("private-value-must-not-appear")
 
         with self.assertRaises(AccountAccessError) as raised:
@@ -285,11 +299,110 @@ class TestTradingBot(unittest.TestCase):
         self.assertIn("Spot Testnet", str(raised.exception))
         self.assertNotIn("private-value-must-not-appear", str(raised.exception))
 
-        from exchange import account_access_message
-        self.assertIn("API_SECRET does not match", account_access_message(ccxt.ExchangeError('{"code":-1022,"msg":"signature invalid"}')))
-        self.assertIn("API key, IP, or permissions", account_access_message(ccxt.ExchangeError('{"code":-2015,"msg":"key rejected"}')))
-        self.assertIn("API key, IP, or permissions", account_access_message(ccxt.ExchangeError("Invalid API-key, IP, or permissions for action.")))
-        self.assertIn("API_KEY and API_SECRET", account_access_message(ccxt.ExchangeError("Private account request failed.")))
+        # 3. Binance -2014 (API-key format invalid)
+        msg_2014 = account_access_message(ccxt.ExchangeError('{"code":-2014,"msg":"API-key format invalid."}'))
+        self.assertIn("-2014", msg_2014)
+        self.assertIn("API key format is invalid", msg_2014)
+
+        # 4. Binance -2015 (API key, IP, or permissions)
+        msg_2015_dict = account_access_message(ccxt.ExchangeError("Authentication error"), response_body={"code": -2015, "msg": "key rejected"})
+        self.assertIn("-2015", msg_2015_dict)
+        self.assertIn("API key, IP, or permissions", msg_2015_dict)
+
+        msg_2015_text = account_access_message(ccxt.ExchangeError("Invalid API-key, IP, or permissions for action."))
+        self.assertIn("-2015", msg_2015_text)
+
+        # 5. Binance -1022 (Signature invalid)
+        msg_1022 = account_access_message(ccxt.ExchangeError('{"code":-1022,"msg":"signature for this request is not valid"}'))
+        self.assertIn("-1022", msg_1022)
+        self.assertIn("API_SECRET does not match", msg_1022)
+
+        # 6. Binance -1021 (Timestamp outside window)
+        msg_1021 = account_access_message(ccxt.ExchangeError('{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'))
+        self.assertIn("-1021", msg_1021)
+        self.assertIn("server clock synchronization", msg_1021)
+
+        # 7. HTTP 401 & HTTP 403
+        msg_401 = account_access_message(ccxt.AuthenticationError("HTTP 401 Unauthorized"), http_status=401)
+        self.assertIn("HTTP 401", msg_401)
+        self.assertIn("Spot Testnet", msg_401)
+
+        msg_403 = account_access_message(ccxt.PermissionDenied("HTTP 403 Forbidden"), http_status=403)
+        self.assertIn("HTTP 403", msg_403)
+        self.assertIn("denied account access", msg_403)
+
+        # 8. Malformed / Non-JSON response (e.g. HTML 502 error)
+        msg_html = account_access_message(ccxt.ExchangeError("502 Bad Gateway"), response_body="<html><title>502 Bad Gateway</title></html>", http_status=502)
+        self.assertIn("HTTP 502", msg_html)
+        self.assertNotIn("<html>", msg_html)
+        self.assertNotIn("<title>", msg_html)
+
+        # 9. Unrelated network failure
+        msg_net = account_access_message(ccxt.NetworkError("Failed to connect to host"))
+        self.assertIn("could not be reached", msg_net)
+
+        # 10. Redaction: signed URL, signatures, and query parameters must never leak
+        leak_probe = (
+            "GET https://testnet.binance.vision/api/v3/account?timestamp=1690000000"
+            "&signature=supersecret_sig_1234567890abcdef&apiKey=supersecret_key_9876543210 "
+            'failed with {"code":-2015,"msg":"Invalid API-key"}'
+        )
+        msg_probe = account_access_message(ccxt.ExchangeError(leak_probe))
+        self.assertNotIn("supersecret_sig_1234567890abcdef", msg_probe)
+        self.assertNotIn("supersecret_key_9876543210", msg_probe)
+        self.assertNotIn("https://testnet.binance.vision", msg_probe)
+        self.assertNotIn("1690000000", msg_probe)
+        self.assertIn("-2015", msg_probe)
+
+    def test_diagnose_account_access(self):
+        import ccxt
+        from unittest.mock import Mock
+        from exchange import ExchangeConfig, ExchangeConnector
+
+        # Case 1: Simulated wallet returns SIMULATED_WALLET
+        config_sim = ExchangeConfig(paper_trading=True, paper_environment="simulated")
+        conn_sim = ExchangeConnector(config_sim)
+        diag_sim = conn_sim.diagnose_account_access()
+        self.assertEqual(diag_sim["overall_status"], "SIMULATED_WALLET")
+        self.assertTrue(diag_sim["balance_ok"])
+        self.assertTrue(diag_sim["orders_ok"])
+
+        # Case 2: Balance auth failure
+        conn = object.__new__(ExchangeConnector)
+        conn.config = ExchangeConfig(paper_trading=True, paper_environment="testnet")
+        conn.exchange = Mock()
+        conn.exchange.last_json_response = {"code": -2015, "msg": "Invalid API-key"}
+        conn.exchange.last_http_response = '{"code": -2015, "msg": "Invalid API-key"}'
+        conn.exchange.last_http_status = 401
+        conn.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("auth failed")
+        conn._is_simulated = lambda: False
+
+        diag_auth_fail = conn.diagnose_account_access()
+        self.assertEqual(diag_auth_fail["overall_status"], "AUTHENTICATION_FAILED")
+        self.assertFalse(diag_auth_fail["balance_ok"])
+        self.assertIn("-2015", diag_auth_fail["balance_error"])
+
+        # Case 3: Balance ok, but open-order permission missing
+        conn.exchange.fetch_balance.side_effect = None
+        conn.exchange.fetch_balance.return_value = {"total": {"USDT": 1000.0}}
+        conn.exchange.fetch_open_orders.side_effect = ccxt.PermissionDenied("HTTP 403 Forbidden")
+        conn.exchange.last_json_response = None
+        conn.exchange.last_http_response = None
+        conn.exchange.last_http_status = 403
+
+        diag_perm = conn.diagnose_account_access()
+        self.assertEqual(diag_perm["overall_status"], "BALANCE_ONLY_ORDER_PERMISSION_MISSING")
+        self.assertTrue(diag_perm["balance_ok"])
+        self.assertFalse(diag_perm["orders_ok"])
+        self.assertIn("HTTP 403", diag_perm["orders_error"])
+
+        # Case 4: Both balance and orders succeed
+        conn.exchange.fetch_open_orders.side_effect = None
+        conn.exchange.fetch_open_orders.return_value = []
+        diag_ok = conn.diagnose_account_access()
+        self.assertEqual(diag_ok["overall_status"], "AUTHENTICATED_AND_RECONCILED")
+        self.assertTrue(diag_ok["balance_ok"])
+        self.assertTrue(diag_ok["orders_ok"])
 
     def test_resume_entries_requires_clean_reconciliation(self):
         import threading

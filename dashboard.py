@@ -182,6 +182,7 @@ class WebDashboard:
         self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
         self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
         self.app.router.add_post('/api/test-notification', self.handle_test_notification)
+        self.app.router.add_get('/api/account-diagnostic', self.handle_account_diagnostic)
 
     async def handle_terms(self, request):
         """Serve the terms and glossary page."""
@@ -590,6 +591,11 @@ class WebDashboard:
             })
         except Exception as exc:
             return web.json_response({"success": False, "message": str(exc)}, status=500)
+
+    async def handle_account_diagnostic(self, request):
+        loop = asyncio.get_event_loop()
+        diag = await loop.run_in_executor(None, self.bot.exchange.diagnose_account_access)
+        return web.json_response(diag)
 
     def run(self):
         print(f"\n🚀 Trading Bot Web Dashboard launching on port {self.port}...")
