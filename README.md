@@ -31,13 +31,7 @@ Railway files outside a mounted volume are ephemeral, so open-position and risk 
 
 The existing quick backtest is exploratory only. It uses a short recent sample and does not model exchange fees, slippage, partial fills, latency, or out-of-sample walk-forward validation. Its printed returns and win rates are not evidence of a tradable edge and must not be used to justify live trading.
 
-Previous headline values below are retained only as historical project notes; they are not independently verified or suitable for investment decisions:
-
-| Timeframe | Strategy | Win Rate | Net P&L | Key Observation |
-|---|---|---|---|---|
-| **1h (Recommended)** | Combined + Trend Filter | **66.7%** | **+$46.61 (+0.47%)** | Filtered out noise; locked in gains |
-| **15m** | Combined + Trend Filter | 16.7% | -$193.86 (-1.94%) | Strict 1% risk limit protected 98% of capital |
-
+No historical headline return or win-rate figure in this repository has been independently reproduced. The command prints an exploratory replay only; do not interpret it as evidence of profitability.
 ---
 
 ## 🚀 Quick Start

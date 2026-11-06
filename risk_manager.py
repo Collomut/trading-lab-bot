@@ -11,6 +11,7 @@ Upgraded features:
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -121,8 +122,12 @@ class RiskManager:
             state_date = datetime.fromisoformat(state["date"]).date()
             today = datetime.now(timezone.utc).date()
             if state_date == today:
-                self._daily_loss = float(state.get("daily_loss", 0.0))
-                self._is_halted = bool(state.get("is_halted", False))
+                daily_loss = float(state.get("daily_loss", 0.0))
+                is_halted = state.get("is_halted", False)
+                if not math.isfinite(daily_loss) or not isinstance(is_halted, bool):
+                    raise ValueError("daily risk state contains invalid values")
+                self._daily_loss = daily_loss
+                self._is_halted = is_halted
                 self._halt_reason = str(state.get("halt_reason", ""))
                 self._daily_loss_reset_date = today
         except Exception as exc:
@@ -139,18 +144,42 @@ class RiskManager:
             "halt_reason": self._halt_reason,
         }
         temp = self.daily_state_path.with_suffix(".tmp")
-        temp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        temp.replace(self.daily_state_path)
+        try:
+            temp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            temp.replace(self.daily_state_path)
+        except Exception as exc:
+            self._is_halted = True
+            self._halt_reason = "Daily risk state could not be saved; operator reconciliation required"
+            logger.critical("Failed to persist daily risk state: %s", exc)
+            raise
 
-    def _save_positions(self):
-        """Persist open positions to disk so restarts don't lose them."""
+    def _save_positions(self) -> bool:
+        """Atomically persist positions; state failure halts new trading."""
+        temp_path = self.persistence_path.with_suffix(".tmp")
         try:
             data = {sym: pos.to_dict() for sym, pos in self.open_positions.items()}
-            with open(self.persistence_path, "w") as f:
-                json.dump(data, f, indent=2)
-            logger.debug(f"Saved {len(self.open_positions)} positions to {self.persistence_path}")
-        except Exception as e:
-            logger.error(f"Failed to persist positions: {e}")
+            temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            temp_path.replace(self.persistence_path)
+            logger.debug("Saved %s positions to %s", len(self.open_positions), self.persistence_path)
+            return True
+        except Exception as exc:
+            self._is_halted = True
+            self._halt_reason = "Open-position state could not be saved; operator reconciliation required"
+            logger.error("Failed to persist open positions: %s", exc)
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+
+    def halt(self, reason: str):
+        """Stop all new orders and persist the circuit-breaker state."""
+        self._is_halted = True
+        self._halt_reason = str(reason)[:500]
+        try:
+            self._save_daily_state()
+        except Exception as exc:
+            logger.critical("Could not persist trading halt state: %s", exc)
 
     def _load_positions(self):
         """Load positions from disk upon bot startup."""
@@ -158,8 +187,21 @@ class RiskManager:
             try:
                 with open(self.persistence_path, "r") as f:
                     data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("open-position state must be an object")
                 for sym, pos_data in data.items():
-                    self.open_positions[sym] = Position.from_dict(pos_data)
+                    position = Position.from_dict(pos_data)
+                    numeric_values = (
+                        position.entry_price, position.amount, position.stop_loss_price,
+                        position.take_profit_price, position.highest_price,
+                    )
+                    if (position.symbol != sym or position.side != "long" or
+                            not all(math.isfinite(float(value)) for value in numeric_values) or
+                            position.entry_price <= 0 or position.amount <= 0 or
+                            position.stop_loss_price <= 0 or
+                            position.take_profit_price <= position.entry_price):
+                        raise ValueError(f"invalid persisted position for {sym}")
+                    self.open_positions[sym] = position
                 if self.open_positions:
                     logger.info(f"🔄 Restored {len(self.open_positions)} active position(s) from disk: {list(self.open_positions.keys())}")
             except Exception as e:
@@ -223,7 +265,9 @@ class RiskManager:
         Conservative position sizing:
         Ensures max capital at risk on stop-loss is <= max_risk_per_trade%.
         """
-        if entry_price <= 0 or stop_loss_price <= 0:
+        if not all(math.isfinite(value) for value in (portfolio_value, entry_price, stop_loss_price)):
+            return 0.0
+        if portfolio_value <= 0 or entry_price <= 0 or stop_loss_price <= 0:
             return 0.0
 
         risk_amount = portfolio_value * (self.config.max_risk_per_trade / 100)
@@ -275,7 +319,8 @@ class RiskManager:
             break_even_activated=False,
         )
         self.open_positions[symbol] = position
-        self._save_positions()
+        if not self._save_positions():
+            return position
 
         logger.info(
             f"📊 Opened position: {symbol} | "
@@ -298,7 +343,11 @@ class RiskManager:
             return None
 
         position = self.open_positions.pop(symbol)
-        self._save_positions()
+        if not self._save_positions():
+            # Keep the in-memory view conservative and aligned with the last
+            # durable state, which still contains this potentially open position.
+            self.open_positions[symbol] = position
+            return None
 
         pnl = position.unrealized_pnl(exit_price)
         pnl_pct = position.unrealized_pnl_pct(exit_price)
@@ -317,7 +366,12 @@ class RiskManager:
         )
         self.trade_history.append(record)
         self._daily_loss += pnl
-        self._save_daily_state()
+        try:
+            self._save_daily_state()
+        except Exception:
+            # The exit is already durable, but daily drawdown state is not.
+            # Preserve the completed close and prevent any further entries.
+            return record
 
         emoji = "💰" if pnl >= 0 else "💸"
         logger.info(
@@ -344,7 +398,8 @@ class RiskManager:
 
         for symbol, position in list(self.open_positions.items()):
             current_price = price_getter(symbol)
-            if current_price <= 0:
+            if not isinstance(current_price, (int, float)) or not math.isfinite(current_price) or current_price <= 0:
+                self.halt(f"Unable to obtain a valid market price for open position {symbol}; operator review required")
                 continue
 
             # Update highest price reached

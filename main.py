@@ -138,7 +138,9 @@ def run_backtest(config: BotConfig):
     from risk_manager import RiskManager
     import pandas as pd
 
-    print("📊 Running Backtest Simulation")
+    print("📊 Running Exploratory Historical Replay")
+    print("This replay is not a validated backtest: it omits fees, slippage, latency, partial fills, and realistic multi-symbol portfolio timing.")
+    print("Do not use its returns or win rate to decide whether to trade live.")
     print("=" * 50)
 
     exchange = ExchangeConnector(config.exchange)
@@ -258,11 +260,8 @@ def run_backtest(config: BotConfig):
 ╚══════════════════════════════════════════════════════════╝
 """)
 
-    if total_pnl > 0:
-        print("  ✅ Strategy was PROFITABLE in this period")
-    else:
-        print("  ⚠️  Strategy LOST money in this period")
-    print("  ℹ️  Past performance does NOT guarantee future results!\n")
+    print("  ℹ️  Exploratory replay only; the execution assumptions are inadequate for estimating live performance.")
+    print("  ℹ️  A positive result is not evidence of a profitable strategy.\n")
 
 
 if __name__ == "__main__":

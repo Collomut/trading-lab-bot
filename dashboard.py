@@ -38,10 +38,15 @@ async def dashboard_auth(request, handler):
         user, password = base64.b64decode(value, validate=True).decode("utf-8").split(":", 1)
     except Exception:
         scheme, user, password = "", "", ""
-    if (scheme.lower() != "basic" or user != "operator" or
+    if (scheme.lower() != "basic" or not hmac.compare_digest(user, "operator") or
             not hmac.compare_digest(password, token)):
         raise web.HTTPUnauthorized(headers={"WWW-Authenticate": 'Basic realm="Trading Bot", charset="UTF-8"'})
-    return await handler(request)
+    response = await handler(request)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 class WebDashboard:
@@ -49,7 +54,12 @@ class WebDashboard:
         self.port = port or int(os.getenv("PORT", 5000))
         self.config = BotConfig()
         self.bot = TradingBot(self.config)
-        self.initial_balance = float(os.getenv("INITIAL_BALANCE", "10000.0"))
+        try:
+            self.initial_balance = float(os.getenv("INITIAL_BALANCE", "10000.0"))
+        except ValueError:
+            self.initial_balance = 0.0
+        if not (self.initial_balance > 0 and self.initial_balance < float("inf")):
+            raise ValueError("INITIAL_BALANCE must be a finite positive number")
         self.app = web.Application(middlewares=[dashboard_auth])
         self.app["bot"] = self.bot
         self.app["config"] = self.config
@@ -117,19 +127,23 @@ class WebDashboard:
 
     async def background_trading_loop(self, app):
         """Continuous market monitoring and trade execution loop."""
-        interval = int(os.getenv("INTERVAL_SECONDS", "60"))
-        logger.info(f"Background trading loop active (interval: {interval}s)")
+        try:
+            interval = int(os.getenv("INTERVAL_SECONDS", "60"))
+        except ValueError:
+            interval = 60
+        interval = min(max(interval, 1), 3600)
+        logger.info("Background trading loop active (interval: %ss)", interval)
 
         while True:
             try:
+                config_errors = self.config.validate()
+                if config_errors:
+                    logger.error("Trading cycle skipped because configuration is invalid: %s", "; ".join(config_errors))
+                    await asyncio.sleep(interval)
+                    continue
+
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self.bot.check_stop_loss_take_profit)
-                for symbol in self.config.strategy.trading_pairs:
-                    sym = symbol.strip()
-                    try:
-                        await loop.run_in_executor(None, self.bot.analyze_market, sym)
-                    except Exception as e:
-                        logger.error(f"Error evaluating {sym} in background: {e}")
+                await loop.run_in_executor(None, self.bot.run_cycle)
 
             except asyncio.CancelledError:
                 break
@@ -255,8 +269,9 @@ class WebDashboard:
         try:
             status = await self._get_current_status()
             return web.json_response(status)
-        except Exception as e:
-            return web.json_response({"error": str(e)}, status=500)
+        except Exception:
+            logger.exception("Dashboard status request failed")
+            return web.json_response({"error": "Status is temporarily unavailable."}, status=500)
 
     async def handle_candles(self, request):
         """Return recent OHLCV data for the dashboard chart."""
@@ -285,13 +300,21 @@ class WebDashboard:
         })
 
     async def handle_run_cycle(self, request):
+        # Basic auth alone is vulnerable to browser CSRF. Require a same-origin
+        # browser request before allowing this state-changing control endpoint.
+        origin = request.headers.get("Origin", "")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+        request_origin = f"{forwarded_proto or request.scheme}://{request.host}"
+        if not origin or not hmac.compare_digest(origin, request_origin):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
         loop = asyncio.get_event_loop()
         try:
             await loop.run_in_executor(None, self.bot.run_once)
             status = await self._get_current_status()
             return web.json_response(status)
-        except Exception as e:
-            return web.json_response({"error": str(e)}, status=500)
+        except Exception:
+            logger.exception("Manual dashboard cycle failed")
+            return web.json_response({"error": "Cycle failed; inspect service logs."}, status=500)
 
     def run(self):
         print(f"\n🚀 Trading Bot Web Dashboard launching on port {self.port}...")

@@ -67,6 +67,18 @@ class BotConfig:
         """Validate configuration values."""
         errors = []
 
+        for label, value in (
+            ("MAX_RISK_PER_TRADE", self.risk.max_risk_per_trade),
+            ("STOP_LOSS_PCT", self.risk.stop_loss_pct),
+            ("TAKE_PROFIT_PCT", self.risk.take_profit_pct),
+            ("MAX_DAILY_LOSS_PCT", self.risk.max_daily_loss_pct),
+            ("POSITION_SIZE_PCT", self.risk.position_size_pct),
+        ):
+            if not math.isfinite(value):
+                errors.append(f"{label} must be finite")
+        if not isinstance(self.risk.max_open_positions, int) or isinstance(self.risk.max_open_positions, bool):
+            errors.append("MAX_OPEN_POSITIONS must be an integer")
+
         if self.exchange.paper_trading:
             if self.exchange.paper_environment not in {"testnet", "demo"}:
                 errors.append("PAPER_ENVIRONMENT must be either 'testnet' or 'demo'")
@@ -95,8 +107,23 @@ class BotConfig:
             errors.append("STOP_LOSS_PCT > 10% defeats the purpose of a stop-loss")
         if self.risk.position_size_pct > 50.0:
             errors.append("POSITION_SIZE_PCT > 50% is dangerously high")
-        if not self.strategy.trading_pairs:
-            errors.append("No TRADING_PAIRS configured")
+        strategy_names = {"combined", "ema_crossover", "rsi_mean_reversion", "macd"}
+        if self.strategy.name not in strategy_names:
+            errors.append(f"STRATEGY must be one of: {', '.join(sorted(strategy_names))}")
+        supported_timeframes = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}
+        if self.strategy.timeframe not in supported_timeframes:
+            errors.append("TIMEFRAME is unsupported")
+        if not isinstance(self.strategy.lookback_candles, int) or not 50 <= self.strategy.lookback_candles <= 1000:
+            errors.append("LOOKBACK_CANDLES must be an integer between 50 and 1000")
+        normalized_pairs = [pair.strip() for pair in self.strategy.trading_pairs]
+        if not normalized_pairs or any(not pair for pair in normalized_pairs):
+            errors.append("TRADING_PAIRS must contain at least one non-empty pair")
+        if len({pair.upper() for pair in normalized_pairs}) != len(normalized_pairs):
+            errors.append("TRADING_PAIRS must not contain duplicates")
+        if any("/" not in pair or len(pair.split("/")) != 2 for pair in normalized_pairs):
+            errors.append("Each TRADING_PAIRS item must use BASE/QUOTE format")
+        if not math.isfinite(self.risk.take_profit_pct) or self.risk.take_profit_pct <= 0:
+            errors.append("TAKE_PROFIT_PCT must be a finite value greater than 0")
 
         if self.risk.max_risk_per_trade <= 0 or self.risk.max_risk_per_trade > 2:
             errors.append("MAX_RISK_PER_TRADE must be greater than 0 and no more than 2%")
@@ -119,7 +146,7 @@ class BotConfig:
 
     def display(self):
         """Print current configuration (hiding secrets)."""
-        masked_key = self.exchange.api_key[:6] + "..." if len(self.exchange.api_key) > 6 else "NOT SET"
+        masked_key = "SET" if self.exchange.api_key else "NOT SET"
         mode = "🧪 PAPER TRADING (Testnet)" if self.exchange.paper_trading else "💰 LIVE TRADING (Real Money!)"
 
         print(f"""

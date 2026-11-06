@@ -5,10 +5,44 @@ Supports both paper trading (testnet) and live trading.
 
 import ccxt
 import logging
+import math
+import time
 from datetime import datetime, timezone
 from config import ExchangeConfig
 
 logger = logging.getLogger("bot.exchange")
+
+
+def filter_closed_ohlcv(candles: list, timeframe_seconds: float, now_ms: int | None = None) -> list:
+    """Keep only complete, structurally valid OHLCV candles."""
+    if not isinstance(candles, list) or not math.isfinite(timeframe_seconds) or timeframe_seconds <= 0:
+        return []
+    cutoff_ms = (int(time.time() * 1000) if now_ms is None else int(now_ms)) - 2000
+    duration_ms = timeframe_seconds * 1000
+    result = []
+    for candle in candles:
+        if not isinstance(candle, (list, tuple)) or len(candle) < 6:
+            continue
+        try:
+            timestamp = int(candle[0])
+            open_price, high, low, close, volume = (float(value) for value in candle[1:6])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        values = (open_price, high, low, close, volume)
+        if not all(math.isfinite(value) for value in values):
+            continue
+        if timestamp <= 0 or min(open_price, high, low, close) <= 0 or volume < 0:
+            continue
+        if high < max(open_price, close, low) or low > min(open_price, close):
+            continue
+        if timestamp + duration_ms > cutoff_ms:
+            continue
+        result.append([timestamp, open_price, high, low, close, volume])
+    result.sort(key=lambda row: row[0])
+    deduplicated = {}
+    for candle in result:
+        deduplicated[candle[0]] = candle
+    return list(deduplicated.values())
 
 
 class ExchangeConnector:
@@ -21,7 +55,11 @@ class ExchangeConnector:
         self._trades_today = 0
 
     def _create_exchange(self):
-        """Create and configure the ccxt exchange instance."""
+        """Create a paper/demo exchange connection; live connections are disabled."""
+        if not self.config.paper_trading:
+            raise RuntimeError(
+                "Live trading is disabled in this build; refusing to initialize a live exchange connection"
+            )
         exchange_class = getattr(ccxt, self.config.name)
         api_key = self.config.api_key
         api_secret = self.config.api_secret
@@ -75,7 +113,7 @@ class ExchangeConnector:
                     }
             return holdings
         except ccxt.BaseError as e:
-            logger.error(f"Failed to fetch balance: {e}")
+            logger.error("Failed to fetch balance (%s)", type(e).__name__)
             return {}
 
     def get_usdt_balance(self) -> float:
@@ -94,15 +132,27 @@ class ExchangeConnector:
             logger.debug(f"Fetched {len(ohlcv)} candles for {symbol} ({timeframe})")
             return ohlcv
         except ccxt.BaseError as e:
-            logger.error(f"Failed to fetch OHLCV for {symbol}: {e}")
+            logger.error("Failed to fetch OHLCV for %s (%s)", symbol, type(e).__name__)
             return []
+
+    def fetch_closed_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
+        """Fetch and filter candles so strategy signals use closed bars only."""
+        candles = self.fetch_ohlcv(symbol, timeframe, limit)
+        if not candles:
+            return []
+        try:
+            seconds = float(self.exchange.parse_timeframe(timeframe))
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.error("Cannot determine candle duration for %s: %s", timeframe, exc)
+            return []
+        return filter_closed_ohlcv(candles, seconds)
 
     def get_ticker(self, symbol: str) -> dict:
         """Get current ticker data (price, volume, etc.)."""
         try:
             return self.exchange.fetch_ticker(symbol)
         except ccxt.BaseError as e:
-            logger.error(f"Failed to fetch ticker for {symbol}: {e}")
+            logger.error("Failed to fetch ticker for %s (%s)", symbol, type(e).__name__)
             return {}
 
     def get_current_price(self, symbol: str) -> float:
@@ -132,11 +182,13 @@ class ExchangeConnector:
             self._trades_today += 1
             return order
         except ccxt.InsufficientFunds as e:
-            logger.error(f"Insufficient funds to buy {amount} {symbol}: {e}")
+            logger.error("Insufficient funds for buy order on %s (%s)", symbol, type(e).__name__)
             return None
         except ccxt.BaseError as e:
-            logger.error(f"Failed to place buy order for {symbol}: {e}")
-            return None
+            # A timeout or exchange error can occur after acceptance. Treat order
+            # outcome as unknown; callers must halt and reconcile before retrying.
+            logger.error("Buy order outcome is unknown for %s; manual reconciliation required", symbol)
+            raise RuntimeError("Exchange did not confirm buy order outcome") from e
 
     def place_market_sell(self, symbol: str, amount: float) -> dict | None:
         """
@@ -160,15 +212,15 @@ class ExchangeConnector:
             self._trades_today += 1
             return order
         except ccxt.BaseError as e:
-            logger.error(f"Failed to place sell order for {symbol}: {e}")
-            return None
+            logger.error("Sell order outcome is unknown for %s; manual reconciliation required", symbol)
+            raise RuntimeError("Exchange did not confirm sell order outcome") from e
 
     def get_open_orders(self, symbol: str = None) -> list:
         """Get all open orders, optionally filtered by symbol."""
         try:
             return self.exchange.fetch_open_orders(symbol)
         except ccxt.BaseError as e:
-            logger.error(f"Failed to fetch open orders: {e}")
+            logger.error("Failed to fetch open orders (%s)", type(e).__name__)
             return []
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
@@ -178,7 +230,7 @@ class ExchangeConnector:
             logger.info(f"Cancelled order {order_id} for {symbol}")
             return True
         except ccxt.BaseError as e:
-            logger.error(f"Failed to cancel order {order_id}: {e}")
+            logger.error("Failed to cancel order %s (%s)", order_id, type(e).__name__)
             return False
 
     def get_min_order_amount(self, symbol: str) -> float:
@@ -188,7 +240,7 @@ class ExchangeConnector:
             market = self.exchange.market(symbol)
             return market.get("limits", {}).get("amount", {}).get("min", 0.0)
         except ccxt.BaseError as e:
-            logger.error(f"Failed to get min order amount for {symbol}: {e}")
+            logger.error("Failed to get minimum amount for %s (%s)", symbol, type(e).__name__)
             return 0.0
 
     def get_server_time(self) -> datetime:

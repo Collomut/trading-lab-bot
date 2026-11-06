@@ -14,6 +14,7 @@ import logging
 import time
 import json
 import os
+import threading
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
@@ -38,11 +39,18 @@ class TradingBot:
     def __init__(self, config: BotConfig):
         self.config = config
         self.exchange = ExchangeConnector(config.exchange)
-        self.strategy = get_strategy(config.strategy.name)
+        self.strategy = get_strategy(
+            config.strategy.name,
+            regime_filter_enabled=config.strategy.regime_filter_enabled,
+            min_trend_adx=config.strategy.min_trend_adx,
+            max_atr_pct=config.strategy.max_atr_pct,
+        )
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
         self.is_running = False
         self._cycle_count = 0
+        self._cycle_lock = threading.Lock()
         self.last_signals = {}
+        self._last_analyzed_candle = {}
         self._setup_logging()
         self._setup_trade_log()
 
@@ -104,14 +112,14 @@ class TradingBot:
                 req = urllib.request.Request(url, data=data)
                 urllib.request.urlopen(req, timeout=5)
             except Exception as e:
-                logger.debug(f"Telegram notification delivery note: {e}")
+                logger.debug("Telegram notification delivery failed (details suppressed)")
 
     def analyze_market(self, symbol: str):
         """
         Analyze a single trading pair and potentially execute a trade.
         """
         # Fetch market data
-        ohlcv = self.exchange.fetch_ohlcv(
+        ohlcv = self.exchange.fetch_closed_ohlcv(
             symbol,
             self.config.strategy.timeframe,
             self.config.strategy.lookback_candles
@@ -121,9 +129,15 @@ class TradingBot:
             logger.warning(f"Insufficient data for {symbol} ({len(ohlcv)} candles)")
             return
 
-        # Convert to DataFrame and run strategy
+        candle_timestamp = int(ohlcv[-1][0])
+        if self._last_analyzed_candle.get(symbol) == candle_timestamp:
+            logger.debug("Skipping duplicate closed candle for %s at %s", symbol, candle_timestamp)
+            return
+
+        # Convert to DataFrame and run strategy once per completed candle.
         df = ohlcv_to_dataframe(ohlcv)
         signal = self.strategy.analyze(df, symbol)
+        self._last_analyzed_candle[symbol] = candle_timestamp
         self.last_signals[symbol] = {
             "signal": signal.signal.value,
             "reason": signal.reason,
@@ -140,6 +154,18 @@ class TradingBot:
             self._handle_buy_signal(signal)
         elif signal.signal == Signal.SELL:
             self._handle_sell_signal(signal)
+
+    @staticmethod
+    def _confirmed_full_fill(order: dict, requested_amount: float) -> bool:
+        """Accept only an explicit, complete market-order fill."""
+        if not isinstance(order, dict) or order.get("status") != "closed":
+            return False
+        try:
+            filled = float(order.get("filled"))
+            requested = float(requested_amount)
+            return filled > 0 and requested > 0 and filled >= requested * (1 - 1e-8)
+        except (TypeError, ValueError, OverflowError):
+            return False
 
     def _handle_buy_signal(self, signal):
         """Process a BUY signal through risk checks and potentially buy."""
@@ -195,10 +221,22 @@ class TradingBot:
             f"(${cost:,.2f}) | Confidence: {signal.confidence:.0%}"
         )
 
-        order = self.exchange.place_market_buy(symbol, amount)
+        try:
+            order = self.exchange.place_market_buy(symbol, amount)
+        except Exception as exc:
+            self.risk_manager.halt(f"Buy order state requires reconciliation for {symbol}")
+            logger.error("Buy order state requires reconciliation for %s: %s", symbol, exc)
+            return
         if order:
-            fill_price = order.get("average", order.get("price", current_price))
-            fill_amount = order.get("filled", amount)
+            if not self._confirmed_full_fill(order, amount):
+                self.risk_manager.halt(f"Unconfirmed or partial buy fill for {symbol}; reconcile exchange orders and balances")
+                logger.error("Buy order for %s was not confirmed fully filled; new orders halted", symbol)
+                return
+            fill_price = float(order.get("average") or order.get("price") or 0)
+            fill_amount = float(order.get("filled") or 0)
+            if fill_price <= 0 or fill_amount <= 0:
+                self.risk_manager.halt(f"Invalid buy fill details for {symbol}; reconcile exchange orders and balances")
+                return
 
             self.risk_manager.open_position(
                 symbol=symbol,
@@ -207,6 +245,9 @@ class TradingBot:
                 order_id=order.get("id", ""),
                 atr=atr
             )
+            if self.risk_manager._is_halted:
+                logger.error("Position persistence failed after buy for %s; trading halted", symbol)
+                return
 
             msg = (
                 f"🟢 *BOT BUY EXECUTED*\n"
@@ -247,9 +288,21 @@ class TradingBot:
             f"| Confidence: {signal.confidence:.0%}"
         )
 
-        order = self.exchange.place_market_sell(symbol, position.amount)
+        try:
+            order = self.exchange.place_market_sell(symbol, position.amount)
+        except Exception as exc:
+            self.risk_manager.halt(f"Sell order state requires reconciliation for {symbol}")
+            logger.error("Sell order state requires reconciliation for %s: %s", symbol, exc)
+            return
         if order:
-            fill_price = order.get("average", order.get("price", current_price))
+            if not self._confirmed_full_fill(order, position.amount):
+                self.risk_manager.halt(f"Unconfirmed or partial sell fill for {symbol}; reconcile exchange orders and balances")
+                logger.error("Sell order for %s was not confirmed fully filled; position remains tracked", symbol)
+                return
+            fill_price = float(order.get("average") or order.get("price") or 0)
+            if fill_price <= 0:
+                self.risk_manager.halt(f"Invalid sell fill details for {symbol}; reconcile exchange orders and balances")
+                return
 
             record = self.risk_manager.close_position(
                 symbol=symbol,
@@ -291,9 +344,21 @@ class TradingBot:
 
             logger.info(f"🔻 Auto-closing {symbol}: {reason}")
 
-            order = self.exchange.place_market_sell(symbol, position.amount)
+            try:
+                order = self.exchange.place_market_sell(symbol, position.amount)
+            except Exception as exc:
+                self.risk_manager.halt(f"Stop-exit order state requires reconciliation for {symbol}")
+                logger.error("Stop-exit order state requires reconciliation for %s: %s", symbol, exc)
+                return
             if order:
-                fill_price = order.get("average", order.get("price", current_price))
+                if not self._confirmed_full_fill(order, position.amount):
+                    self.risk_manager.halt(f"Unconfirmed or partial stop-exit for {symbol}; reconcile exchange orders and balances")
+                    logger.error("Stop-exit for %s was not confirmed fully filled", symbol)
+                    return
+                fill_price = float(order.get("average") or order.get("price") or 0)
+                if fill_price <= 0:
+                    self.risk_manager.halt(f"Invalid stop-exit fill details for {symbol}; reconcile exchange orders and balances")
+                    return
                 record = self.risk_manager.close_position(symbol, fill_price, reason)
 
                 if record:
@@ -340,63 +405,84 @@ class TradingBot:
 
         print(f"{'─' * 60}")
 
-    def run(self, interval_seconds: int = 60):
-        """
-        Main continuous bot loop.
-        """
-        self.is_running = True
-        self.config.display()
+    def run_cycle(self) -> bool:
+        """Run one serialized, validated risk-monitoring and strategy cycle."""
+        if not self._cycle_lock.acquire(blocking=False):
+            logger.warning("Trading cycle skipped because another cycle is still running")
+            return False
+        try:
+            errors = self.config.validate()
+            if errors:
+                logger.error("Trading cycle blocked by configuration errors: %s", "; ".join(errors))
+                return False
 
+            self._cycle_count += 1
+            try:
+                self.check_stop_loss_take_profit()
+            except Exception:
+                self.risk_manager.halt("Position monitoring failed; operator reconciliation required")
+                logger.exception("Position monitoring failed; skipping new entries this cycle")
+                return False
+            if self.risk_manager._is_halted:
+                logger.error("Trading halted during position monitoring: %s", self.risk_manager._halt_reason)
+                return False
+
+            for configured_symbol in self.config.strategy.trading_pairs:
+                if self.risk_manager._is_halted:
+                    logger.error("Remaining symbols skipped because trading is halted: %s", self.risk_manager._halt_reason)
+                    break
+                symbol = configured_symbol.strip()
+                if not symbol:
+                    continue
+                try:
+                    self.analyze_market(symbol)
+                except Exception:
+                    logger.exception("Error analyzing %s", symbol)
+
+            if self.risk_manager.open_positions or self._cycle_count % 5 == 0:
+                self.print_status()
+            return True
+        finally:
+            self._cycle_lock.release()
+
+    def run(self, interval_seconds: int = 60):
+        """Main continuous bot loop."""
+        if interval_seconds < 1:
+            raise ValueError("interval_seconds must be a positive integer")
+        self.config.display()
         errors = self.config.validate()
         if errors:
             logger.error("Configuration errors:")
             for err in errors:
-                logger.error(f"  ❌ {err}")
+                logger.error("  ❌ %s", err)
             return
 
+        self.is_running = True
         logger.info("🤖 Bot running...")
-        logger.info(f"Strategy: {self.config.strategy.name}")
-        logger.info(f"Pairs: {', '.join(self.config.strategy.trading_pairs)}")
-        logger.info(f"Timeframe: {self.config.strategy.timeframe}")
-        logger.info(f"Loop interval: {interval_seconds}s")
-        if self.risk_manager.open_positions:
-            logger.info(f"Active positions tracked: {list(self.risk_manager.open_positions.keys())}")
-        logger.info("")
+        logger.info("Strategy: %s", self.config.strategy.name)
+        logger.info("Pairs: %s", ", ".join(self.config.strategy.trading_pairs))
+        logger.info("Timeframe: %s", self.config.strategy.timeframe)
+        logger.info("Loop interval: %ss", interval_seconds)
 
         try:
             while self.is_running:
-                self._cycle_count += 1
                 cycle_start = time.time()
-
-                try:
-                    # 1. Check stop-loss, take-profit & trailing stop
-                    self.check_stop_loss_take_profit()
-
-                    # 2. Analyze each pair
-                    for symbol in self.config.strategy.trading_pairs:
-                        symbol = symbol.strip()
-                        try:
-                            self.analyze_market(symbol)
-                        except Exception as e:
-                            logger.error(f"Error analyzing {symbol}: {e}")
-
-                    # 3. Print status every cycle if position exists, or every 5 cycles
-                    if self.risk_manager.open_positions or self._cycle_count % 5 == 0:
-                        self.print_status()
-
-                except Exception as e:
-                    logger.error(f"Error in trading cycle: {e}")
-
-                elapsed = time.time() - cycle_start
-                sleep_time = max(0, interval_seconds - elapsed)
-                if sleep_time > 0:
+                self.run_cycle()
+                sleep_time = max(0, interval_seconds - (time.time() - cycle_start))
+                if sleep_time:
                     time.sleep(sleep_time)
-
         except KeyboardInterrupt:
             logger.info("\n🛑 Bot stopped by user (Ctrl+C)")
         finally:
             self.is_running = False
             self._shutdown()
+
+    def run_once(self):
+        """Run a single serialized analysis cycle."""
+        self.config.display()
+        if self.run_cycle():
+            self.print_status()
+            self.risk_manager.display_performance()
 
     def _shutdown(self):
         """Clean shutdown — display final stats."""
@@ -412,24 +498,3 @@ class TradingBot:
                 logger.warning(
                     f"    {symbol}: {pos.amount:.6f} entered at ${pos.entry_price:,.2f}"
                 )
-
-    def run_once(self):
-        """Run a single analysis cycle."""
-        self.config.display()
-        errors = self.config.validate()
-        if errors:
-            for err in errors:
-                logger.error(f"  ❌ {err}")
-            return
-
-        self._cycle_count += 1
-        logger.info(f"🔍 Running single analysis cycle...")
-
-        self.check_stop_loss_take_profit()
-
-        for symbol in self.config.strategy.trading_pairs:
-            symbol = symbol.strip()
-            self.analyze_market(symbol)
-
-        self.print_status()
-        self.risk_manager.display_performance()

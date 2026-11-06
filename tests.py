@@ -21,7 +21,8 @@ from strategies import (
 )
 from risk_manager import RiskManager, Position
 from config import ExchangeConfig, RiskConfig
-from exchange import ExchangeConnector
+from exchange import ExchangeConnector, filter_closed_ohlcv
+from bot_engine import TradingBot
 
 
 class TestTradingBot(unittest.TestCase):
@@ -29,9 +30,10 @@ class TestTradingBot(unittest.TestCase):
     def setUp(self):
         # Generate 150 synthetic candles
         dates = pd.date_range("2026-01-01", periods=150, freq="15min")
+        rng = np.random.default_rng(42)
         prices = [100.0]
         for _ in range(149):
-            change = np.random.normal(0, 0.5)
+            change = rng.normal(0, 0.5)
             prices.append(max(10.0, prices[-1] + change))
 
         data = {
@@ -85,6 +87,21 @@ class TestTradingBot(unittest.TestCase):
         self.assertAlmostEqual(size, 10.0)
 
     @patch("exchange.ccxt.binance")
+    def test_live_exchange_initialization_is_refused(self, binance_factory):
+        config = ExchangeConfig(
+            name="binance",
+            api_key="live-key",
+            api_secret="live-secret",
+            paper_trading=False,
+            allow_live_trading=True,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Live trading is disabled"):
+            ExchangeConnector(config)
+
+        binance_factory.assert_not_called()
+
+    @patch("exchange.ccxt.binance")
     def test_binance_demo_mode_uses_demo_endpoints_not_testnet(self, binance_factory):
         config = ExchangeConfig(
             name="binance",
@@ -115,6 +132,72 @@ class TestTradingBot(unittest.TestCase):
             self.assertFalse(can_open)
             self.assertTrue(rm._is_halted)
             self.assertIn("unreadable", reason.lower())
+
+
+    def test_closed_candle_filter_drops_incomplete_and_malformed_rows(self):
+        now = 1_800_000_000_000
+        candles = [
+            [now - 60_000, 100, 102, 99, 101, 10],  # completed 1m candle
+            [now, 101, 103, 100, 102, 11],          # current, incomplete candle
+            [now - 120_000, 100, 99, 98, 100, 5],   # invalid high/low structure
+            [now - 180_000, 100, float("nan"), 99, 101, 4],
+        ]
+        filtered = filter_closed_ohlcv(candles, 60, now_ms=now + 3000)
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0][0], now - 60_000)
+
+    def test_only_confirmed_complete_fills_are_accepted(self):
+        self.assertTrue(TradingBot._confirmed_full_fill(
+            {"status": "closed", "filled": 1.0}, 1.0
+        ))
+        self.assertFalse(TradingBot._confirmed_full_fill(
+            {"status": "open", "filled": 1.0}, 1.0
+        ))
+        self.assertFalse(TradingBot._confirmed_full_fill(
+            {"status": "closed", "filled": 0.5}, 1.0
+        ))
+        self.assertFalse(TradingBot._confirmed_full_fill(
+            {"status": "closed", "filled": None}, 1.0
+        ))
+
+    def test_non_finite_risk_configuration_is_rejected(self):
+        from config import BotConfig, StrategyConfig
+        config = BotConfig(
+            exchange=ExchangeConfig(api_key="key", api_secret="secret"),
+            risk=RiskConfig(max_risk_per_trade=float("nan")),
+            strategy=StrategyConfig(),
+            dashboard_token="test-token",
+        )
+        self.assertTrue(any("MAX_RISK_PER_TRADE must be finite" in e for e in config.validate()))
+
+    def test_position_persistence_failure_halts_new_entries(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            with patch.object(Path, "replace", side_effect=OSError("disk unavailable")):
+                rm.open_position("BTC/USDT", 100.0, 0.1)
+            self.assertTrue(rm._is_halted)
+            self.assertIn("could not be saved", rm._halt_reason)
+
+
+    def test_missing_open_position_price_halts_new_trading(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.open_position("BTC/USDT", 100.0, 0.1)
+            rm.check_positions(lambda symbol: 0.0)
+            can_open, reason = rm.can_open_position("ETH/USDT", 10_000.0)
+            self.assertFalse(can_open)
+            self.assertTrue(rm._is_halted)
+            self.assertIn("market price", reason.lower())
+
+    def test_invalid_persisted_daily_loss_halts_startup(self):
+        with TemporaryDirectory() as persistence_dir:
+            today = datetime.now(timezone.utc).date().isoformat()
+            Path(persistence_dir, "daily_risk_state.json").write_text(
+                '{"date": "' + today + '", "daily_loss": NaN, "is_halted": false}',
+                encoding="utf-8",
+            )
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertTrue(rm._is_halted)
 
     def test_risk_manager_break_even_and_trailing_stop(self):
         config = RiskConfig(stop_loss_pct=2.0, take_profit_pct=3.0)
