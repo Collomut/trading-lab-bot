@@ -53,6 +53,41 @@ class TestTradingBot(unittest.TestCase):
         sig = strat.analyze(self.df.copy(), "BTC/USDT")
         self.assertIn(sig.signal, [Signal.BUY, Signal.SELL, Signal.HOLD])
 
+    def test_ema_accepts_recent_confirmed_cross_but_not_stale_cross(self):
+        df = self.df.iloc[:30].copy()
+        short = pd.Series([9.0] * 27 + [9.0, 11.0, 12.0], index=df.index)
+        long = pd.Series([10.0] * len(df), index=df.index)
+        with patch("strategies.EMAIndicator", side_effect=[
+            type("Indicator", (), {"ema_indicator": lambda self: short})(),
+            type("Indicator", (), {"ema_indicator": lambda self: long})(),
+        ]):
+            signal = EMA_Crossover_Strategy(2, 3).analyze(df.copy(), "BTC/USDT")
+        self.assertEqual(signal.signal, Signal.BUY)
+        self.assertIn("candle(s) ago", signal.reason)
+
+        stale_short = pd.Series([9.0] * 27 + [11.0, 12.0, 13.0], index=df.index)
+        with patch("strategies.EMAIndicator", side_effect=[
+            type("Indicator", (), {"ema_indicator": lambda self: stale_short})(),
+            type("Indicator", (), {"ema_indicator": lambda self: long})(),
+        ]):
+            stale = EMA_Crossover_Strategy(2, 3).analyze(df.copy(), "BTC/USDT")
+        self.assertEqual(stale.signal, Signal.HOLD)
+
+    def test_rsi_votes_only_on_recovery_through_pullback_level(self):
+        df = self.df.iloc[:30].copy()
+        rsi_values = pd.Series([50.0] * 28 + [39.0, 41.0], index=df.index)
+        with patch("strategies.RSIIndicator") as indicator:
+            indicator.return_value.rsi.return_value = rsi_values
+            recovered = RSI_Mean_Reversion_Strategy().analyze(df.copy(), "BTC/USDT")
+        self.assertEqual(recovered.signal, Signal.BUY)
+        self.assertIn("recovered above 40", recovered.reason)
+
+        falling_values = pd.Series([50.0] * 28 + [25.0, 20.0], index=df.index)
+        with patch("strategies.RSIIndicator") as indicator:
+            indicator.return_value.rsi.return_value = falling_values
+            falling = RSI_Mean_Reversion_Strategy().analyze(df.copy(), "BTC/USDT")
+        self.assertEqual(falling.signal, Signal.HOLD)
+
     def test_rsi_strategy_runs(self):
         strat = RSI_Mean_Reversion_Strategy(14)
         sig = strat.analyze(self.df.copy(), "BTC/USDT")
@@ -62,6 +97,37 @@ class TestTradingBot(unittest.TestCase):
         strat = MACD_Strategy(12, 26, 9)
         sig = strat.analyze(self.df.copy(), "BTC/USDT")
         self.assertIn(sig.signal, [Signal.BUY, Signal.SELL, Signal.HOLD])
+
+    def test_macd_accepts_recent_confirmed_cross_but_not_stale_cross(self):
+        df = self.df.copy()
+        signal_line = pd.Series([0.0] * len(df), index=df.index)
+
+        def indicator_for(values):
+            indicator = type("Indicator", (), {})()
+            indicator.macd = lambda: values
+            indicator.macd_signal = lambda: signal_line
+            indicator.macd_diff = lambda: values - signal_line
+            return indicator
+
+        recent_values = pd.Series([-1.0] * 148 + [1.0, 2.0], index=df.index)
+        with patch("strategies.MACD", return_value=indicator_for(recent_values)):
+            recent = MACD_Strategy().analyze(df.copy(), "BTC/USDT")
+        self.assertEqual(recent.signal, Signal.BUY)
+
+        stale_values = pd.Series([-1.0] * 147 + [1.0, 2.0, 3.0], index=df.index)
+        with patch("strategies.MACD", return_value=indicator_for(stale_values)):
+            stale = MACD_Strategy().analyze(df.copy(), "BTC/USDT")
+        self.assertEqual(stale.signal, Signal.HOLD)
+
+    def test_combined_strategy_exposes_each_vote_and_hold_reason(self):
+        signal = CombinedStrategy(use_trend_filter=False).analyze(
+            self.df.copy(), "BTC/USDT"
+        )
+        self.assertEqual(signal.indicators["consensus_required"], 2)
+        self.assertEqual(set(signal.indicators["strategy_votes"]), {"ema", "rsi", "macd"})
+        for vote in signal.indicators["strategy_votes"].values():
+            self.assertIn(vote["signal"], {"BUY", "SELL", "HOLD"})
+            self.assertTrue(vote["reason"])
 
     def test_combined_strategy_consensus(self):
         strat = CombinedStrategy(use_trend_filter=False)

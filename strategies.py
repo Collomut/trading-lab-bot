@@ -73,9 +73,10 @@ class EMA_Crossover_Strategy:
     Risk level: LOW-MEDIUM
     """
 
-    def __init__(self, short_period: int = 9, long_period: int = 21):
+    def __init__(self, short_period: int = 9, long_period: int = 21, crossover_lookback: int = 2):
         self.short_period = short_period
         self.long_period = long_period
+        self.crossover_lookback = max(1, int(crossover_lookback))
 
     def analyze(self, df: pd.DataFrame, symbol: str) -> TradeSignal:
         """Analyze data and produce a trading signal."""
@@ -92,14 +93,10 @@ class EMA_Crossover_Strategy:
             )
 
         current = df.iloc[-1]
-        previous = df.iloc[-2]
-
         ema_short_now = current["ema_short"]
         ema_long_now = current["ema_long"]
-        ema_short_prev = previous["ema_short"]
-        ema_long_prev = previous["ema_long"]
 
-        if any(pd.isna([ema_short_now, ema_long_now, ema_short_prev, ema_long_prev])):
+        if any(pd.isna([ema_short_now, ema_long_now])):
             return TradeSignal(
                 signal=Signal.HOLD, symbol=symbol, confidence=0.0,
                 reason="Insufficient data for EMA calculation", indicators={}
@@ -111,23 +108,38 @@ class EMA_Crossover_Strategy:
             "price": round(current["close"], 2),
         }
 
+        # Keep a fresh cross actionable for the next two completed candles.
+        recent_cross = None
+        first_pair = max(1, len(df) - self.crossover_lookback)
+        for index in range(first_pair, len(df)):
+            previous = df.iloc[index - 1]
+            current_pair = df.iloc[index]
+            values = [previous["ema_short"], previous["ema_long"],
+                      current_pair["ema_short"], current_pair["ema_long"]]
+            if any(pd.isna(values)):
+                continue
+            if values[0] <= values[1] and values[2] > values[3]:
+                recent_cross = (Signal.BUY, len(df) - 1 - index)
+            elif values[0] >= values[1] and values[2] < values[3]:
+                recent_cross = (Signal.SELL, len(df) - 1 - index)
+
         # Bullish crossover
-        if ema_short_prev <= ema_long_prev and ema_short_now > ema_long_now:
+        if recent_cross and recent_cross[0] == Signal.BUY and ema_short_now > ema_long_now:
             gap_pct = abs(ema_short_now - ema_long_now) / ema_long_now * 100
             confidence = min(0.8, 0.4 + gap_pct * 10)
             return TradeSignal(
                 signal=Signal.BUY, symbol=symbol, confidence=confidence,
-                reason=f"EMA{self.short_period} crossed above EMA{self.long_period}",
+                reason=f"EMA{self.short_period} crossed above EMA{self.long_period} ({recent_cross[1]} candle(s) ago)",
                 indicators=indicators
             )
 
         # Bearish crossover
-        if ema_short_prev >= ema_long_prev and ema_short_now < ema_long_now:
+        if recent_cross and recent_cross[0] == Signal.SELL and ema_short_now < ema_long_now:
             gap_pct = abs(ema_short_now - ema_long_now) / ema_long_now * 100
             confidence = min(0.8, 0.4 + gap_pct * 10)
             return TradeSignal(
                 signal=Signal.SELL, symbol=symbol, confidence=confidence,
-                reason=f"EMA{self.short_period} crossed below EMA{self.long_period}",
+                reason=f"EMA{self.short_period} crossed below EMA{self.long_period} ({recent_cross[1]} candle(s) ago)",
                 indicators=indicators
             )
 
@@ -151,11 +163,13 @@ class RSI_Mean_Reversion_Strategy:
         self,
         rsi_period: int = 14,
         oversold: float = 30.0,
-        overbought: float = 70.0
+        overbought: float = 70.0,
+        pullback_recovery: float = 40.0,
     ):
         self.rsi_period = rsi_period
         self.oversold = oversold
         self.overbought = overbought
+        self.pullback_recovery = pullback_recovery
 
     def analyze(self, df: pd.DataFrame, symbol: str) -> TradeSignal:
         """Analyze data and produce a trading signal."""
@@ -182,22 +196,17 @@ class RSI_Mean_Reversion_Strategy:
             "price": round(df["close"].iloc[-1], 2),
             "oversold_threshold": self.oversold,
             "overbought_threshold": self.overbought,
+            "pullback_recovery_threshold": self.pullback_recovery,
         }
 
-        # Oversold — potential buy
-        if current_rsi < self.oversold:
-            depth = (self.oversold - current_rsi) / self.oversold
-            confidence = min(0.85, 0.5 + depth)
-
-            if not pd.isna(prev_rsi) and current_rsi > prev_rsi:
-                confidence = min(0.9, confidence + 0.1)
-                reason = f"RSI={current_rsi:.1f} oversold AND turning up"
-            else:
-                reason = f"RSI={current_rsi:.1f} oversold (below {self.oversold})"
-
+        # Require a confirmed recovery through 40 after a pullback; an RSI that
+        # is still falling through oversold territory is not a reversal vote.
+        if not pd.isna(prev_rsi) and prev_rsi < self.pullback_recovery <= current_rsi:
+            confidence = min(0.75, 0.45 + (current_rsi - self.pullback_recovery) / 100)
             return TradeSignal(
                 signal=Signal.BUY, symbol=symbol, confidence=confidence,
-                reason=reason, indicators=indicators
+                reason=f"RSI pullback recovered above {self.pullback_recovery:.0f} ({prev_rsi:.1f} → {current_rsi:.1f})",
+                indicators=indicators
             )
 
         # Overbought — potential sell
@@ -237,6 +246,7 @@ class MACD_Strategy:
         self.fast = fast
         self.slow = slow
         self.signal_period = signal
+        self.crossover_lookback = 2
 
     def analyze(self, df: pd.DataFrame, symbol: str) -> TradeSignal:
         """Analyze data and produce a trading signal."""
@@ -258,10 +268,8 @@ class MACD_Strategy:
             )
 
         current = df.iloc[-1]
-        previous = df.iloc[-2]
 
-        if any(pd.isna([current["macd"], current["macd_signal"],
-                        previous["macd"], previous["macd_signal"]])):
+        if any(pd.isna([current["macd"], current["macd_signal"]])):
             return TradeSignal(
                 signal=Signal.HOLD, symbol=symbol, confidence=0.0,
                 reason="MACD values not yet available", indicators={}
@@ -274,21 +282,37 @@ class MACD_Strategy:
             "price": round(current["close"], 2),
         }
 
+        recent_cross = None
+        first_pair = max(1, len(df) - self.crossover_lookback)
+        for index in range(first_pair, len(df)):
+            previous = df.iloc[index - 1]
+            current_pair = df.iloc[index]
+            values = [previous["macd"], previous["macd_signal"],
+                      current_pair["macd"], current_pair["macd_signal"]]
+            if any(pd.isna(values)):
+                continue
+            if values[0] <= values[1] and values[2] > values[3]:
+                recent_cross = (Signal.BUY, len(df) - 1 - index)
+            elif values[0] >= values[1] and values[2] < values[3]:
+                recent_cross = (Signal.SELL, len(df) - 1 - index)
+
         # Bullish crossover
-        if previous["macd"] <= previous["macd_signal"] and current["macd"] > current["macd_signal"]:
+        if (recent_cross and recent_cross[0] == Signal.BUY
+                and current["macd"] > current["macd_signal"]):
             confidence = min(0.75, 0.4 + abs(current["macd_hist"]) * 100)
             return TradeSignal(
                 signal=Signal.BUY, symbol=symbol, confidence=confidence,
-                reason="MACD crossed above signal line",
+                reason=f"MACD crossed above signal line ({recent_cross[1]} candle(s) ago)",
                 indicators=indicators
             )
 
         # Bearish crossover
-        if previous["macd"] >= previous["macd_signal"] and current["macd"] < current["macd_signal"]:
+        if (recent_cross and recent_cross[0] == Signal.SELL
+                and current["macd"] < current["macd_signal"]):
             confidence = min(0.75, 0.4 + abs(current["macd_hist"]) * 100)
             return TradeSignal(
                 signal=Signal.SELL, symbol=symbol, confidence=confidence,
-                reason="MACD crossed below signal line",
+                reason=f"MACD crossed below signal line ({recent_cross[1]} candle(s) ago)",
                 indicators=indicators
             )
 
@@ -421,6 +445,17 @@ class CombinedStrategy:
 
         for s in signals:
             all_indicators.update(s.indicators)
+        # Expose the component decisions for status/API diagnostics so a HOLD
+        # can be explained without reconstructing hidden votes.
+        all_indicators["strategy_votes"] = {
+            name: {
+                "signal": item.signal.value,
+                "reason": item.reason,
+                "confidence": round(float(item.confidence), 3),
+            }
+            for name, item in zip(("ema", "rsi", "macd"), signals)
+        }
+        all_indicators["consensus_required"] = 2
 
         # Handle SELL signals
         if len(sell_signals) >= 2:
@@ -469,7 +504,9 @@ class CombinedStrategy:
 
         return TradeSignal(
             signal=Signal.HOLD, symbol=symbol, confidence=0.0,
-            reason=f"No consensus (BUY: {len(buy_signals)}/3, SELL: {len(sell_signals)}/3)",
+            reason=(f"No consensus (BUY: {len(buy_signals)}/3, SELL: {len(sell_signals)}/3); "
+                    f"EMA {signals[0].signal.value}, RSI {signals[1].signal.value}, "
+                    f"MACD {signals[2].signal.value}"),
             indicators=all_indicators
         )
 
