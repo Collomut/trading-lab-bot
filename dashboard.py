@@ -33,7 +33,7 @@ LOGIN_HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Operator Login · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m2">
+  <link rel="stylesheet" href="/assets/app.css?v=m4">
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
@@ -175,6 +175,7 @@ class WebDashboard:
         self.app.router.add_get('/', self.handle_index)
         self.app.router.add_get('/positions', self.handle_positions)
         self.app.router.add_get('/history', self.handle_history)
+        self.app.router.add_get('/logs', self.handle_logs)
         self.app.router.add_get('/strategy', self.handle_strategy)
         self.app.router.add_get('/terms', self.handle_terms)
         self.app.router.add_get('/assets/{name}', self.handle_asset)
@@ -183,6 +184,7 @@ class WebDashboard:
         self.app.router.add_post('/api/login', self.handle_login)
         self.app.router.add_get('/logout', self.handle_logout)
         self.app.router.add_get('/api/status', self.handle_status)
+        self.app.router.add_get('/api/logs', self.handle_logs_api)
         self.app.router.add_get('/api/candles', self.handle_candles)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
         self.app.router.add_post('/api/exit-only', self.handle_exit_only)
@@ -206,6 +208,9 @@ class WebDashboard:
 
     async def handle_history(self, request):
         return await self._serve_page("history.html")
+
+    async def handle_logs(self, request):
+        return await self._serve_page("logs.html")
 
     async def handle_strategy(self, request):
         return await self._serve_page("strategy.html")
@@ -264,6 +269,10 @@ class WebDashboard:
 
     async def start_background_tasks(self, app):
         """Start 24/7 continuous trading loop in the background."""
+        try:
+            self.bot.risk_manager.store.append_event("worker_started", {})
+        except Exception as exc:
+            logger.warning("Could not record worker start event: %s", type(exc).__name__)
         self.bg_task = asyncio.create_task(self.background_trading_loop(app))
         logger.info("🚀 24/7 background trading worker activated.")
 
@@ -558,6 +567,92 @@ class WebDashboard:
         except Exception:
             logger.exception("Dashboard status request failed")
             return web.json_response({"error": "Status is temporarily unavailable."}, status=500)
+
+    @staticmethod
+    def _safe_log_details(event_type, details):
+        """Allowlist only display-safe fields; never expose raw order responses or reset snapshots."""
+        details = details if isinstance(details, dict) else {}
+        if event_type == "market_check":
+            indicators = details.get("indicators", {})
+            indicators = indicators if isinstance(indicators, dict) else {}
+            votes = details.get("votes", {})
+            safe_votes = {}
+            if isinstance(votes, dict):
+                for name, vote in votes.items():
+                    if isinstance(vote, dict):
+                        safe_votes[str(name)[:30]] = {
+                            "signal": str(vote.get("signal", "HOLD"))[:12],
+                            "reason": str(vote.get("reason", ""))[:240],
+                        }
+            safe_indicators = {}
+            for key in ("market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend", "consensus_required", "entry_gates"):
+                value = indicators.get(key)
+                if value is None or isinstance(value, (str, int, float, bool, dict)):
+                    safe_indicators[key] = value
+            return {
+                "symbol": str(details.get("symbol", ""))[:32],
+                "timeframe": str(details.get("timeframe", ""))[:12],
+                "candle_timestamp": details.get("candle_timestamp"),
+                "signal": str(details.get("signal", "HOLD"))[:12],
+                "reason": str(details.get("reason", ""))[:500],
+                "confidence": details.get("confidence"),
+                "votes": safe_votes,
+                "indicators": safe_indicators,
+            }
+        if event_type == "order_status":
+            return {
+                key: str(details[key])[:80]
+                for key in ("symbol", "side", "amount", "state", "filled", "average")
+                if details.get(key) is not None
+            }
+        if event_type in {"analysis_error", "market_data_issue"}:
+            return {
+                "symbol": str(details.get("symbol", ""))[:32],
+                "issue": str(details.get("issue", ""))[:80],
+                "error_type": str(details.get("error_type", ""))[:80],
+                "available_candles": details.get("available_candles"),
+            }
+        if event_type == "risk_halt":
+            return {"reason": str(details.get("reason", "Trading halted"))[:500]}
+        if event_type == "worker_started":
+            return {"status": "Background worker started"}
+        if event_type == "mode_changed":
+            return {
+                "mode": str(details.get("mode", ""))[:24],
+                "source": str(details.get("source", ""))[:40],
+            }
+        if event_type in {"protective_stop_placed", "protective_stop_filled", "protective_stop_cancelled", "partial_entry_fill", "partial_exit_reconciled"}:
+            allowed = ("symbol", "amount", "filled", "remaining", "stop_price", "average")
+            return {key: str(details[key])[:80] for key in allowed if details.get(key) is not None}
+        if event_type == "reconciliation_failed":
+            return {"message": "Account reconciliation failed; new entries remained blocked."}
+        if event_type == "emergency_stop_review_acknowledged":
+            return {"message": "Emergency-stop review acknowledged."}
+        if event_type == "testnet_reset_recovery":
+            return {"message": "Testnet state reset was recorded; review the operator recovery notes."}
+        return {}
+
+    async def handle_logs_api(self, request):
+        try:
+            try:
+                limit = int(request.query.get("limit", "100"))
+            except (TypeError, ValueError):
+                limit = 100
+            limit = max(1, min(limit, 100))
+            store = self.bot.risk_manager.store
+            market_events = store.list_events(limit, event_type="market_check")
+            audit_events = store.list_events(limit, exclude_event_type="market_check")
+            events = sorted(market_events + audit_events, key=lambda item: item["id"], reverse=True)
+            payload = [{
+                "id": item["id"],
+                "type": item["event_type"],
+                "created_at": item["created_at"],
+                "details": self._safe_log_details(item["event_type"], item["details"]),
+            } for item in events[:limit * 2]]
+            return web.json_response({"events": payload, "limit": limit})
+        except Exception:
+            logger.exception("Dashboard activity log request failed")
+            return web.json_response({"error": "Activity log is temporarily unavailable."}, status=500)
 
     async def handle_candles(self, request):
         """Return recent OHLCV data for the dashboard chart."""

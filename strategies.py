@@ -404,6 +404,13 @@ class CombinedStrategy:
         df["vol_sma20"] = vol_sma_indicator.sma_indicator()
         current_vol = df["volume"].iloc[-1]
         vol_avg = df["vol_sma20"].iloc[-1] if not df["vol_sma20"].isna().all() else current_vol
+        volume_ok = not (
+            not pd.isna(vol_avg) and vol_avg > 0 and current_vol < 0.3 * vol_avg
+        )
+        volume_detail = (
+            "Volume is below 30% of the 20-candle average"
+            if not volume_ok else "Volume filter passes"
+        )
 
         # Trend filter (EMA 50 or 200)
         trend_ok_for_buy = True
@@ -439,6 +446,15 @@ class CombinedStrategy:
             "market_regime": regime_label,
             "volume": round(current_vol, 2),
             "vol_avg20": round(vol_avg, 2) if not pd.isna(vol_avg) else 0.0,
+            "entry_gates": {
+                "regime": {"enabled": bool(self.regime_filter_enabled), "passed": bool(regime_ok), "detail": str(regime_reason)[:240]},
+                "trend": {
+                    "enabled": bool(self.use_trend_filter),
+                    "passed": bool(trend_ok_for_buy),
+                    "detail": str(trend_reason or ("Trend filter passes" if self.use_trend_filter else "Trend filter is off"))[:240],
+                },
+                "volume": {"enabled": True, "passed": bool(volume_ok), "detail": volume_detail},
+            },
         }
         if trend_val and not pd.isna(trend_val):
             all_indicators["ema_trend"] = round(trend_val, 2)

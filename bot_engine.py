@@ -55,6 +55,7 @@ class TradingBot:
         self._cycle_lock = threading.Lock()
         self.last_signals = {}
         self._last_analyzed_candle = {}
+        self._analysis_error_states = {}
         self._last_reconciliation_ok = False
         self._last_account_balance = None
         self._last_account_error = ""
@@ -237,8 +238,18 @@ class TradingBot:
         )
 
         if not ohlcv or len(ohlcv) < 30:
-            logger.warning(f"Insufficient data for {symbol} ({len(ohlcv)} candles)")
+            available = len(ohlcv) if ohlcv else 0
+            if self._analysis_error_states.get(symbol) != "insufficient_candles":
+                try:
+                    self.risk_manager.store.append_event("market_data_issue", {
+                        "symbol": symbol, "issue": "insufficient_candles", "available_candles": available,
+                    })
+                except Exception:
+                    logger.exception("Could not record insufficient market data for %s", symbol)
+            self._analysis_error_states[symbol] = "insufficient_candles"
+            logger.warning(f"Insufficient data for {symbol} ({available} candles)")
             return
+        self._analysis_error_states.pop(symbol, None)
 
         candle_timestamp = int(ohlcv[-1][0])
         if self._last_analyzed_candle.get(symbol) == candle_timestamp:
@@ -256,6 +267,37 @@ class TradingBot:
             "indicators": signal.indicators,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+        # Persist one explainable record per newly completed candle, including HOLDs.
+        # Audit failure must not change strategy or order behavior.
+        try:
+            indicators = signal.indicators if isinstance(signal.indicators, dict) else {}
+            vote_details = {}
+            raw_votes = indicators.get("strategy_votes", {})
+            if isinstance(raw_votes, dict):
+                for name, vote in raw_votes.items():
+                    if isinstance(vote, dict):
+                        vote_details[str(name)[:30]] = {
+                            "signal": str(vote.get("signal", "HOLD"))[:12],
+                            "reason": str(vote.get("reason", ""))[:240],
+                        }
+            indicator_details = {}
+            for key in ("market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend", "consensus_required", "entry_gates"):
+                value = indicators.get(key)
+                if value is None or isinstance(value, (str, int, float, bool, dict)):
+                    indicator_details[key] = value
+            self.risk_manager.store.append_event("market_check", {
+                "symbol": symbol,
+                "timeframe": self.config.strategy.timeframe,
+                "candle_timestamp": candle_timestamp,
+                "signal": signal.signal.value,
+                "reason": str(signal.reason)[:500],
+                "confidence": round(float(signal.confidence), 4),
+                "votes": vote_details,
+                "indicators": indicator_details,
+            })
+        except Exception:
+            logger.exception("Could not persist market decision for %s", symbol)
 
         if signal.signal != Signal.HOLD:
             logger.info(str(signal))
@@ -1272,7 +1314,16 @@ class TradingBot:
                     continue
                 try:
                     self.analyze_market(symbol)
-                except Exception:
+                except Exception as exc:
+                    error_type = type(exc).__name__
+                    if self._analysis_error_states.get(symbol) != error_type:
+                        try:
+                            self.risk_manager.store.append_event("analysis_error", {
+                                "symbol": symbol, "error_type": error_type,
+                            })
+                        except Exception:
+                            logger.exception("Could not record analysis error for %s", symbol)
+                    self._analysis_error_states[symbol] = error_type
                     logger.exception("Error analyzing %s", symbol)
 
             if self.risk_manager.open_positions or self._cycle_count % 5 == 0:

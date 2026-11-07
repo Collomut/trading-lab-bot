@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Activity · Trading Lab</title>
+  <link rel="stylesheet" href="/assets/app.css?v=m4">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+<nav><div class="nav-inner">
+  <a class="brand" href="/">TRADING LAB</a>
+  <div class="nav-links">
+    <a class="nav-link" href="/">Overview</a>
+    <a class="nav-link" href="/positions">Positions</a>
+    <a class="nav-link" href="/history">Trades</a>
+    <a class="nav-link" href="/strategy">Strategy</a>
+    <a class="nav-link active" href="/logs">Logs</a>
+    <a class="nav-link" href="/terms">Glossary</a>
+  </div>
+  <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button>
+</div></nav>
+<main class="container">
+  <header class="page-head">
+    <div><div class="eyebrow">Bot activity</div><h1>Decision &amp; safety log</h1></div>
+    <div class="status"><span id="log-dot" class="dot"></span><span id="log-state">Loading activity…</span></div>
+  </header>
+  <p class="intro">See what the bot checked, how EMA, RSI, and MACD voted, and when an order or safety event occurred. The log refreshes automatically.</p>
+  <section class="card">
+    <div class="log-filters" role="group" aria-label="Filter log entries">
+      <button class="log-filter active" type="button" data-filter="all" aria-pressed="true">All activity</button>
+      <button class="log-filter" type="button" data-filter="market" aria-pressed="false">Market checks</button>
+      <button class="log-filter" type="button" data-filter="orders" aria-pressed="false">Orders</button>
+      <button class="log-filter" type="button" data-filter="safety" aria-pressed="false">Safety &amp; health</button>
+    </div>
+    <div id="log-status" class="log-status" aria-live="polite"></div>
+    <div id="log-feed" class="log-feed" aria-live="polite">
+      <div class="log-empty">Loading saved activity…</div>
+    </div>
+  </section>
+  <footer>Market checks are recorded once per completed candle. A HOLD means the strategy did not produce a trade direction; it does not mean the market-data service is offline.</footer>
+</main>
+<script>
+(() => {
+  const feed=document.getElementById('log-feed');
+  const state=document.getElementById('log-state');
+  const dot=document.getElementById('log-dot');
+  const status=document.getElementById('log-status');
+  const filters=[...document.querySelectorAll('[data-filter]')];
+  let events=[];
+  let activeFilter='all';
+  const eventNames={
+    worker_started:'Bot worker started',
+    risk_halt:'Trading safety halt',
+    mode_changed:'Trading mode changed',
+    reconciliation_failed:'Account check failed',
+    protective_stop_placed:'Protective stop placed',
+    protective_stop_filled:'Protective stop filled',
+    protective_stop_cancelled:'Protective stop cancelled',
+    partial_entry_fill:'Partial entry fill',
+    partial_exit_reconciled:'Partial exit reconciled',
+    emergency_stop_review_acknowledged:'Emergency stop review acknowledged',
+    testnet_reset_recovery:'Testnet reset recorded',
+    analysis_error:'Market analysis error',
+    market_data_issue:'Market data issue',
+    order_status:'Order update',
+    market_check:'Market check'
+  };
+  const category=e=>e.type==='market_check'?'market':e.type==='order_status'?'orders':'safety';
+  const tone=value=>value==='BUY'||value==='FILLED'||value==='ACTIVE'?'is-buy':value==='SELL'||value==='REJECTED'||value==='UNKNOWN'?'is-sell':value==='HOLD'||value==='PENDING'?'is-wait':'';
+  function appendText(parent,tag,className,value){
+    const node=document.createElement(tag);
+    if(className)node.className=className;
+    node.textContent=value||'';
+    parent.append(node);
+    return node;
+  }
+  function addBadge(parent,text,kind){
+    return appendText(parent,'span',`log-badge ${kind||''}`,text);
+  }
+  function renderEvent(e){
+    const card=document.createElement('article');
+    card.className='log-card';
+    card.dataset.category=category(e);
+    const d=e.details||{};
+    const heading=document.createElement('div');heading.className='log-head';
+    const title=document.createElement('strong');title.className='log-title';
+    let titleText=eventNames[e.type]||'Bot event';
+    let badgeText=e.type.replaceAll('_',' ');
+    let badgeTone='';
+    if(e.type==='market_check'){
+      titleText=`${d.symbol||'Market'} · completed-candle check`;
+      badgeText=d.signal||'HOLD';badgeTone=tone(badgeText);
+    }else if(e.type==='order_status'){
+      titleText=`${String(d.side||'').toUpperCase()} order · ${d.symbol||'symbol unavailable'}`;
+      badgeText=d.state||'Update';badgeTone=tone(badgeText);
+    }else if(e.type==='risk_halt'||e.type==='analysis_error'||e.type==='market_data_issue'||e.type==='reconciliation_failed'){
+      badgeTone='is-alert';
+    }
+    title.textContent=titleText;
+    heading.append(title);
+    const when=document.createElement('time');when.className='log-time';
+    const date=new Date(e.created_at);
+    when.dateTime=Number.isNaN(date.getTime())?'':date.toISOString();
+    when.textContent=Number.isNaN(date.getTime())?'Time unavailable':date.toLocaleString();
+    heading.append(when);card.append(heading);
+    addBadge(card,badgeText,badgeTone);
+
+    if(e.type==='market_check'){
+      if(d.reason)appendText(card,'p','log-reason',d.reason);
+      const votes=d.votes||{};
+      const voteLines=document.createElement('div');voteLines.className='log-votes';
+      for(const [name,vote] of Object.entries(votes)){
+        const signal=String(vote?.signal||'HOLD').toUpperCase();
+        const chip=document.createElement('span');
+        chip.className=`log-vote ${signal==='BUY'?'is-buy':signal==='SELL'?'is-sell':'is-hold'}`;
+        chip.textContent=`${name.toUpperCase()} · ${signal}`;
+        chip.title=String(vote?.reason||'');
+        voteLines.append(chip);
+      }
+      if(Object.keys(votes).length)card.append(voteLines);
+      const gates=d.indicators?.entry_gates;
+      if(gates&&typeof gates==='object'){
+        const gateLine=document.createElement('div');gateLine.className='log-gates';
+        for(const [name,gate] of Object.entries(gates)){
+          if(!gate||!gate.enabled)continue;
+          const passed=gate.passed===true;
+          const item=document.createElement('span');
+          item.className=`log-gate ${passed?'pass':'block'}`;
+          item.textContent=`${name}: ${passed?'pass':'blocked'}`;
+          item.title=String(gate.detail||'');
+          gateLine.append(item);
+        }
+        if(gateLine.childElementCount)card.append(gateLine);
+      }
+      const meta=[];
+      if(d.timeframe)meta.push(`Timeframe ${d.timeframe}`);
+      if(d.indicators?.market_regime)meta.push(`Market ${String(d.indicators.market_regime).replaceAll('_',' ')}`);
+      if(d.indicators?.adx!=null)meta.push(`ADX ${d.indicators.adx}`);
+      if(d.indicators?.atr_pct!=null)meta.push(`ATR ${d.indicators.atr_pct}%`);
+      if(meta.length)appendText(card,'p','log-reason',meta.join(' · '));
+    }else if(e.type==='order_status'){
+      const summary=[d.state,d.amount?('Amount '+d.amount):null,d.filled?('Filled '+d.filled):null,d.average?('Average '+d.average):null].filter(Boolean).join(' · ');
+      if(summary)appendText(card,'p','log-reason',summary);
+    }else{
+      const message=d.reason||d.message||
+        (d.error_type?('Analysis failed ('+d.error_type+')'):
+        d.issue?String(d.issue).replaceAll('_',' '):
+        d.status||d.mode||'');
+      if(message)appendText(card,'p','log-reason',message);
+      if(d.available_candles!=null)appendText(card,'p','log-reason','Available candles: '+d.available_candles);
+    }
+    return card;
+  }
+  function render(){
+    feed.replaceChildren();
+    const visible=events.filter(e=>activeFilter==='all'||category(e)===activeFilter);
+    if(!visible.length){
+      const empty=document.createElement('div');empty.className='log-filtered-empty';
+      empty.textContent=events.length?'No entries match this filter yet.':'No saved activity yet. Market checks appear after the next completed candle.';
+      feed.append(empty);return;
+    }
+    for(const e of visible)feed.append(renderEvent(e));
+  }
+  filters.forEach(button=>button.addEventListener('click',()=>{
+    activeFilter=button.dataset.filter;
+    filters.forEach(item=>{const selected=item===button;item.classList.toggle('active',selected);item.setAttribute('aria-pressed',String(selected))});
+    render();
+  }));
+  async function refresh(){
+    try{
+      const response=await fetch('/api/logs?limit=100',{cache:'no-store'});
+      if(!response.ok)throw new Error(`Log service unavailable (${response.status})`);
+      const payload=await response.json();
+      events=Array.isArray(payload.events)?payload.events:[];
+      render();
+      dot.className='dot ok';
+      state.textContent=`Updated ${new Date().toLocaleTimeString()}`;
+      status.textContent=`${events.length} recent event${events.length===1?'':'s'} · refreshing every 15 seconds`;
+    }catch(error){
+      dot.className='dot bad';state.textContent='Activity unavailable';
+      status.textContent=error.message;
+      if(!events.length){feed.replaceChildren();const item=document.createElement('div');item.className='log-empty';item.textContent='Could not load saved activity. Check your connection and reload.';feed.append(item)}
+    }
+  }
+  refresh();setInterval(refresh,15000);
+})();
+</script>
+</body>
+</html>

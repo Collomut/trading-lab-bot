@@ -192,8 +192,15 @@ class RiskManager:
 
     def halt(self, reason: str):
         """Stop all new orders and persist the circuit-breaker state."""
+        was_halted = self._is_halted
+        previous_reason = self._halt_reason
         self._is_halted = True
         self._halt_reason = str(reason)[:500]
+        if not was_halted or previous_reason != self._halt_reason:
+            try:
+                self.store.append_event("risk_halt", {"reason": self._halt_reason})
+            except Exception as exc:
+                logger.error("Could not record trading halt event: %s", type(exc).__name__)
         try:
             self._save_daily_state()
         except Exception as exc:

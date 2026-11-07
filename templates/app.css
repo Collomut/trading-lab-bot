@@ -1048,3 +1048,27 @@ footer {
     gap: 5px;
   }
 }
+
+/* Readable operational event feed. */
+.log-filters { display:flex; flex-wrap:wrap; gap:7px; margin:14px 0; }
+.log-filter { border:1px solid var(--line); border-radius:999px; padding:7px 11px; background:var(--paper); color:var(--muted); font:600 12px/1.2 system-ui,sans-serif; cursor:pointer; }
+.log-filter:hover,.log-filter.active { color:var(--ink); border-color:var(--accent); background:var(--soft); }
+.log-feed { display:grid; gap:10px; }
+.log-card { background:var(--paper); border:1px solid var(--line); border-radius:9px; padding:13px 15px; box-shadow:0 1px 3px rgb(0 0 0 / .035); }
+.log-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.log-title { font-size:14px; font-weight:750; }
+.log-time { color:var(--muted); font-size:11px; }
+.log-badge,.log-vote { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px; padding:3px 8px; background:var(--soft); color:var(--muted); font-size:10.5px; font-weight:750; white-space:nowrap; }
+.log-badge.is-buy,.log-vote.is-buy { color:var(--green); background:var(--green-soft); border-color:var(--green); }
+.log-badge.is-sell,.log-vote.is-sell { color:var(--red); background:var(--red-soft); border-color:var(--red); }
+.log-badge.is-alert { color:var(--red); background:var(--red-soft); border-color:var(--red); }
+.log-badge.is-wait,.log-vote.is-hold { color:var(--wait-ink); background:var(--wait-soft); border-color:var(--wait-ink); }
+.log-votes { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.log-reason { margin:7px 0 0; color:var(--muted); font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+.log-filtered-empty,.log-empty { padding:22px; border:1px dashed var(--line); border-radius:9px; color:var(--muted); text-align:center; }
+.log-status { min-height:18px; color:var(--muted); font-size:12px; margin:8px 0; }
+.log-gates { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.log-gate { font-size:10.5px; color:var(--muted); }
+.log-gate.pass { color:var(--green); }
+.log-gate.block { color:var(--red); }
+@media(max-width:700px) { .log-card { padding:12px; } .log-head { gap:6px; } }

@@ -160,19 +160,51 @@ class StateStore:
             conn.commit()
 
     def create_order_intent(self, client_order_id, symbol, side, amount, request):
+        side_value = side.upper()
+        amount_value = str(amount)
         with self._lock, closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute("INSERT INTO order_intents(client_order_id,symbol,side,amount,state,request_json) VALUES(?,?,?,?,?,?)", (client_order_id, symbol, side.upper(), str(amount), "PENDING", json.dumps(request, allow_nan=False)))
+            conn.execute(
+                "INSERT INTO order_intents(client_order_id,symbol,side,amount,state,request_json) VALUES(?,?,?,?,?,?)",
+                (client_order_id, symbol, side_value, amount_value, "PENDING", json.dumps(request, allow_nan=False)),
+            )
             conn.commit()
+        try:
+            self.append_event("order_status", {
+                "symbol": symbol, "side": side_value.lower(), "amount": amount_value, "state": "PENDING",
+            })
+        except Exception:
+            # Audit visibility is best-effort; it must not block a safety-managed order flow.
+            pass
 
     def update_order(self, client_order_id, state, *, exchange_order_id=None, filled=None, average=None, response=None):
         row = self.get_order(client_order_id)
         if not row or state not in self.ORDER_TRANSITIONS.get(row["state"], set()):
             raise ValueError("Invalid or missing order-state transition")
+        filled_value = str(filled) if filled is not None else None
+        average_value = str(average) if average is not None else None
         with self._lock, closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute("UPDATE order_intents SET state=?,exchange_order_id=COALESCE(?,exchange_order_id),filled=COALESCE(?,filled),average=COALESCE(?,average),response_json=COALESCE(?,response_json),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE client_order_id=?", (state, exchange_order_id, str(filled) if filled is not None else None, str(average) if average is not None else None, json.dumps(response, allow_nan=False) if response is not None else None, client_order_id))
+            conn.execute(
+                "UPDATE order_intents SET state=?,exchange_order_id=COALESCE(?,exchange_order_id),filled=COALESCE(?,filled),average=COALESCE(?,average),response_json=COALESCE(?,response_json),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE client_order_id=?",
+                (state, exchange_order_id, filled_value, average_value, json.dumps(response, allow_nan=False) if response is not None else None, client_order_id),
+            )
             conn.commit()
+        details = {
+            "symbol": row["symbol"],
+            "side": row["side"].lower(),
+            "amount": row["amount"],
+            "state": state,
+        }
+        if filled_value is not None:
+            details["filled"] = filled_value
+        if average_value is not None:
+            details["average"] = average_value
+        try:
+            self.append_event("order_status", details)
+        except Exception:
+            # Audit visibility is best-effort; the durable order state is authoritative.
+            pass
 
     def get_order(self, client_order_id):
         with closing(self._connect()) as conn:
@@ -198,5 +230,49 @@ class StateStore:
             return [dict(row) for row in rows]
 
     def append_event(self, event_type, details):
+        encoded = json.dumps(details, allow_nan=False, separators=(",", ":"))
         with self._lock, closing(self._connect()) as conn:
-            conn.execute("INSERT INTO audit_events(event_type,details_json) VALUES(?,?)", (event_type, json.dumps(details, allow_nan=False)))
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO audit_events(event_type,details_json) VALUES(?,?)",
+                (event_type, encoded),
+            )
+            if event_type == "market_check":
+                # Keep the market-decision history bounded without pruning order/risk audit records.
+                conn.execute("""
+                    DELETE FROM audit_events
+                    WHERE event_type='market_check'
+                      AND id NOT IN (
+                          SELECT id FROM audit_events
+                          WHERE event_type='market_check'
+                          ORDER BY id DESC LIMIT 20000
+                      )
+                """)
+            conn.commit()
+
+    def list_events(self, limit=100, *, event_type=None, exclude_event_type=None):
+        """Return recent audit events; callers must sanitize details before exposing them."""
+        limit = max(1, min(int(limit), 200))
+        where = ""
+        params = []
+        if event_type is not None:
+            where = " WHERE event_type=?"
+            params.append(event_type)
+        elif exclude_event_type is not None:
+            where = " WHERE event_type<>?"
+            params.append(exclude_event_type)
+        params.append(limit)
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                f"SELECT id,event_type,details_json,created_at FROM audit_events{where} ORDER BY id DESC LIMIT ?",
+                params,
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "event_type": row["event_type"],
+                    "details": json.loads(row["details_json"]),
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ]
