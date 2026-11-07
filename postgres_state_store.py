@@ -169,6 +169,8 @@ class PostgresStateStore:
                         continue
                     try:
                         payload = json.loads(raw)
+                        if not isinstance(payload, dict):
+                            raise ValueError("trade entry must be a JSON object")
                         json.dumps(payload, allow_nan=False)
                     except (ValueError, TypeError) as exc:
                         raise RuntimeError(
