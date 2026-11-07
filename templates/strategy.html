@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strategy · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m2"><script src="/assets/app.js" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link active" href="/strategy">Strategy</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Configuration</div><h1>Strategy &amp; risk</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state">Loading…</span></div></header><div class="grid two"><section class="card"><h2>Signal</h2><div id="strategy" class="metric-label">Loading…</div><p class="help">Combined EMA, RSI, and MACD signal. At least two must agree; trend and volume filters can block buys.</p></section><section class="card"><h2>Risk limits</h2><div id="limits"></div></section></div><section class="card" style="margin-top:16px"><h2>Latest market checks</h2><p class="help">The gate pauses new buys when trend strength is low or volatility is above the limit. It does not close open positions.</p><div id="regimes" class="limit-list"><div class="limit-row">Waiting for market data…</div></div></section><div class="notice compact"><strong>Limits are estimates.</strong><span>They do not cap losses during gaps, outages, or poor fills.</span></div><footer>Paper mode is for software practice; these rules have not proven a trading edge. <a href="/terms">Open glossary</a></footer></main><script>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strategy · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m3"><script src="/assets/app.js" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link active" href="/strategy">Strategy</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Configuration</div><h1>Strategy &amp; risk</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state">Loading…</span></div></header><div class="grid two"><section class="card"><h2>Signal</h2><div id="strategy" class="metric-label">Loading…</div><p class="help">Combined EMA, RSI, and MACD signal. At least two must agree; trend and volume filters can block buys.</p></section><section class="card"><h2>Risk limits</h2><div id="limits"></div></section></div><section class="card" style="margin-top:16px"><h2>Latest market checks</h2><p class="help">The gate pauses new buys when trend strength is low or volatility is above the limit. It does not close open positions.</p><div id="regimes" class="limit-list"><div class="limit-row">Waiting for market data…</div></div></section><div class="notice compact"><strong>Limits are estimates.</strong><span>They do not cap losses during gaps, outages, or poor fills.</span></div><footer>Paper mode is for software practice; these rules have not proven a trading edge. <a href="/terms">Open glossary</a></footer></main><script>
 const pct=v=>`${Number(v||0).toLocaleString()}%`;
 function renderMarketChecks(d){
  const box=document.getElementById('regimes');
@@ -18,16 +18,33 @@ function renderMarketChecks(d){
   const reason=document.createElement('p');reason.className='help';reason.textContent=item?.reason||'Decision reason unavailable';box.append(reason);
   const votes=indicators.strategy_votes;
   if(votes&&typeof votes==='object'){
+   const voteEntries=Object.entries(votes);
+   const counts={BUY:0,SELL:0,HOLD:0};
+   for(const [,vote] of voteEntries){const signal=String(vote?.signal||'HOLD').toUpperCase();if(Object.hasOwn(counts,signal))counts[signal]++}
+   const agreement=document.createElement('div');agreement.className='vote-agreement';
+   const buyCount=counts.BUY,sellCount=counts.SELL;
+   const outcome=buyCount>=2?{text:`BUY agreement · ${buyCount}/3`,tone:'is-buy'}:sellCount>=2?{text:`SELL agreement · ${sellCount}/3`,tone:'is-sell'}:{text:'No trade agreement',tone:'is-wait'};
+   const result=document.createElement('strong');result.className=`vote-chip vote-result ${outcome.tone}`;result.textContent=outcome.text;agreement.append(result);
+   const chips=document.createElement('div');chips.className='vote-chips';chips.setAttribute('aria-label','EMA, RSI, and MACD signals');
+   for(const [name,vote] of voteEntries){
+    const signal=String(vote?.signal||'HOLD').toUpperCase();
+    const chip=document.createElement('span');chip.className=`vote-chip ${signal==='BUY'?'is-buy':signal==='SELL'?'is-sell':'is-hold'}`;
+    chip.textContent=`${name.toUpperCase()} · ${signal}`;chips.append(chip)
+   }
+   agreement.append(chips);box.append(agreement);
    const details=document.createElement('details');details.className='vote-details';
-   const summary=document.createElement('summary');summary.textContent='Indicator votes and reasons';details.append(summary);
+   const summary=document.createElement('summary');summary.textContent='Why each indicator voted this way';details.append(summary);
    const list=document.createElement('div');list.className='limit-list';
-   for(const [name,vote] of Object.entries(votes)){
+   for(const [name,vote] of voteEntries){
     const voteRow=document.createElement('div');voteRow.className='limit-row';
     const voteName=document.createElement('span');voteName.textContent=name.toUpperCase();
-    const voteValue=document.createElement('strong');voteValue.textContent=`${vote?.signal||'HOLD'} · ${vote?.reason||'No reason supplied'}`;
+    const voteValue=document.createElement('strong');voteValue.textContent=`${String(vote?.signal||'HOLD').toUpperCase()} · ${vote?.reason||'No reason supplied'}`;
     voteRow.append(voteName,voteValue);list.append(voteRow)
    }
    details.append(list);box.append(details)
+  }else{
+   const unavailable=document.createElement('div');unavailable.className='vote-agreement';
+   const label=document.createElement('span');label.className='vote-chip is-wait';label.textContent='Signal agreement unavailable';unavailable.append(label);box.append(unavailable)
   }
  }
 }
