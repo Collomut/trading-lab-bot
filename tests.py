@@ -298,7 +298,7 @@ class TestTechnicalIndicatorsAndStrategies(unittest.TestCase):
 
     def test_rsi_oversold_and_overbought(self):
         strat = RSI_Mean_Reversion_Strategy(14, oversold=30.0, overbought=70.0)
-        # Sharp crash -> RSI oversold
+        # Sharp crash -> falling knife is held (not bought until recovery through 40)
         crash_prices = [100.0 - i * 3.0 for i in range(50)]
         df_crash = pd.DataFrame({
             "close": crash_prices,
@@ -307,9 +307,15 @@ class TestTechnicalIndicatorsAndStrategies(unittest.TestCase):
             "low": crash_prices,
             "volume": [1000.0] * 50
         })
-        sig = strat.analyze(df_crash, "BTC/USDT")
-        self.assertEqual(sig.signal, Signal.BUY)
-        self.assertIn("oversold", sig.reason)
+        sig_crash = strat.analyze(df_crash, "BTC/USDT")
+        self.assertEqual(sig_crash.signal, Signal.HOLD)
+
+        # Pullback recovery through 40 -> triggers BUY
+        with patch("strategies.RSIIndicator") as indicator:
+            indicator.return_value.rsi.return_value = pd.Series([50.0] * 28 + [38.0, 42.0])
+            sig_recover = strat.analyze(df_crash.iloc[:30].copy(), "BTC/USDT")
+            self.assertEqual(sig_recover.signal, Signal.BUY)
+            self.assertIn("recovered above 40", sig_recover.reason)
 
         # Sharp rally -> RSI overbought
         rally_prices = [100.0 + i * 3.0 for i in range(50)]
@@ -320,9 +326,9 @@ class TestTechnicalIndicatorsAndStrategies(unittest.TestCase):
             "low": rally_prices,
             "volume": [1000.0] * 50
         })
-        sig = strat.analyze(df_rally, "BTC/USDT")
-        self.assertEqual(sig.signal, Signal.SELL)
-        self.assertIn("overbought", sig.reason)
+        sig_rally = strat.analyze(df_rally, "BTC/USDT")
+        self.assertEqual(sig_rally.signal, Signal.SELL)
+        self.assertIn("overbought", sig_rally.reason)
 
     def test_combined_strategy_trend_filter_blocks_buy_in_downtrend(self):
         strat = CombinedStrategy(use_trend_filter=True, trend_period=50, regime_filter_enabled=False)
