@@ -35,6 +35,8 @@ class PostgresStateStore:
         if not database_url:
             raise ValueError("DATABASE_URL is required")
         conninfo = conninfo_to_dict(database_url)
+        if str(conninfo.get("port", "5432")) == "6543":
+            raise ValueError("Supabase transaction pooler is not supported; use direct or session mode")
         conninfo.setdefault("sslmode", "require")
         self._pool = ConnectionPool(
             conninfo=make_conninfo(**conninfo),
@@ -44,7 +46,8 @@ class PostgresStateStore:
             kwargs={"row_factory": dict_row, "connect_timeout": 10},
             open=True,
         )
-        self._initialize()
+        if not require_import:
+            self._initialize()
         if require_import:
             with self._pool.connection() as conn:
                 marker = conn.execute(
@@ -63,7 +66,7 @@ class PostgresStateStore:
         # Private schema avoids accidental exposure through Supabase's default Data API schema.
         with self._pool.connection() as conn, conn.transaction():
             conn.execute("CREATE SCHEMA IF NOT EXISTS bot_private")
-            conn.execute("""
+            schema_sql = """
                 CREATE TABLE IF NOT EXISTS bot_private.schema_migrations (
                     version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL,
                     description TEXT NOT NULL
@@ -100,7 +103,10 @@ class PostgresStateStore:
                     source_sha256 TEXT NOT NULL, counts_json JSONB NOT NULL,
                     completed_at TEXT NOT NULL
                 );
-            """)
+            """
+            for statement in schema_sql.split(";"):
+                if statement.strip():
+                    conn.execute(statement)
 
     @classmethod
     def migrate_from_sqlite(cls, database_url: str, sqlite_path: str | Path, trades_path: str | Path):
