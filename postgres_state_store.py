@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from psycopg import sql
+from psycopg.errors import UndefinedTable
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -115,17 +116,28 @@ class PostgresStateStore:
         if not source.is_file():
             raise FileNotFoundError("SQLite source database is missing; import was not attempted")
         # Repeated deploys must not create backups or re-import once cutover succeeded.
-        check = cls(database_url, require_import=False)
+        conninfo = conninfo_to_dict(database_url)
+        if str(conninfo.get("port", "5432")) == "6543":
+            raise ValueError("Supabase transaction pooler is not supported; use direct or session mode")
+        conninfo.setdefault("sslmode", "require")
+        check_pool = ConnectionPool(
+            conninfo=make_conninfo(**conninfo), min_size=1, max_size=1,
+            timeout=10, kwargs={"row_factory": dict_row, "connect_timeout": 10},
+            open=True,
+        )
         try:
-            with check._pool.connection() as conn:
-                marker = conn.execute(
-                    "SELECT counts_json FROM bot_private.storage_migrations WHERE id=1"
-                ).fetchone()
+            with check_pool.connection() as conn:
+                try:
+                    marker = conn.execute(
+                        "SELECT counts_json FROM bot_private.storage_migrations WHERE id=1"
+                    ).fetchone()
+                except UndefinedTable:
+                    marker = None
             if marker:
                 return {"status": "already_imported", "counts": marker["counts_json"],
                         "backup": "original SQLite and first-import backup retained"}
         finally:
-            check.close()
+            check_pool.close()
         # A stable online backup remains on the Railway volume for rollback/audit.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = source.with_name(f"{source.stem}_pre_supabase_{stamp}{source.suffix}")
