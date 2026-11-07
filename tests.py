@@ -956,5 +956,64 @@ class TestTradingBot(unittest.TestCase):
         self.assertIn("score: 75%", sig_str)
 
 
+    def test_mobile_overflow_protection_in_css(self):
+        """Verify CSS contains mobile overflow prevention rules and responsive layouts."""
+        css_path = Path(__file__).parent / "templates" / "app.css"
+        self.assertTrue(css_path.exists(), "templates/app.css must exist")
+        css_text = css_path.read_text(encoding="utf-8")
+
+        # Root/body overflow clipping to prevent horizontal page wobble
+        self.assertIn("overflow-x: clip", css_text)
+
+        # Responsive media queries present
+        self.assertIn("@media (max-width: 700px)", css_text)
+        self.assertIn("@media (max-width: 480px)", css_text)
+
+        # Metrics grid must adapt to fewer columns on small screens
+        self.assertIn(".overview-metrics", css_text)
+
+        # Chart price row must allow wrapping
+        self.assertIn(".chart-price-row", css_text)
+        self.assertIn("flex-wrap: wrap", css_text)
+
+        # Table wrap must support smooth touch scrolling without breaking page width
+        self.assertIn(".table-wrap", css_text)
+        self.assertIn("-webkit-overflow-scrolling: touch", css_text)
+
+        # Controls actions should be responsive
+        self.assertIn(".trading-controls-actions", css_text)
+
+    def test_template_html_mobile_meta_and_navigation_integrity(self):
+        """Verify all templates have responsive viewport meta tags and balanced navigation."""
+        templates_dir = Path(__file__).parent / "templates"
+        template_files = ["overview.html", "positions.html", "history.html", "strategy.html", "glossary.html"]
+
+        for filename in template_files:
+            file_path = templates_dir / filename
+            self.assertTrue(file_path.exists(), f"{filename} must exist")
+            html = file_path.read_text(encoding="utf-8")
+
+            # Must have mobile viewport meta tag
+            self.assertIn('name="viewport"', html, f"{filename} missing viewport meta tag")
+            self.assertIn('content="width=device-width', html, f"{filename} missing width=device-width")
+
+            # Nav integrity: brand, nav-links, and theme-toggle must all be present
+            self.assertIn('class="brand"', html, f"{filename} missing brand class")
+            self.assertIn('class="nav-links"', html, f"{filename} missing nav-links class")
+            self.assertIn('data-theme-toggle', html, f"{filename} missing data-theme-toggle")
+
+            # Ensure theme toggle button is NOT nested inside nav-links
+            nav_links_start = html.find('class="nav-links"')
+            nav_links_close = html.find('</div>', nav_links_start)
+            theme_toggle_pos = html.find('data-theme-toggle')
+            self.assertTrue(
+                theme_toggle_pos > nav_links_close,
+                f"{filename}: theme-toggle must be outside nav-links"
+            )
+
+            # Ensure no duplicate </main> tags
+            self.assertEqual(html.count('</main>'), 1, f"{filename} must have exactly one </main> tag")
+
+
 if __name__ == "__main__":
     unittest.main()

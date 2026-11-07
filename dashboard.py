@@ -33,7 +33,7 @@ LOGIN_HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Operator Login · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/app.css?v=m2">
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
@@ -49,7 +49,7 @@ LOGIN_HTML = """<!doctype html>
   </div>
 </nav>
 <main class="container" style="max-width: 480px; margin-top: 40px;">
-  <div class="card" style="padding: 28px;">
+  <div class="card login-card" style="padding: 28px;">
     <div class="eyebrow" style="margin-bottom: 6px;">Secure Access</div>
     <h1 style="font-size: 24px; margin-bottom: 12px;">Sign in to Trading Lab</h1>
     <p class="intro" style="font-size: 13px; margin-bottom: 20px;">
@@ -224,7 +224,11 @@ class WebDashboard:
         asset_path = assets.get(request.match_info.get("name"))
         if asset_path is None:
             raise web.HTTPNotFound()
-        return web.FileResponse(Path(__file__).parent / "templates" / asset_path)
+        resp = web.FileResponse(Path(__file__).parent / "templates" / asset_path)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
 
     async def handle_liveness(self, request):
         """Unauthenticated liveness probe (F-16). Reports if web event loop is alive."""
