@@ -450,18 +450,17 @@ class WebDashboard:
                     except (TypeError, ValueError):
                         pass
 
-        # 5. Read completed trade history (F-15: bounded reading)
+        # 5. Read completed trade history from the active durable store.
         trades = []
-        if self.bot.trade_log_path.exists():
-            try:
-                with open(self.bot.trade_log_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                    for line in lines[-100:]:
-                        line = line.strip()
-                        if line:
-                            trades.append(json.loads(line))
-            except Exception:
-                pass
+        list_trades = getattr(risk.store, "list_trades", None)
+        if callable(list_trades):
+            trades = list_trades(5000)
+        elif self.bot.trade_log_path.exists():
+            with open(self.bot.trade_log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        trades.append(json.loads(line))
 
         # 6. Calculate accuracy and performance stats
         realized_pnl = sum(t.get("pnl", 0.0) for t in trades if t.get("action") == "SELL")
