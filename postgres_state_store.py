@@ -108,6 +108,18 @@ class PostgresStateStore:
         source = Path(sqlite_path)
         if not source.is_file():
             raise FileNotFoundError("SQLite source database is missing; import was not attempted")
+        # Repeated deploys must not create backups or re-import once cutover succeeded.
+        check = cls(database_url, require_import=False)
+        try:
+            with check._pool.connection() as conn:
+                marker = conn.execute(
+                    "SELECT counts_json FROM bot_private.storage_migrations WHERE id=1"
+                ).fetchone()
+            if marker:
+                return {"status": "already_imported", "counts": marker["counts_json"],
+                        "backup": "original SQLite and first-import backup retained"}
+        finally:
+            check.close()
         # A stable online backup remains on the Railway volume for rollback/audit.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = source.with_name(f"{source.stem}_pre_supabase_{stamp}{source.suffix}")
@@ -377,6 +389,65 @@ class PostgresStateStore:
                 """, (limit,)).fetchall()
         return [{"id": r["id"], "event_type": r["event_type"],
                  "details": r["details_json"], "created_at": r["created_at"]} for r in rows]
+
+    
+    def create_backup(self, backup_path: str | Path | None = None) -> Path:
+        """Write a point-in-time JSON export of all persistent state tables."""
+        if backup_path is None:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = Path.cwd() / f"bot_state_postgres_backup_{stamp}.json"
+        backup_path = Path(backup_path)
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._pool.connection() as conn:
+            snapshot = {}
+            for table, order in (
+                ("schema_migrations", "version"),
+                ("state", "key"),
+                ("positions", "symbol"),
+                ("order_intents", "created_at"),
+                ("audit_events", "id"),
+                ("trades", "id"),
+            ):
+                snapshot[table] = conn.execute(
+                    sql.SQL("SELECT * FROM bot_private.{} ORDER BY {}").format(
+                        sql.Identifier(table), sql.Identifier(order)
+                    )
+                ).fetchall()
+        backup_path.write_text(json.dumps(snapshot, indent=2, default=str), encoding="utf-8")
+        return backup_path
+
+    def snapshot_and_reset_for_testnet_wipe(self, operator_reason: str, export_path=None) -> dict:
+        """Record a backup and atomically reset Testnet-specific positions/order state."""
+        if not operator_reason or not operator_reason.strip():
+            raise ValueError("Operator reason is required for Testnet reset recovery")
+        backup_file = self.create_backup()
+        positions = self.read_positions()
+        unresolved = self.unresolved_orders()
+        export_data = {
+            "timestamp": int(time.time() * 1000),
+            "operator_reason": operator_reason.strip(),
+            "backup_file": str(backup_file),
+            "positions": positions,
+            "unresolved_orders": unresolved,
+        }
+        if export_path:
+            Path(export_path).write_text(json.dumps(export_data, indent=2, default=str), encoding="utf-8")
+        with self._pool.connection() as conn, conn.transaction():
+            conn.execute("DELETE FROM bot_private.positions")
+            conn.execute("""
+                UPDATE bot_private.order_intents SET state='CANCELED',applied=TRUE,updated_at=%s
+                WHERE state NOT IN ('FILLED','PARTIAL_CLOSED','CANCELED','REJECTED','EXPIRED')
+                   OR applied=FALSE
+            """, (self._now(),))
+            conn.execute("""
+                DELETE FROM bot_private.state
+                WHERE key IN ('baseline_asset_balances','testnet_smoke_trade')
+            """)
+            conn.execute(
+                "INSERT INTO bot_private.audit_events(event_type,details_json,created_at) VALUES(%s,%s,%s)",
+                ("testnet_reset_recovery", Jsonb(export_data), self._now()),
+            )
+        return export_data
 
     def append_trade(self, trade):
         payload = json.dumps(trade, allow_nan=False, separators=(",", ":"))
