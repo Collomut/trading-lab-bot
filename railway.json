@@ -4,7 +4,8 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python dashboard.py",
+    "startCommand": "python migrate_sqlite_to_postgres.py && python dashboard.py",
+    "overlapSeconds": 0,
     "healthcheckPath": "/health/liveness",
     "healthcheckTimeout": 100,
     "restartPolicyType": "ON_FAILURE",
