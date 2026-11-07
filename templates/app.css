@@ -9,6 +9,10 @@
   --subtle: #96887b;
   --green: #2b6e3f;
   --red: #a83226;
+  --green-soft: #e8f4ec;
+  --red-soft: #faeae8;
+  --wait-soft: #fff4d6;
+  --wait-ink: #75530a;
   --accent: #3e3228;
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -24,6 +28,10 @@
   --subtle: #737373;
   --green: #0ecb81;
   --red: #f6465d;
+  --green-soft: #142a20;
+  --red-soft: #30191d;
+  --wait-soft: #2c2414;
+  --wait-ink: #f0c96c;
   --accent: #d7a83e;
 }
 
@@ -977,5 +985,66 @@ footer {
   *, *::before, *::after {
     scroll-behavior: auto !important;
     transition: none !important;
+  }
+}
+
+/* Indicator consensus: color plus text keeps each vote easy to scan. */
+.vote-agreement {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.vote-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.vote-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.vote-chip.is-buy {
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: var(--green);
+}
+.vote-chip.is-sell {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: var(--red);
+}
+.vote-chip.is-hold {
+  color: var(--muted);
+}
+.vote-chip.is-wait {
+  color: var(--wait-ink);
+  background: var(--wait-soft);
+  border-color: var(--wait-ink);
+}
+.vote-result {
+  font-size: 12px;
+}
+.vote-details {
+  margin-top: 8px;
+}
+@media (max-width: 700px) {
+  .vote-agreement {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .vote-chips {
+    gap: 5px;
   }
 }
