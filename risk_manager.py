@@ -103,11 +103,18 @@ class RiskManager:
         self.persistence_path = Path(persistence_dir) / "open_positions.json"
         self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
         database_url = os.environ.get("DATABASE_URL", "").strip()
-        self.store = (
-            PostgresStateStore(database_url)
-            if database_url
-            else StateStore(self.persistence_path.parent / "bot_state.sqlite3")
-        )
+        sqlite_db_path = self.persistence_path.parent / "bot_state.sqlite3"
+        if database_url:
+            # Import before constructing the Postgres store so all state is present
+            # even when the platform's configured start command bypasses our CLI wrapper.
+            PostgresStateStore.migrate_from_sqlite(
+                database_url,
+                sqlite_db_path,
+                self.persistence_path.parent / "trades.jsonl",
+            )
+            self.store = PostgresStateStore(database_url)
+        else:
+            self.store = StateStore(sqlite_db_path)
 
         self.open_positions: dict[str, Position] = {}
         self.trade_history: list[TradeRecord] = []
