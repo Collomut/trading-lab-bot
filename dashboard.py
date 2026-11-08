@@ -15,6 +15,7 @@ import asyncio
 import logging
 import base64
 import hmac
+from datetime import datetime, timezone
 from pathlib import Path
 from aiohttp import web
 
@@ -676,7 +677,18 @@ class WebDashboard:
             store = self.bot.risk_manager.store
             market_events = store.list_events(limit, event_type="market_check")
             audit_events = store.list_events(limit, exclude_event_type="market_check")
-            events = sorted(market_events + audit_events, key=lambda item: item["id"], reverse=True)
+
+            def event_order(item):
+                try:
+                    value = str(item.get("created_at", "")).replace("Z", "+00:00")
+                    occurred_at = datetime.fromisoformat(value)
+                    if occurred_at.tzinfo is None:
+                        occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+                    return occurred_at.timestamp()
+                except (OverflowError, TypeError, ValueError):
+                    return 0.0
+
+            events = sorted(market_events + audit_events, key=event_order, reverse=True)
             payload = [{
                 "id": item["id"],
                 "type": item["event_type"],
