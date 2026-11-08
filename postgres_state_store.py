@@ -19,6 +19,12 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+
+def _executemany(conn, query, params):
+    """Run a batch using psycopg 3's cursor-level executemany API."""
+    with conn.cursor() as cursor:
+        cursor.executemany(query, params)
+
 def _conninfo_from_url(value: str) -> dict:
     """Parse PostgreSQL URIs without libpq's locale-dependent URI decoding."""
     value = value.strip()
@@ -232,20 +238,20 @@ class PostgresStateStore:
                 if existing:
                     raise RuntimeError("Supabase has unmarked data; refusing to merge or overwrite it")
 
-                conn.executemany(
+                _executemany(conn,
                     "INSERT INTO bot_private.schema_migrations(version,applied_at,description) VALUES(%s,%s,%s)",
                     [(row["version"], row["applied_at"], row["description"])
                      for row in sqlite_rows["schema_migrations"]],
                 )
-                conn.executemany(
+                _executemany(conn,
                     "INSERT INTO bot_private.state(key,value_json) VALUES(%s,%s::jsonb)",
                     [(row["key"], row["value_json"]) for row in sqlite_rows["state"]],
                 )
-                conn.executemany(
+                _executemany(conn,
                     "INSERT INTO bot_private.positions(symbol,value_json) VALUES(%s,%s::jsonb)",
                     [(row["symbol"], row["value_json"]) for row in sqlite_rows["positions"]],
                 )
-                conn.executemany("""
+                _executemany(conn,"""
                     INSERT INTO bot_private.order_intents
                     (client_order_id,symbol,side,amount,state,exchange_order_id,filled,average,
                      request_json,response_json,applied,created_at,updated_at)
@@ -255,12 +261,12 @@ class PostgresStateStore:
                        row["request_json"], row["response_json"], bool(row["applied"]),
                        row["created_at"], row["updated_at"])
                       for row in sqlite_rows["order_intents"]])
-                conn.executemany("""
+                _executemany(conn,"""
                     INSERT INTO bot_private.audit_events(id,event_type,details_json,created_at)
                     VALUES(%s,%s,%s::jsonb,%s)
                 """, [(row["id"], row["event_type"], row["details_json"], row["created_at"])
                       for row in sqlite_rows["audit_events"]])
-                conn.executemany("""
+                _executemany(conn,"""
                     INSERT INTO bot_private.trades(source_id,payload,created_at)
                     VALUES(%s,%s,%s)
                 """, [(source_id, Jsonb(payload), created_at)
