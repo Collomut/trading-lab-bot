@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from psycopg import sql
-from psycopg.errors import UndefinedTable
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -127,12 +126,15 @@ class PostgresStateStore:
         )
         try:
             with check_pool.connection() as conn:
-                try:
-                    marker = conn.execute(
+                exists = conn.execute(
+                    "SELECT to_regclass('bot_private.storage_migrations') AS table_name"
+                ).fetchone()["table_name"]
+                marker = (
+                    conn.execute(
                         "SELECT counts_json FROM bot_private.storage_migrations WHERE id=1"
                     ).fetchone()
-                except UndefinedTable:
-                    marker = None
+                    if exists else None
+                )
             if marker:
                 return {"status": "already_imported", "counts": marker["counts_json"],
                         "backup": "original SQLite and first-import backup retained"}
