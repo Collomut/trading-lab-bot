@@ -153,8 +153,8 @@ class RSI_Mean_Reversion_Strategy:
     """
     RSI Mean Reversion Strategy.
 
-    BUY when RSI drops below oversold level.
-    SELL when RSI rises above overbought level.
+    BUY only after RSI recovers upward through the pullback level.
+    SELL when RSI rises above the overbought level.
 
     Risk level: LOW
     """
@@ -225,9 +225,22 @@ class RSI_Mean_Reversion_Strategy:
                 reason=reason, indicators=indicators
             )
 
+        if current_rsi <= self.oversold:
+            hold_reason = (
+                f"RSI={current_rsi:.1f} oversold (below {self.oversold:.0f}); "
+                f"waiting for recovery above {self.pullback_recovery:.0f} before an RSI BUY vote"
+            )
+        elif current_rsi < self.pullback_recovery:
+            hold_reason = (
+                f"RSI={current_rsi:.1f} below recovery level {self.pullback_recovery:.0f}; "
+                "waiting for a confirmed recovery"
+            )
+        else:
+            hold_reason = f"RSI={current_rsi:.1f} neutral; no RSI threshold trigger"
+
         return TradeSignal(
             signal=Signal.HOLD, symbol=symbol, confidence=0.0,
-            reason=f"RSI={current_rsi:.1f} neutral",
+            reason=hold_reason,
             indicators=indicators
         )
 

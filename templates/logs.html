@@ -123,6 +123,7 @@
         voteLines.append(chip);
       }
       if(Object.keys(votes).length)card.append(voteLines);
+      if(votes.rsi?.reason)appendText(card,'p','log-reason',`RSI detail: ${votes.rsi.reason}`);
       const gates=d.indicators?.entry_gates;
       if(gates&&typeof gates==='object'){
         const gateLine=document.createElement('div');gateLine.className='log-gates';
