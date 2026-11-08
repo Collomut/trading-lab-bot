@@ -16,7 +16,7 @@ Railway files outside a mounted volume are ephemeral. The bot stores positions, 
 
 ## Implemented features (paper trading only)
 
-1. **Macro Trend Regime Filter**: Automatically vetoes BUY signals during downtrends (checks against 50/200-period EMA).
+1. **Macro Trend Regime Filter**: Automatically vetoes BUY signals during downtrends (checks against a fixed 50-period EMA).
 2. **Process-monitored exit thresholds**: The worker checks break-even and trailing thresholds, but these are not exchange-side orders and can fail during downtime or network errors.
 3. **ATR-Aware Sizing**: Calculates Average True Range (ATR) to avoid getting shaken out by normal market wicks.
 4. **Fixed Market-Regime Gate**: The combined strategy pauses new buys when ADX is below `MIN_TREND_ADX` or ATR exceeds `MAX_ATR_PCT`. It does not alter thresholds automatically; exits and SELL signals remain available.
@@ -130,5 +130,5 @@ This build intentionally blocks live trading even if `PAPER_TRADING=false`. Do n
 - Mount a Railway Volume at `/app/data` and set `DATA_DIR=/app/data`; otherwise SQLite state and logs can be lost on redeploy.
 - Keep a single Railway replica. SQLite on a mounted volume is not safe as shared state for multiple bot workers.
 - Use dedicated Binance Demo Mode keys when `PAPER_ENVIRONMENT=demo`; use Spot Testnet keys when `PAPER_ENVIRONMENT=testnet`. Never use live account keys for paper mode.
-- Demo Mode is a better execution rehearsal than Spot Testnet, but it does not prove profitability or guarantee live fills. The app reconciles configured asset balances and open orders, but it does not place exchange-side stop orders; local stop management is unavailable during an outage.
+- Demo Mode is a better execution rehearsal than Spot Testnet, but it does not prove profitability or guarantee live fills. The app reconciles configured asset balances and open orders and places an exchange-hosted market stop for each tracked position. The stop can still slip, be rejected, or become unavailable after exchange or network failures; process-monitored take-profit and trailing updates need the worker online.
 - Do not grant withdrawal permission to exchange API keys.

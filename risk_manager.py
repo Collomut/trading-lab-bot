@@ -36,6 +36,7 @@ class Position:
     order_id: str = ""
     stop_order_id: str = ""
     stop_client_order_id: str = ""
+    entry_fee_quote: float = 0.0
     highest_price: float = 0.0  # For trailing stop
     break_even_activated: bool = False
 
@@ -444,7 +445,8 @@ class RiskManager:
         entry_price: float,
         amount: float,
         order_id: str = "",
-        atr: float = 0.0
+        atr: float = 0.0,
+        entry_fee_quote: float = 0.0,
     ) -> Position:
         """Record and persist a new open position."""
         position = Position(
@@ -456,6 +458,7 @@ class RiskManager:
             stop_loss_price=self.calculate_stop_loss(entry_price, atr),
             take_profit_price=self.calculate_take_profit(entry_price),
             order_id=order_id,
+            entry_fee_quote=max(0.0, float(entry_fee_quote)),
             highest_price=entry_price,
             break_even_activated=False,
         )
@@ -519,7 +522,7 @@ class RiskManager:
             return None
 
         gross_pnl = position.unrealized_pnl(exit_price)
-        total_fee = max(0.0, float(fee_cost))
+        total_fee = position.entry_fee_quote + max(0.0, float(fee_cost))
         pnl = gross_pnl - total_fee
         total_cost = position.entry_price * position.amount
         pnl_pct = (pnl / total_cost * 100) if total_cost > 0 else 0.0

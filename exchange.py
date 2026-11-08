@@ -150,6 +150,24 @@ def filter_closed_ohlcv(candles: list, timeframe_seconds: float, now_ms: int | N
     return list(deduplicated.values())
 
 
+def validate_candle_sequence(candles: list, timeframe_seconds: float, now_ms: int | None = None) -> list:
+    """Reject gaps or stale latest bars rather than calculating signals on incomplete history."""
+    if not candles or not math.isfinite(timeframe_seconds) or timeframe_seconds <= 0:
+        return []
+    ordered = sorted(candles, key=lambda row: row[0])
+    duration_ms = int(timeframe_seconds * 1000)
+    if duration_ms <= 0 or any(
+        ordered[index][0] - ordered[index - 1][0] != duration_ms
+        for index in range(1, len(ordered))
+    ):
+        return []
+    now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    latest_close = ordered[-1][0] + duration_ms
+    if now - latest_close > duration_ms * 2 or latest_close > now + 2000:
+        return []
+    return ordered
+
+
 class ExchangeConnector:
     """Manages the connection to a cryptocurrency exchange via ccxt."""
 
@@ -597,7 +615,11 @@ class ExchangeConnector:
         except (AttributeError, TypeError, ValueError) as exc:
             logger.error("Cannot determine candle duration for %s: %s", timeframe, exc)
             return []
-        return filter_closed_ohlcv(candles, seconds)
+        closed = filter_closed_ohlcv(candles, seconds)
+        sequence = validate_candle_sequence(closed, seconds)
+        if not sequence:
+            logger.warning("Closed candle data for %s is stale, discontinuous, or invalid", symbol)
+        return sequence
 
     def get_ticker(self, symbol: str) -> dict | None:
         """Get current ticker data (price, volume, etc.). Returns None on failure."""
@@ -609,7 +631,7 @@ class ExchangeConnector:
                 return None
 
     def get_current_price(self, symbol: str) -> float | None:
-        """Get the current price of a trading pair; returns None if price is unavailable or invalid (F-07)."""
+        """Get a fresh finite positive ticker price, rejecting missing/stale exchange timestamps."""
         ticker = self.get_ticker(symbol)
         if not ticker or not isinstance(ticker, dict):
             return None
@@ -618,8 +640,18 @@ class ExchangeConnector:
             return None
         try:
             val = float(last)
+            timestamp = ticker.get("timestamp")
+            if timestamp is None and ticker.get("datetime"):
+                timestamp = self.exchange.parse8601(ticker["datetime"])
+            if timestamp is None:
+                return None
+            timestamp = int(timestamp)
+            age_ms = int(time.time() * 1000) - timestamp
+            if age_ms < -5000 or age_ms > 120_000:
+                logger.warning("Ticker for %s is outside the freshness window", symbol)
+                return None
             return val if math.isfinite(val) and val > 0 else None
-        except (TypeError, ValueError):
+        except (AttributeError, TypeError, ValueError, OverflowError):
             return None
 
     def place_market_buy(self, symbol: str, amount, client_order_id: str | None = None) -> dict | None:

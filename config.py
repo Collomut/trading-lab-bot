@@ -11,6 +11,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool, *, strict: bool = False) -> bool:
+    """Parse environment booleans without silently mapping typos to live mode."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    accepted = {"true": True, "false": False} if strict else {
+        "true": True, "false": False, "1": True, "0": False, "yes": True, "no": False,
+    }
+    if value not in accepted:
+        allowed = "true or false" if strict else "true/false, 1/0, or yes/no"
+        raise ValueError(f"{name} must be {allowed}; got an invalid boolean value")
+    return accepted[value]
+
+
 @dataclass
 class ExchangeConfig:
     """Exchange connection settings."""
@@ -19,10 +34,10 @@ class ExchangeConfig:
     api_secret: str = os.getenv("API_SECRET", "")
     demo_api_key: str = os.getenv("DEMO_API_KEY", "")
     demo_api_secret: str = os.getenv("DEMO_API_SECRET", "")
-    paper_trading: bool = os.getenv("PAPER_TRADING", "true").lower() == "true"
+    paper_trading: bool = field(default_factory=lambda: _env_bool("PAPER_TRADING", True, strict=True))
     paper_environment: str = os.getenv("PAPER_ENVIRONMENT", "testnet").strip().lower()
-    fallback_to_simulation: bool = os.getenv("FALLBACK_TO_SIMULATION", "true").lower() == "true"
-    allow_live_trading: bool = os.getenv("ALLOW_LIVE_TRADING", "false").lower() == "true"
+    fallback_to_simulation: bool = field(default_factory=lambda: _env_bool("FALLBACK_TO_SIMULATION", True))
+    allow_live_trading: bool = field(default_factory=lambda: _env_bool("ALLOW_LIVE_TRADING", False))
 
 
 @dataclass
@@ -36,7 +51,7 @@ class RiskConfig:
     position_size_pct: float = float(os.getenv("POSITION_SIZE_PCT", "10.0"))
     max_rolling_drawdown_pct: float = float(os.getenv("MAX_ROLLING_DRAWDOWN_PCT", "5.0"))
     max_consecutive_losses: int = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3"))
-    start_paused: bool = os.getenv("START_PAUSED", "false").lower() in ("true", "1", "yes")
+    start_paused: bool = field(default_factory=lambda: _env_bool("START_PAUSED", False))
 
 
 @dataclass
@@ -45,7 +60,7 @@ class StrategyConfig:
     name: str = os.getenv("STRATEGY", "combined")
     timeframe: str = os.getenv("TIMEFRAME", "15m")
     lookback_candles: int = int(os.getenv("LOOKBACK_CANDLES", "100"))
-    regime_filter_enabled: bool = os.getenv("REGIME_FILTER_ENABLED", "true").lower() == "true"
+    regime_filter_enabled: bool = field(default_factory=lambda: _env_bool("REGIME_FILTER_ENABLED", True))
     min_trend_adx: float = float(os.getenv("MIN_TREND_ADX", "18"))
     max_atr_pct: float = float(os.getenv("MAX_ATR_PCT", "3.0"))
     trading_pairs: list = field(default_factory=lambda: os.getenv(
@@ -61,7 +76,7 @@ class BotConfig:
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     log_file: str = os.getenv("LOG_FILE", "logs/trading_bot.log")
-    enable_notifications: bool = os.getenv("ENABLE_NOTIFICATIONS", "true").lower() == "true"
+    enable_notifications: bool = field(default_factory=lambda: _env_bool("ENABLE_NOTIFICATIONS", True))
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     smtp_host: str = os.getenv("SMTP_HOST", "")
@@ -95,6 +110,12 @@ class BotConfig:
         if not isinstance(self.risk.max_consecutive_losses, int) or isinstance(self.risk.max_consecutive_losses, bool):
             errors.append("MAX_CONSECUTIVE_LOSSES must be an integer")
 
+        if not isinstance(self.exchange.paper_trading, bool):
+            errors.append("PAPER_TRADING must be a boolean parsed from true or false")
+        if not isinstance(self.exchange.fallback_to_simulation, bool):
+            errors.append("FALLBACK_TO_SIMULATION must be a boolean")
+        if not isinstance(self.exchange.allow_live_trading, bool):
+            errors.append("ALLOW_LIVE_TRADING must be a boolean")
         if self.exchange.paper_trading:
             if self.exchange.paper_environment not in {"testnet", "demo", "simulated"}:
                 errors.append("PAPER_ENVIRONMENT must be either 'testnet', 'demo', or 'simulated'")

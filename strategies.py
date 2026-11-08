@@ -6,7 +6,7 @@ and produces BUY/SELL/HOLD signals. All strategies prioritize
 capital preservation over aggressive gains.
 
 Upgraded features:
-  - 200 EMA Macro Trend Filter (never buy in a downtrend)
+  - 50 EMA trend filter (buy entries only when sufficient history exists)
   - ATR (Average True Range) volatility calculation for dynamic risk
   - Volume Confirmation Filter (avoids low-liquidity fakeouts)
 """
@@ -324,13 +324,12 @@ class MACD_Strategy:
 
 class CombinedStrategy:
     """
-    Institutional-grade conservative strategy:
-      1. Macro Trend Filter (EMA 200 or EMA 50): only buy in uptrend.
+    Combined rules-based strategy:
+      1. Fixed 50-period EMA trend filter: only buy in uptrend.
       2. Multi-indicator consensus: 2/3 agreement across EMA, RSI, MACD.
       3. Volume confirmation: rejects low-volume false breaks.
       4. Dynamic ATR calculation for volatility-adaptive stops.
 
-    Risk level: LOWEST / CONSERVATIVE
     """
 
     def __init__(
@@ -412,22 +411,27 @@ class CombinedStrategy:
             if not volume_ok else "Volume filter passes"
         )
 
-        # Trend filter (EMA 50 or 200)
+        # Fixed EMA period; never shrink the trend rule when history is short.
         trend_ok_for_buy = True
         trend_reason = ""
         trend_val = None
 
-        effective_trend_period = min(self.trend_period, len(df) - 1)
-        if self.use_trend_filter and effective_trend_period >= 20:
-            trend_ind = EMAIndicator(close=df["close"], window=effective_trend_period)
-            df["ema_trend"] = trend_ind.ema_indicator()
-            trend_val = df["ema_trend"].iloc[-1]
-            current_close = df["close"].iloc[-1]
+        if self.use_trend_filter:
+            if len(df) < self.trend_period:
+                trend_ok_for_buy = False
+                trend_reason = f"Trend filter unavailable: need {self.trend_period} completed candles"
+            else:
+                trend_ind = EMAIndicator(close=df["close"], window=self.trend_period)
+                df["ema_trend"] = trend_ind.ema_indicator()
+                trend_val = df["ema_trend"].iloc[-1]
+                current_close = df["close"].iloc[-1]
 
-            if not pd.isna(trend_val):
-                if current_close < trend_val:
+                if pd.isna(trend_val):
                     trend_ok_for_buy = False
-                    trend_reason = f"Downtrend filter: Price ${current_close:,.2f} < EMA{effective_trend_period} ${trend_val:,.2f}"
+                    trend_reason = "Trend filter unavailable; buy entry blocked"
+                elif current_close < trend_val:
+                    trend_ok_for_buy = False
+                    trend_reason = f"Downtrend filter: Price ${current_close:,.2f} < EMA{self.trend_period} ${trend_val:,.2f}"
 
         # Run sub-strategies
         signals = [

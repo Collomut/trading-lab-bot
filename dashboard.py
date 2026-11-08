@@ -25,6 +25,9 @@ from risk_manager import RiskManager
 from bot_engine import TradingBot
 
 logger = logging.getLogger("bot.dashboard")
+_LOGIN_FAILURES: dict[str, list[float]] = {}
+_LOGIN_WINDOW_SECONDS = 900
+_LOGIN_MAX_FAILURES = 5
 
 
 LOGIN_HTML = """<!doctype html>
@@ -81,12 +84,9 @@ if (params.get('error')) {
 
 def verify_token(request, token: str) -> bool:
     if not token:
-        return True
+        return False
     cookie_token = request.cookies.get("dashboard_token", "")
     if cookie_token and hmac.compare_digest(cookie_token, token):
-        return True
-    query_token = request.query.get("token", "")
-    if query_token and hmac.compare_digest(query_token, token):
         return True
     header_token = request.headers.get("X-Dashboard-Token", "")
     if header_token and hmac.compare_digest(header_token, token):
@@ -108,6 +108,18 @@ def verify_token(request, token: str) -> bool:
     return False
 
 
+def _is_same_origin(request) -> bool:
+    origin = request.headers.get("Origin", "")
+    referer = request.headers.get("Referer", "")
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+    request_origin = f"{forwarded_proto or request.scheme}://{request.host}".rstrip("/")
+    if origin:
+        return hmac.compare_digest(origin.rstrip("/"), request_origin)
+    if referer:
+        return referer.rstrip("/").startswith(request_origin + "/") or hmac.compare_digest(referer.rstrip("/"), request_origin)
+    return False
+
+
 @web.middleware
 async def dashboard_auth(request, handler):
     """Protect all dashboard data and controls with flexible token authentication."""
@@ -118,9 +130,10 @@ async def dashboard_auth(request, handler):
             path.startswith("/health/")):
         return await handler(request)
 
+    if not token:
+        return web.json_response({"error": "Dashboard access is disabled: DASHBOARD_TOKEN is not configured"}, status=503)
+
     authenticated = verify_token(request, token)
-    query_token = request.query.get("token", "")
-    used_query_token = query_token and token and hmac.compare_digest(query_token, token)
 
     if not authenticated:
         if path.startswith("/api/"):
@@ -139,9 +152,9 @@ async def dashboard_auth(request, handler):
             }
         )
 
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and request.cookies.get("dashboard_token") and not _is_same_origin(request):
+        return web.json_response({"error": "Same-origin request required"}, status=403)
     response = await handler(request)
-    if used_query_token:
-        response.set_cookie("dashboard_token", token, max_age=30 * 86400, path="/", httponly=True, samesite="Lax")
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -315,27 +328,32 @@ class WebDashboard:
 
     @staticmethod
     def _is_valid_origin(request) -> bool:
-        origin = request.headers.get("Origin", "")
-        referer = request.headers.get("Referer", "")
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
-        request_origin = f"{forwarded_proto or request.scheme}://{request.host}".rstrip("/")
-        if origin and hmac.compare_digest(origin.rstrip("/"), request_origin):
-            return True
-        if referer and referer.rstrip("/").startswith(request_origin):
-            return True
-        token = os.getenv("DASHBOARD_TOKEN", "")
-        if verify_token(request, token):
-            return True
-        return False
+        return _is_same_origin(request)
+
+    @staticmethod
+    def _secure_cookie(request) -> bool:
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
+        return forwarded_proto == "https" or request.scheme == "https"
 
     async def handle_login(self, request):
         token = os.getenv("DASHBOARD_TOKEN", "")
+        if not token:
+            raise web.HTTPServiceUnavailable(text="Dashboard access is disabled: DASHBOARD_TOKEN is not configured")
+        now = time.monotonic()
+        ip = request.remote or "unknown"
+        failures = [stamp for stamp in _LOGIN_FAILURES.get(ip, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
+        _LOGIN_FAILURES[ip] = failures
+        if len(failures) >= _LOGIN_MAX_FAILURES:
+            raise web.HTTPTooManyRequests(text="Too many login attempts; try again later")
         data = await request.post()
         submitted = data.get("token", "").strip()
         if token and hmac.compare_digest(submitted, token):
+            _LOGIN_FAILURES.pop(ip, None)
             resp = web.HTTPFound("/")
-            resp.set_cookie("dashboard_token", token, max_age=30 * 86400, path="/", httponly=True, samesite="Lax")
+            resp.set_cookie("dashboard_token", token, max_age=12 * 3600, path="/", httponly=True, secure=self._secure_cookie(request), samesite="Strict")
             return resp
+        failures.append(now)
+        _LOGIN_FAILURES[ip] = failures
         return web.HTTPFound("/?error=1")
 
     async def handle_logout(self, request):

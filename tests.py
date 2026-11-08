@@ -28,6 +28,7 @@ import threading
 import unittest
 from contextlib import closing, redirect_stdout
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -48,6 +49,7 @@ from exchange import (
     account_access_message,
     extract_ccxt_response_metadata,
     filter_closed_ohlcv,
+    validate_candle_sequence,
 )
 from main import run_backtest
 from risk_manager import Position, RiskManager
@@ -347,6 +349,18 @@ class TestTechnicalIndicatorsAndStrategies(unittest.TestCase):
         sig = strat.analyze(df, "BTC/USDT")
         self.assertEqual(sig.signal, Signal.HOLD)
         self.assertIn("BUY BLOCKED by Downtrend filter", sig.reason)
+
+    def test_combined_strategy_does_not_shrink_ema_when_history_is_short(self):
+        strat = CombinedStrategy(use_trend_filter=True, trend_period=50, regime_filter_enabled=False)
+        prices = [100.0 + i for i in range(40)]
+        df = pd.DataFrame({"close": prices, "open": prices, "high": [p + 1 for p in prices],
+                           "low": [p - 1 for p in prices], "volume": [1000.0] * len(prices)})
+        strat.ema.analyze = lambda d, s: TradeSignal(Signal.BUY, s, 0.8, "buy", {})
+        strat.rsi.analyze = lambda d, s: TradeSignal(Signal.BUY, s, 0.8, "buy", {})
+        strat.macd.analyze = lambda d, s: TradeSignal(Signal.HOLD, s, 0.0, "hold", {})
+        signal = strat.analyze(df, "BTC/USDT")
+        self.assertEqual(signal.signal, Signal.HOLD)
+        self.assertIn("need 50 completed candles", signal.reason)
 
     def test_combined_strategy_volume_filter_blocks_buy(self):
         strat = CombinedStrategy(use_trend_filter=False, regime_filter_enabled=False)
@@ -770,6 +784,14 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0][0], now - 60_000)
 
+    def test_candle_sequence_rejects_gaps_and_stale_history(self):
+        now = 1_800_000_000_000
+        continuous = [[now - 180_000, 1, 2, 1, 2, 3], [now - 120_000, 2, 3, 2, 3, 4]]
+        gap = [continuous[0], [now - 60_000, 3, 4, 3, 4, 5]]
+        self.assertEqual(len(validate_candle_sequence(continuous, 60, now_ms=now)), 2)
+        self.assertEqual(validate_candle_sequence(gap, 60, now_ms=now), [])
+        self.assertEqual(validate_candle_sequence(continuous, 60, now_ms=now + 600_000), [])
+
     def test_closed_candle_return_correlation_is_aligned_by_timestamp(self):
         candles_a, candles_b = [], []
         for i in range(40):
@@ -968,8 +990,13 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         conn.exchange.fetch_ticker.return_value = {"last": float("nan")}
         self.assertIsNone(conn.get_current_price("BTC/USDT"))
 
-        conn.exchange.fetch_ticker.return_value = {"last": 52100.50}
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        conn.exchange.fetch_ticker.return_value = {"last": 52100.50, "timestamp": now_ms}
         self.assertEqual(conn.get_current_price("BTC/USDT"), 52100.50)
+        conn.exchange.fetch_ticker.return_value = {"last": 52100.50}
+        self.assertIsNone(conn.get_current_price("BTC/USDT"))
+        conn.exchange.fetch_ticker.return_value = {"last": 52100.50, "timestamp": now_ms - 180_000}
+        self.assertIsNone(conn.get_current_price("BTC/USDT"))
 
 
 # ==============================================================================
@@ -993,12 +1020,40 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         self.assertFalse(TradingBot._confirmed_full_fill({"status": "closed", "filled": 0.5}, 1.0))
         self.assertFalse(TradingBot._confirmed_full_fill({"status": "closed", "filled": None}, 1.0))
 
+    def test_post_fill_stop_risk_includes_fee_and_enforces_cap(self):
+        risk, within_cap = TradingBot._post_fill_stop_risk(1, 102, 100, 1, 3)
+        self.assertEqual(risk, Decimal("3"))
+        self.assertTrue(within_cap)
+        risk, within_cap = TradingBot._post_fill_stop_risk(1, 103, 100, 1, 3)
+        self.assertEqual(risk, Decimal("4"))
+        self.assertFalse(within_cap)
+        self.assertEqual(TradingBot._post_fill_stop_risk(1, 99, 100, 0, 3), (None, False))
+
     def test_base_asset_fee_is_removed_from_tracked_fill_quantity(self):
         net = TradingBot._net_base_filled({
             "filled": "1.000", "fees": [{"currency": "BTC", "cost": "0.001"}],
         }, "BTC/USDT")
         self.assertEqual(str(net), "0.999")
         self.assertIsNone(TradingBot._net_base_filled({"filled": "1.0"}, "BTC/USDT"))
+
+    def test_fee_accounting_converts_base_and_quote_but_rejects_unknown_asset(self):
+        self.assertAlmostEqual(TradingBot._fee_quote_cost(
+            {"fees": [{"currency": "BTC", "cost": "0.001"}]}, "BTC/USDT", 50000
+        ), 50.0)
+        self.assertAlmostEqual(TradingBot._fee_quote_cost(
+            {"fee": {"currency": "USDT", "cost": "2.5"}}, "BTC/USDT", 50000
+        ), 2.5)
+        self.assertIsNone(TradingBot._fee_quote_cost(
+            {"fee": {"currency": "BNB", "cost": "0.01"}}, "BTC/USDT", 50000
+        ))
+
+    def test_entry_and_exit_fees_are_both_counted_in_realized_pnl(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.open_position("BTC/USDT", 100.0, 1.0, entry_fee_quote=1.0)
+            record = rm.close_position("BTC/USDT", 110.0, "test", fee_cost=2.0)
+            self.assertEqual(record.fee, 3.0)
+            self.assertEqual(record.pnl, 7.0)
 
     def test_corrupt_position_state_halts_new_entries(self):
         with TemporaryDirectory() as persistence_dir:
@@ -1266,6 +1321,21 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             bot.exchange.place_native_stop_loss.assert_called_with("BTC/USDT", 0.01, 50000.0, pos.stop_client_order_id)
             self.assertEqual(pos.stop_order_id, "new_tighter_stop_id")
 
+    def test_trailing_stop_sync_recovers_ambiguous_create_response(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.cancel_order.return_value = True
+            bot.exchange.place_native_stop_loss.side_effect = RuntimeError("request timed out after exchange accepted order")
+            bot.exchange.fetch_order_by_client_id.return_value = {"id": "recovered-stop", "status": "open"}
+            pos = bot.risk_manager.open_position("BTC/USDT", 100.0, 1.0, order_id="buy_1")
+            pos.stop_order_id = "old-stop"
+            bot.risk_manager._save_positions()
+            self.assertTrue(bot._sync_exchange_stop("BTC/USDT"))
+            self.assertEqual(pos.stop_order_id, "recovered-stop")
+
     def test_f13_emergency_stop_cancels_only_bot_orders(self):
         """F-13: Emergency stop cancels bot-owned orders and leaves user orders untouched."""
         with TemporaryDirectory() as persistence_dir:
@@ -1406,6 +1476,9 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
         # 5. Invalid Token
         req_bad = make_mocked_request("GET", "/api/status", headers={"Authorization": "Bearer wrong"})
         self.assertFalse(verify_token(req_bad, "secret123"))
+        req_query = make_mocked_request("GET", "/api/status?token=secret123")
+        self.assertFalse(verify_token(req_query, "secret123"))
+        self.assertFalse(verify_token(req_bearer, ""))
 
     def test_csrf_same_origin_validation(self):
         with patch.dict(os.environ, {"DASHBOARD_TOKEN": "secret123"}):
@@ -1463,6 +1536,12 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
 # ==============================================================================
 # 8. Templates, Wording Safety & Mobile UX Suite
 # ==============================================================================
+
+class TestDashboardAuthMiddleware(unittest.TestCase):
+    def test_auth_helpers_reject_unconfigured_and_query_tokens(self):
+        req = make_mocked_request("GET", "/api/status?token=secret123")
+        self.assertFalse(verify_token(req, ""))
+        self.assertFalse(verify_token(req, "secret123"))
 
 class TestTemplatesWordingAndMobileUx(unittest.TestCase):
     """Verifies plain-English wording, absence of misleading claims, glossary clarity, and mobile UI responsiveness."""
