@@ -196,50 +196,68 @@ class PostgresStateStore:
 
                 existing = conn.execute("""
                     SELECT
+                      (SELECT COUNT(*) FROM bot_private.schema_migrations) +
                       (SELECT COUNT(*) FROM bot_private.state) +
                       (SELECT COUNT(*) FROM bot_private.positions) +
                       (SELECT COUNT(*) FROM bot_private.order_intents) +
                       (SELECT COUNT(*) FROM bot_private.audit_events) +
-                      (SELECT COUNT(*) FROM bot_private.trades) AS n
+                      (SELECT COUNT(*) FROM bot_private.trades) +
+                      (SELECT COUNT(*) FROM bot_private.storage_migrations) AS n
                 """).fetchone()["n"]
                 if existing:
                     raise RuntimeError("Supabase has unmarked data; refusing to merge or overwrite it")
 
-                for row in sqlite_rows["schema_migrations"]:
-                    conn.execute(
-                        "INSERT INTO bot_private.schema_migrations(version,applied_at,description) VALUES(%s,%s,%s)",
-                        (row["version"], row["applied_at"], row["description"]),
-                    )
-                for row in sqlite_rows["state"]:
-                    conn.execute(
-                        "INSERT INTO bot_private.state(key,value_json) VALUES(%s,%s::jsonb)",
-                        (row["key"], row["value_json"]),
-                    )
-                for row in sqlite_rows["positions"]:
-                    conn.execute(
-                        "INSERT INTO bot_private.positions(symbol,value_json) VALUES(%s,%s::jsonb)",
-                        (row["symbol"], row["value_json"]),
-                    )
-                for row in sqlite_rows["order_intents"]:
-                    conn.execute("""
-                        INSERT INTO bot_private.order_intents
-                        (client_order_id,symbol,side,amount,state,exchange_order_id,filled,average,
-                         request_json,response_json,applied,created_at,updated_at)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s)
-                    """, (row["client_order_id"], row["symbol"], row["side"], row["amount"],
-                          row["state"], row["exchange_order_id"], row["filled"], row["average"],
-                          row["request_json"], row["response_json"], bool(row["applied"]),
-                          row["created_at"], row["updated_at"]))
-                for row in sqlite_rows["audit_events"]:
-                    conn.execute("""
-                        INSERT INTO bot_private.audit_events(id,event_type,details_json,created_at)
-                        VALUES(%s,%s,%s::jsonb,%s)
-                    """, (row["id"], row["event_type"], row["details_json"], row["created_at"]))
-                for source_id, payload, created_at in trade_rows:
-                    conn.execute("""
-                        INSERT INTO bot_private.trades(source_id,payload,created_at)
-                        VALUES(%s,%s,%s)
-                    """, (source_id, Jsonb(payload), created_at))
+                conn.executemany(
+                    "INSERT INTO bot_private.schema_migrations(version,applied_at,description) VALUES(%s,%s,%s)",
+                    [(row["version"], row["applied_at"], row["description"])
+                     for row in sqlite_rows["schema_migrations"]],
+                )
+                conn.executemany(
+                    "INSERT INTO bot_private.state(key,value_json) VALUES(%s,%s::jsonb)",
+                    [(row["key"], row["value_json"]) for row in sqlite_rows["state"]],
+                )
+                conn.executemany(
+                    "INSERT INTO bot_private.positions(symbol,value_json) VALUES(%s,%s::jsonb)",
+                    [(row["symbol"], row["value_json"]) for row in sqlite_rows["positions"]],
+                )
+                conn.executemany("""
+                    INSERT INTO bot_private.order_intents
+                    (client_order_id,symbol,side,amount,state,exchange_order_id,filled,average,
+                     request_json,response_json,applied,created_at,updated_at)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s)
+                """, [(row["client_order_id"], row["symbol"], row["side"], row["amount"],
+                       row["state"], row["exchange_order_id"], row["filled"], row["average"],
+                       row["request_json"], row["response_json"], bool(row["applied"]),
+                       row["created_at"], row["updated_at"])
+                      for row in sqlite_rows["order_intents"]])
+                conn.executemany("""
+                    INSERT INTO bot_private.audit_events(id,event_type,details_json,created_at)
+                    VALUES(%s,%s,%s::jsonb,%s)
+                """, [(row["id"], row["event_type"], row["details_json"], row["created_at"])
+                      for row in sqlite_rows["audit_events"]])
+                conn.executemany("""
+                    INSERT INTO bot_private.trades(source_id,payload,created_at)
+                    VALUES(%s,%s,%s)
+                """, [(source_id, Jsonb(payload), created_at)
+                      for source_id, payload, created_at in trade_rows])
+
+                expected = {
+                    "schema_migrations": counts["schema_migrations"],
+                    "state": counts["state"],
+                    "positions": counts["positions"],
+                    "order_intents": counts["order_intents"],
+                    "audit_events": counts["audit_events"],
+                    "trades": counts["trades"],
+                }
+                actual = {}
+                for table in expected:
+                    actual[table] = conn.execute(
+                        sql.SQL("SELECT COUNT(*) AS n FROM bot_private.{}").format(
+                            sql.Identifier(table)
+                        )
+                    ).fetchone()["n"]
+                if actual != expected:
+                    raise RuntimeError("Imported row counts did not match source; transaction aborted")
                 conn.execute("""
                     SELECT setval(pg_get_serial_sequence('bot_private.audit_events','id'),
                                   GREATEST(COALESCE((SELECT MAX(id) FROM bot_private.audit_events),1),1),
