@@ -97,10 +97,13 @@ class TradingBot:
         self.trade_log_path = log_dir / "trades.jsonl"
 
     def _log_trade(self, trade_data: dict):
-        """Append a trade record to the JSON trade log."""
+        """Persist trade history to PostgreSQL when enabled and keep a volume copy."""
         trade_data["timestamp"] = datetime.now(timezone.utc).isoformat()
+        append_trade = getattr(self.risk_manager.store, "append_trade", None)
+        if callable(append_trade):
+            append_trade(trade_data)
         with open(self.trade_log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(trade_data) + "\n")
+            f.write(json.dumps(trade_data, allow_nan=False) + "\n")
 
     def _send_telegram_notification(self, message: str):
         """Send notification to Telegram bot."""

@@ -114,6 +114,14 @@ TELEGRAM_CHAT_ID=
 
 ---
 
+## Supabase / Postgres persistence
+
+SQLite remains the default when `DATABASE_URL` is empty. To cut over, set `DATABASE_URL` as a Railway secret to a Supabase **direct** PostgreSQL URL (if Railway has IPv6 access) or **Session Pooler** URL (port 5432). The Transaction Pooler is rejected. Keep the URL server-side; do not add it to GitHub, dashboard responses, or chat.
+
+When `DATABASE_URL` is configured, Railway runs `migrate_sqlite_to_postgres.py` before the app starts. The importer takes a consistent SQLite backup on the mounted Railway volume, copies schema migrations, positions, risk state, order intents, audit events, and JSONL trade history in one Postgres transaction, and records a one-time import marker. It refuses an incomplete SQLite schema, malformed trade-history rows, or unmarked existing Postgres data. It never deletes the source SQLite file or JSONL log. If the import or database connection fails, the app does not start, so it cannot silently trade using a fresh/empty Postgres database.
+
+Postgres tables are in the private `bot_private` schema and are accessed only over the server-side database connection. The app keeps the volume-mounted SQLite file and JSONL log as rollback evidence. Use one Railway replica and no deployment overlap during the cutover; the existing order reconciliation must pass before entries can resume. A successful import does not itself prove account reconciliation, strategy profitability, or live-market readiness.
+
 ## Live trading
 
 This build intentionally blocks live trading even if `PAPER_TRADING=false`. Do not bypass that guard. A future live-capable version would first need exchange-side protective orders, order/fill reconciliation, durable transactional storage, reliable kill switches, robust out-of-sample evaluation, and a separately reviewed operational runbook. Testnet and paper trading do not guarantee live execution behavior.

@@ -11,12 +11,14 @@ Upgraded features:
 
 import json
 import logging
+import os
 import math
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from config import RiskConfig
 from state_store import StateStore
+from postgres_state_store import PostgresStateStore
 
 logger = logging.getLogger("bot.risk")
 
@@ -100,7 +102,12 @@ class RiskManager:
         self.config = config
         self.persistence_path = Path(persistence_dir) / "open_positions.json"
         self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
-        self.store = StateStore(self.persistence_path.parent / "bot_state.sqlite3")
+        database_url = os.environ.get("DATABASE_URL", "").strip()
+        self.store = (
+            PostgresStateStore(database_url)
+            if database_url
+            else StateStore(self.persistence_path.parent / "bot_state.sqlite3")
+        )
 
         self.open_positions: dict[str, Position] = {}
         self.trade_history: list[TradeRecord] = []
