@@ -1355,6 +1355,20 @@ class TradingBot:
                 "amount": str(net_amount), "pnl_before_fees": record.pnl,
             }
             self.risk_manager.store.write_state("testnet_smoke_trade", result)
+            # Smoke orders validate exchange order handling, not the trading
+            # strategy. Keep them out of strategy P&L/history, but make the
+            # completed round-trip visible in the dashboard activity log.
+            try:
+                self.risk_manager.store.append_event("testnet_smoke_trade_completed", {
+                    "symbol": symbol,
+                    "amount": str(net_amount),
+                    "buy_price": fill_price,
+                    "sell_price": sell_price,
+                    "pnl_before_fees": record.pnl,
+                    "recovered_from_saved_result": False,
+                })
+            except Exception:
+                logger.exception("Testnet smoke trade completed but its activity event could not be saved")
             return result
         finally:
             self._cycle_lock.release()

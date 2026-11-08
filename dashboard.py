@@ -648,6 +648,20 @@ class WebDashboard:
             return {"message": "Account reconciliation failed; new entries remained blocked."}
         if event_type == "emergency_stop_review_acknowledged":
             return {"message": "Emergency-stop review acknowledged."}
+        if event_type == "testnet_smoke_trade_completed":
+            recovered = details.get("recovered_from_saved_result") is True
+            return {
+                "symbol": str(details.get("symbol", ""))[:32],
+                "amount": str(details.get("amount", ""))[:80],
+                "buy_price": str(details.get("buy_price", ""))[:80],
+                "sell_price": str(details.get("sell_price", ""))[:80],
+                "pnl_before_fees": str(details.get("pnl_before_fees", ""))[:80],
+                "message": (
+                    "Recovered from the saved completed Testnet check; excluded from strategy performance."
+                    if recovered else
+                    "Testnet order-path check completed; excluded from strategy performance."
+                ),
+            }
         if event_type == "testnet_reset_recovery":
             return {"message": "Testnet state reset was recorded; review the operator recovery notes."}
         return {}
