@@ -11,12 +11,37 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+
+def _conninfo_from_url(value: str) -> dict:
+    """Parse PostgreSQL URIs without libpq's locale-dependent URI decoding."""
+    value = value.strip()
+    if value.lower().startswith(("postgresql://", "postgres://")):
+        parsed = urlsplit(value)
+        if not parsed.hostname or parsed.username is None or parsed.password is None:
+            raise ValueError("DATABASE_URL must be a complete PostgreSQL connection URI")
+        if parsed.fragment:
+            raise ValueError("DATABASE_URL contains an unescaped reserved character; percent-encode the password")
+        try:
+            port = parsed.port or 5432
+            conninfo = {
+                "host": parsed.hostname,
+                "port": str(port),
+                "dbname": unquote(parsed.path.lstrip("/"), encoding="utf-8", errors="strict"),
+                "user": unquote(parsed.username, encoding="utf-8", errors="strict"),
+                "password": unquote(parsed.password, encoding="utf-8", errors="strict"),
+            }
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ValueError("DATABASE_URL contains malformed URI encoding") from exc
+        conninfo.update(dict(parse_qsl(parsed.query, keep_blank_values=True)))
+        return conninfo
+    return conninfo_to_dict(value)
 
 
 class PostgresStateStore:
@@ -34,7 +59,7 @@ class PostgresStateStore:
     def __init__(self, database_url: str, *, require_import: bool = True):
         if not database_url:
             raise ValueError("DATABASE_URL is required")
-        conninfo = conninfo_to_dict(database_url)
+        conninfo = _conninfo_from_url(database_url)
         if str(conninfo.get("port", "5432")) == "6543":
             raise ValueError("Supabase transaction pooler is not supported; use direct or session mode")
         conninfo.setdefault("sslmode", "require")
@@ -115,7 +140,7 @@ class PostgresStateStore:
         if not source.is_file():
             raise FileNotFoundError("SQLite source database is missing; import was not attempted")
         # Repeated deploys must not create backups or re-import once cutover succeeded.
-        conninfo = conninfo_to_dict(database_url)
+        conninfo = _conninfo_from_url(database_url)
         if str(conninfo.get("port", "5432")) == "6543":
             raise ValueError("Supabase transaction pooler is not supported; use direct or session mode")
         conninfo.setdefault("sslmode", "require")
