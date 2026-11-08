@@ -472,6 +472,12 @@ class CombinedStrategy:
             for name, item in zip(("ema", "rsi", "macd"), signals)
         }
         all_indicators["consensus_required"] = 2
+        buy_candidate = len(buy_signals) >= 2
+        all_indicators["buy_candidate"] = buy_candidate
+        all_indicators["buy_candidate_votes"] = len(buy_signals)
+        all_indicators["sell_candidate_votes"] = len(sell_signals)
+        for gate in all_indicators["entry_gates"].values():
+            gate["relevant_to_current_buy"] = buy_candidate
 
         # Handle SELL signals
         if len(sell_signals) >= 2:

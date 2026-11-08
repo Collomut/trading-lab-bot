@@ -1158,19 +1158,24 @@ class TradingBot:
         if not self._cycle_lock.acquire(timeout=10):
             return False, "The trading worker is busy. Wait for the current account check and try again."
         try:
-            if self.risk_manager.entry_mode() != "EXIT_ONLY":
+            reason = self.risk_manager._halt_reason
+            reviewable_halt = self.risk_manager._is_halted and reason.startswith((
+                "Emergency stop",
+                "Consecutive loss limit reached",
+                "Consecutive loss limit persists",
+            ))
+            if self.risk_manager.entry_mode() != "EXIT_ONLY" and not reviewable_halt:
                 return False, "New entries are not paused."
             if not self._reconcile_exchange_state():
                 reason = self._last_account_error or self.risk_manager._halt_reason
                 return False, f"Cannot resume: account reconciliation failed. {reason}"
             if self.risk_manager._is_halted:
-                emergency_stop_needs_review = self.risk_manager._halt_reason.startswith("Emergency stop")
-                if not (acknowledge_manual_halt and emergency_stop_needs_review):
+                if not (acknowledge_manual_halt and reviewable_halt):
                     return False, f"Cannot resume while a safety halt is active: {self.risk_manager._halt_reason}"
                 if self.risk_manager.open_positions or self.risk_manager.store.unresolved_orders():
                     return False, "Manual recovery is blocked while positions or unresolved orders remain. Inspect the Testnet account."
-                if not self.risk_manager.acknowledge_emergency_stop_review():
-                    return False, "The emergency-stop review could not be saved; trading remains halted."
+                if not self.risk_manager.acknowledge_manual_halt_review():
+                    return False, "The safety-halt review could not be saved; trading remains halted."
             self.risk_manager.store.write_state("entry_mode", "ACTIVE")
             self.risk_manager.store.append_event("mode_changed", {"mode": "ACTIVE", "source": "operator_resume"})
             return True, "Entries resumed after successful account reconciliation."

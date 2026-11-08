@@ -1,0 +1,230 @@
+{
+  "method": "research-only state-based EMA20 pullback reclaim with rising EMA50 direction; all exits and risk sizing follow shared approximate simulator; base costs 10bps fee + 5bps slippage per side",
+  "results": [
+    {
+      "kind": "funnel",
+      "variant": "pullback_rising_rsi45",
+      "counts": {
+        "BTCUSDT": {
+          "eligible_buys": 863,
+          "sell_signals": 18447
+        },
+        "ETHUSDT": {
+          "eligible_buys": 787,
+          "sell_signals": 18394
+        },
+        "SOLUSDT": {
+          "eligible_buys": 782,
+          "sell_signals": 19251
+        }
+      }
+    },
+    {
+      "kind": "2021-02_through_2023",
+      "variant": "pullback_rising_rsi45",
+      "closed_trades": 1107,
+      "wins": 260,
+      "losses": 847,
+      "win_rate_pct": 23.49,
+      "net_pnl_usdt": -3033.37,
+      "avg_trade_pnl_usdt": -2.74,
+      "profit_factor": 0.547,
+      "mean_trade_return_pct": -0.333,
+      "portfolio_return_pct": -30.334,
+      "max_drawdown_pct": 30.566,
+      "ending_equity_usdt": 6966.63,
+      "period_end_equity_points": 25522,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    },
+    {
+      "kind": "2024_through_2025",
+      "variant": "pullback_rising_rsi45",
+      "closed_trades": 771,
+      "wins": 158,
+      "losses": 613,
+      "win_rate_pct": 20.49,
+      "net_pnl_usdt": -2262.52,
+      "avg_trade_pnl_usdt": -2.93,
+      "profit_factor": 0.503,
+      "mean_trade_return_pct": -0.343,
+      "portfolio_return_pct": -22.625,
+      "max_drawdown_pct": 22.831,
+      "ending_equity_usdt": 7737.48,
+      "period_end_equity_points": 17544,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    },
+    {
+      "kind": "2026_ytd_through_oct",
+      "variant": "pullback_rising_rsi45",
+      "closed_trades": 244,
+      "wins": 47,
+      "losses": 197,
+      "win_rate_pct": 19.26,
+      "net_pnl_usdt": -843.56,
+      "avg_trade_pnl_usdt": -3.46,
+      "profit_factor": 0.417,
+      "mean_trade_return_pct": -0.367,
+      "portfolio_return_pct": -8.436,
+      "max_drawdown_pct": 9.231,
+      "ending_equity_usdt": 9156.44,
+      "period_end_equity_points": 7296,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    },
+    {
+      "kind": "funnel",
+      "variant": "pullback_rsi_recovery40",
+      "counts": {
+        "BTCUSDT": {
+          "eligible_buys": 4,
+          "sell_signals": 18447
+        },
+        "ETHUSDT": {
+          "eligible_buys": 3,
+          "sell_signals": 18394
+        },
+        "SOLUSDT": {
+          "eligible_buys": 0,
+          "sell_signals": 19251
+        }
+      }
+    },
+    {
+      "kind": "2021-02_through_2023",
+      "variant": "pullback_rsi_recovery40",
+      "closed_trades": 3,
+      "wins": 1,
+      "losses": 2,
+      "win_rate_pct": 33.33,
+      "net_pnl_usdt": -2.72,
+      "avg_trade_pnl_usdt": -0.91,
+      "profit_factor": 0.91,
+      "mean_trade_return_pct": -0.089,
+      "portfolio_return_pct": -0.027,
+      "max_drawdown_pct": 0.301,
+      "ending_equity_usdt": 9997.28,
+      "period_end_equity_points": 25522,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    },
+    {
+      "kind": "2024_through_2025",
+      "variant": "pullback_rsi_recovery40",
+      "closed_trades": 4,
+      "wins": 2,
+      "losses": 2,
+      "win_rate_pct": 50.0,
+      "net_pnl_usdt": 3.95,
+      "avg_trade_pnl_usdt": 0.99,
+      "profit_factor": 1.166,
+      "mean_trade_return_pct": 0.1,
+      "portfolio_return_pct": 0.039,
+      "max_drawdown_pct": 0.187,
+      "ending_equity_usdt": 10003.95,
+      "period_end_equity_points": 17544,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    },
+    {
+      "kind": "2026_ytd_through_oct",
+      "variant": "pullback_rsi_recovery40",
+      "closed_trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "win_rate_pct": 0,
+      "net_pnl_usdt": 0,
+      "avg_trade_pnl_usdt": 0,
+      "profit_factor": null,
+      "mean_trade_return_pct": 0,
+      "portfolio_return_pct": 0.0,
+      "max_drawdown_pct": 0.0,
+      "ending_equity_usdt": 10000.0,
+      "period_end_equity_points": 7296,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    },
+    {
+      "kind": "funnel",
+      "variant": "pullback_no_rsi_diagnostic",
+      "counts": {
+        "BTCUSDT": {
+          "eligible_buys": 863,
+          "sell_signals": 18447
+        },
+        "ETHUSDT": {
+          "eligible_buys": 787,
+          "sell_signals": 18394
+        },
+        "SOLUSDT": {
+          "eligible_buys": 782,
+          "sell_signals": 19251
+        }
+      }
+    },
+    {
+      "kind": "2021-02_through_2023",
+      "variant": "pullback_no_rsi_diagnostic",
+      "closed_trades": 1107,
+      "wins": 260,
+      "losses": 847,
+      "win_rate_pct": 23.49,
+      "net_pnl_usdt": -3033.37,
+      "avg_trade_pnl_usdt": -2.74,
+      "profit_factor": 0.547,
+      "mean_trade_return_pct": -0.333,
+      "portfolio_return_pct": -30.334,
+      "max_drawdown_pct": 30.566,
+      "ending_equity_usdt": 6966.63,
+      "period_end_equity_points": 25522,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    },
+    {
+      "kind": "2024_through_2025",
+      "variant": "pullback_no_rsi_diagnostic",
+      "closed_trades": 771,
+      "wins": 158,
+      "losses": 613,
+      "win_rate_pct": 20.49,
+      "net_pnl_usdt": -2262.52,
+      "avg_trade_pnl_usdt": -2.93,
+      "profit_factor": 0.503,
+      "mean_trade_return_pct": -0.343,
+      "portfolio_return_pct": -22.625,
+      "max_drawdown_pct": 22.831,
+      "ending_equity_usdt": 7737.48,
+      "period_end_equity_points": 17544,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    },
+    {
+      "kind": "2026_ytd_through_oct",
+      "variant": "pullback_no_rsi_diagnostic",
+      "closed_trades": 244,
+      "wins": 47,
+      "losses": 197,
+      "win_rate_pct": 19.26,
+      "net_pnl_usdt": -843.56,
+      "avg_trade_pnl_usdt": -3.46,
+      "profit_factor": 0.417,
+      "mean_trade_return_pct": -0.367,
+      "portfolio_return_pct": -8.436,
+      "max_drawdown_pct": 9.231,
+      "ending_equity_usdt": 9156.44,
+      "period_end_equity_points": 7296,
+      "halts_by_end": false,
+      "halt_reason": "",
+      "halt_timestamp_ms": null
+    }
+  ]
+}

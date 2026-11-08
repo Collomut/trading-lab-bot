@@ -124,10 +124,10 @@
         const gateLine=document.createElement('div');gateLine.className='log-gates';
         for(const [name,gate] of Object.entries(gates)){
           if(!gate||!gate.enabled)continue;
-          const passed=gate.passed===true;
+          const passed=gate.passed===true, relevant=gate.relevant_to_current_buy===true;
           const item=document.createElement('span');
-          item.className=`log-gate ${passed?'pass':'block'}`;
-          item.textContent=`${name}: ${passed?'pass':'blocked'}`;
+          item.className=`log-gate ${passed?'pass':relevant?'block':'inactive'}`;
+          item.textContent=`${name}: ${passed?'pass':relevant?'blocked this BUY setup':'not met · no BUY setup'}`;
           item.title=String(gate.detail||'');
           gateLine.append(item);
         }

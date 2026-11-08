@@ -347,24 +347,48 @@ class RiskManager:
         self.store.write_state("entry_mode", "EXIT_ONLY")
         self.store.append_event("mode_changed", {"mode": "EXIT_ONLY"})
 
-    def acknowledge_emergency_stop_review(self) -> bool:
-        """Clear only a latched emergency-stop halt after the operator review flow."""
-        if not self._is_halted or not self._halt_reason.startswith("Emergency stop"):
+    def acknowledge_manual_halt_review(self) -> bool:
+        """Clear an explicitly reviewed emergency or consecutive-loss halt only."""
+        if not self._is_halted:
+            return False
+        emergency_halt = self._halt_reason.startswith("Emergency stop")
+        loss_limit_halt = self._halt_reason.startswith((
+            "Consecutive loss limit reached",
+            "Consecutive loss limit persists",
+        ))
+        if not (emergency_halt or loss_limit_halt):
             return False
         previous_reason = self._halt_reason
+        previous_losses = self._consecutive_losses
+        if loss_limit_halt:
+            # A reviewed acknowledgement starts a new loss streak. Daily and
+            # rolling drawdown counters/limits remain untouched.
+            self._consecutive_losses = 0
         self._is_halted, self._halt_reason = False, ""
         try:
-            self.store.append_event("emergency_stop_review_acknowledged", {"previous_reason": previous_reason})
+            event_type = "consecutive_loss_halt_review_acknowledged" if loss_limit_halt else "emergency_stop_review_acknowledged"
+            self.store.append_event(event_type, {
+                "previous_reason": previous_reason,
+                "previous_consecutive_losses": previous_losses,
+                "consecutive_losses_reset": loss_limit_halt,
+            })
             self._save_daily_state()
             return True
         except Exception:
+            self._consecutive_losses = previous_losses
             self._is_halted = True
-            self._halt_reason = "Emergency-stop review could not be saved; operator action required"
+            self._halt_reason = "Manual halt review could not be saved; operator action required"
             try:
                 self._save_daily_state()
             except Exception:
                 pass
             return False
+
+    def acknowledge_emergency_stop_review(self) -> bool:
+        """Compatibility wrapper for callers that explicitly review emergency stops."""
+        if not self._halt_reason.startswith("Emergency stop"):
+            return False
+        return self.acknowledge_manual_halt_review()
 
     def entry_mode(self):
         persisted = self.store.read_state("entry_mode")

@@ -522,8 +522,11 @@ class WebDashboard:
             "exchange_reconciled": self.bot._last_reconciliation_ok,
             "resume_available": risk.entry_mode() == "EXIT_ONLY" and not risk._is_halted and account_available and self.bot._last_reconciliation_ok,
             "manual_resume_available": (
-                risk.entry_mode() == "EXIT_ONLY" and risk._is_halted and
-                risk._halt_reason.startswith("Emergency stop") and not positions and
+                risk._is_halted and risk._halt_reason.startswith((
+                    "Emergency stop",
+                    "Consecutive loss limit reached",
+                    "Consecutive loss limit persists",
+                )) and not positions and
                 not risk.store.unresolved_orders() and account_available and self.bot._last_reconciliation_ok
             ),
             "testnet_smoke_attempted": risk.store.read_state("testnet_smoke_trade") is not None,

@@ -1110,6 +1110,52 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(bot.risk_manager.entry_mode(), "ACTIVE")
             self.assertFalse(bot.risk_manager._is_halted)
 
+            # A consecutive-loss halt can only be cleared by explicit review
+            # after a fresh reconciliation, and the review resets only its streak.
+            bot.risk_manager = RiskManager(
+                RiskConfig(max_daily_loss_pct=10.0, max_consecutive_losses=1),
+                persistence_dir=persistence_dir,
+            )
+            bot.risk_manager.open_position("BTC/USDT", 100.0, 1.0)
+            bot.risk_manager.close_position("BTC/USDT", 99.0, "Test loss")
+            self.assertTrue(bot.risk_manager._is_halted)
+            prior_daily_loss = bot.risk_manager._daily_loss
+            success, _ = bot.resume_entries()
+            self.assertFalse(success)
+            self.assertTrue(bot.risk_manager._is_halted)
+            success, _ = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertTrue(success)
+            self.assertFalse(bot.risk_manager._is_halted)
+            self.assertEqual(bot.risk_manager._consecutive_losses, 0)
+            self.assertEqual(bot.risk_manager._daily_loss, prior_daily_loss)
+            audit = bot.risk_manager.store.list_events(event_type="consecutive_loss_halt_review_acknowledged")
+            self.assertEqual(len(audit), 1)
+
+            # A review cannot bypass unresolved order intent or an open position.
+            bot.risk_manager.halt("Consecutive loss limit reached (1); entries paused")
+            bot.risk_manager.store.create_order_intent("review_pending_1", "BTC/USDT", "BUY", 0.1, {"type": "market"})
+            success, message = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertFalse(success)
+            self.assertIn("unresolved orders", message)
+            self.assertTrue(bot.risk_manager._is_halted)
+            bot.risk_manager.store.update_order("review_pending_1", "REJECTED")
+            bot.risk_manager.store.mark_order_applied("review_pending_1")
+            bot.risk_manager.open_position("ETH/USDT", 100.0, 1.0)
+            success, message = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertFalse(success)
+            self.assertIn("positions", message)
+            self.assertTrue(bot.risk_manager._is_halted)
+
+    def test_manual_review_cannot_clear_other_risk_halts(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.halt("Daily equity drawdown limit reached: 5.1%")
+            self.assertFalse(rm.acknowledge_manual_halt_review())
+            self.assertTrue(rm._is_halted)
+            rm.halt("Rolling peak-to-trough drawdown limit reached: 5.2%")
+            self.assertFalse(rm.acknowledge_manual_halt_review())
+            self.assertTrue(rm._is_halted)
+
     def test_f02_confirmed_buy_places_stop_even_if_position_persistence_fails(self):
         """F-02: Confirm native stop loss is placed on exchange even if local DB write fails."""
         with TemporaryDirectory() as persistence_dir:

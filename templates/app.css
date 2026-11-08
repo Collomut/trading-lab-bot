@@ -1071,4 +1071,5 @@ footer {
 .log-gate { font-size:10.5px; color:var(--muted); }
 .log-gate.pass { color:var(--green); }
 .log-gate.block { color:var(--red); }
+.log-gate.inactive { color:var(--muted); }
 @media(max-width:700px) { .log-card { padding:12px; } .log-head { gap:6px; } }

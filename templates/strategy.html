@@ -13,8 +13,13 @@ function renderMarketChecks(d){
   const names={trend:'Trend conditions pass',weak_trend:'Weak trend · buys paused',high_volatility:'High volatility · buys paused',unknown:'Unknown · buys paused',filter_off:'Filter off'};
   const adx=indicators.adx==null?'ADX —':`ADX ${Number(indicators.adx).toFixed(1)}`;
   const atr=indicators.atr_pct==null?'ATR —':`ATR ${Number(indicators.atr_pct).toFixed(2)}%`;
+  const buyCandidate=indicators.buy_candidate===true;
+  const gates=indicators.entry_gates&&typeof indicators.entry_gates==='object'?Object.entries(indicators.entry_gates):[];
+  const blockers=gates.filter(([,gate])=>gate?.enabled&&gate?.passed===false&&gate?.relevant_to_current_buy===true).map(([name])=>name);
+  const gateSummary=buyCandidate?(blockers.length?`BUY setup blocked by ${blockers.join(', ')}`:'BUY setup passes strategy gates'):'No BUY consensus · gate status is informational';
   value.textContent=`${names[indicators.market_regime]||'Unknown'} · ${adx} · ${atr} · ${item?.signal||'—'}`;
   row.append(label,value);box.append(row);
+  const gateNote=document.createElement('p');gateNote.className='help';gateNote.textContent=gateSummary;box.append(gateNote);
   const reason=document.createElement('p');reason.className='help';reason.textContent=item?.reason||'Decision reason unavailable';box.append(reason);
   const votes=indicators.strategy_votes;
   if(votes&&typeof votes==='object'){
