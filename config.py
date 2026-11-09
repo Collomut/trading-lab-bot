@@ -36,7 +36,7 @@ class ExchangeConfig:
     demo_api_secret: str = os.getenv("DEMO_API_SECRET", "")
     paper_trading: bool = field(default_factory=lambda: _env_bool("PAPER_TRADING", True, strict=True))
     paper_environment: str = os.getenv("PAPER_ENVIRONMENT", "testnet").strip().lower()
-    fallback_to_simulation: bool = field(default_factory=lambda: _env_bool("FALLBACK_TO_SIMULATION", True))
+    fallback_to_simulation: bool = field(default_factory=lambda: _env_bool("FALLBACK_TO_SIMULATION", False))
     allow_live_trading: bool = field(default_factory=lambda: _env_bool("ALLOW_LIVE_TRADING", False))
 
 

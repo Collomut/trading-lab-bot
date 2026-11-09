@@ -371,7 +371,7 @@ class ExchangeConnector:
                 safe_message = account_access_message(e, body, status_code)
                 cfg = getattr(self, "config", None)
                 if (cfg and getattr(cfg, "paper_trading", False) and
-                        getattr(cfg, "fallback_to_simulation", True) and
+                        getattr(cfg, "fallback_to_simulation", False) and
                         "-2015" in str(safe_message)):
                     self.is_fallback_simulated = True
                     self.fallback_reason = safe_message
@@ -389,19 +389,19 @@ class ExchangeConnector:
                 orders = []
                 try:
                     orders = self.exchange.fetch_open_orders()
-                except ccxt.ExchangeError as ee:
-                    err_s = str(ee).lower()
-                    if "warnwithoutsymbol" in err_s or "fetchopenorders" in err_s:
-                        orders = []
-                    else:
-                        raise
+                except ccxt.ExchangeError:
+                    # Reconciliation cannot assume an empty account when the
+                    # exchange did not return its open orders. Fail closed so
+                    # a permission or endpoint error cannot hide a live stop
+                    # or another order that could race the bot's next action.
+                    raise
                 return balance, orders
             except ccxt.BaseError as exc:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
                 safe_message = account_access_message(exc, body, status_code)
                 cfg = getattr(self, "config", None)
                 if (cfg and getattr(cfg, "paper_trading", False) and
-                        getattr(cfg, "fallback_to_simulation", True) and
+                        getattr(cfg, "fallback_to_simulation", False) and
                         "-2015" in str(safe_message)):
                     self.is_fallback_simulated = True
                     self.fallback_reason = safe_message
@@ -422,7 +422,7 @@ class ExchangeConnector:
                 safe_message = account_access_message(exc, body, status_code)
                 cfg = getattr(self, "config", None)
                 if (cfg and getattr(cfg, "paper_trading", False) and
-                        getattr(cfg, "fallback_to_simulation", True) and
+                        getattr(cfg, "fallback_to_simulation", False) and
                         "-2015" in str(safe_message)):
                     self.is_fallback_simulated = True
                     self.fallback_reason = safe_message
@@ -466,12 +466,8 @@ class ExchangeConnector:
                 self.exchange.fetch_open_orders()
                 result["orders_ok"] = True
             except ccxt.ExchangeError as ee:
-                err_s = str(ee).lower()
-                if "warnwithoutsymbol" in err_s or "fetchopenorders" in err_s:
-                    result["orders_ok"] = True
-                else:
-                    body, status_code = extract_ccxt_response_metadata(self.exchange, ee)
-                    result["orders_error"] = account_access_message(ee, body, status_code)
+                body, status_code = extract_ccxt_response_metadata(self.exchange, ee)
+                result["orders_error"] = account_access_message(ee, body, status_code)
             except ccxt.BaseError as exc:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
                 result["orders_error"] = account_access_message(exc, body, status_code)
@@ -720,7 +716,7 @@ class ExchangeConnector:
                 raise RuntimeError("Exchange did not confirm sell order outcome") from e
 
     def get_open_orders(self, symbol: str = None) -> list:
-        """Get all open orders, optionally filtered by symbol."""
+        """Get open orders; propagate failures instead of implying none exist."""
         if self._is_simulated():
             return list(getattr(self, "_sim_stops", {}).values())
         with self._exchange_lock:
@@ -728,7 +724,7 @@ class ExchangeConnector:
                 return self.exchange.fetch_open_orders(symbol)
             except ccxt.BaseError as e:
                 logger.error("Failed to fetch open orders (%s)", type(e).__name__)
-                return []
+                raise RuntimeError("Exchange open-order state is unavailable") from e
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
         """Cancel an open order."""

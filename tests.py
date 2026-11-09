@@ -25,9 +25,10 @@ import os
 import sqlite3
 import sys
 import threading
+import urllib.error
 import unittest
 from contextlib import closing, redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -79,6 +80,10 @@ class TestConfigurationAndValidation(unittest.TestCase):
         errors = config.validate()
         structural_errors = [e for e in errors if "API_KEY" not in e and "API_SECRET" not in e]
         self.assertEqual(structural_errors, [])
+
+    def test_fallback_simulation_is_disabled_by_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(ExchangeConfig().fallback_to_simulation)
 
     def test_non_finite_risk_values_are_rejected(self):
         for field_name in [
@@ -587,6 +592,51 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertFalse(rm.monitor_equity(940.0))
             self.assertIn("rolling", rm._halt_reason.lower())
 
+    def test_equity_monitor_resets_daily_anchor_before_new_day_drawdown(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(max_daily_loss_pct=3.0, max_rolling_drawdown_pct=20.0), persistence_dir=persistence_dir)
+            rm._equity_basis = RiskManager.EQUITY_BASIS
+            rm._daily_loss_reset_date = datetime.now(timezone.utc).date() - timedelta(days=1)
+            rm._daily_starting_equity = 1000.0
+            rm._rolling_peak_equity = 1000.0
+            self.assertTrue(rm.monitor_equity(900.0))
+            self.assertEqual(rm._daily_starting_equity, 900.0)
+            self.assertFalse(rm._is_halted)
+
+    def test_consecutive_loss_halt_survives_crash_between_counter_and_halt_writes(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(max_consecutive_losses=2), persistence_dir=persistence_dir)
+            first.store.write_state("daily_risk", {
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "daily_loss": -2.0,
+                "daily_starting_equity": 1000.0,
+                "rolling_peak_equity": 1000.0,
+                "consecutive_losses": 2,
+                "is_halted": False,
+                "halt_reason": "",
+            })
+            restored = RiskManager(RiskConfig(max_consecutive_losses=2), persistence_dir=persistence_dir)
+            self.assertTrue(restored._is_halted)
+            self.assertIn("Consecutive loss limit", restored._halt_reason)
+
+    def test_legacy_equity_halt_is_not_cleared_when_durable_trade_log_exists(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            first.store.write_state("daily_risk", {
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "daily_loss": 0.0,
+                "daily_starting_equity": 87186.49,
+                "rolling_peak_equity": 88817.88,
+                "consecutive_losses": 1,
+                "is_halted": True,
+                "halt_reason": "Daily equity drawdown limit reached: 4.60%",
+            })
+            Path(persistence_dir, "trades.jsonl").write_text('{"action":"SELL"}\n', encoding="utf-8")
+            restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertTrue(restored.monitor_equity(10000.0, account_reconciled=True))
+            self.assertTrue(restored._is_halted)
+            self.assertTrue(restored.store.read_state("daily_risk")["is_halted"])
+
     def test_legacy_whole_account_equity_halt_migrates_after_clean_reconciliation(self):
         with TemporaryDirectory() as persistence_dir:
             first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
@@ -872,6 +922,23 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         connector.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("secret omitted")
         with self.assertRaisesRegex(RuntimeError, "Testnet authentication"):
             connector.fetch_account_snapshot()
+
+    def test_open_order_lookup_failure_blocks_account_reconciliation(self):
+        connector = object.__new__(ExchangeConnector)
+        connector.config = ExchangeConfig(paper_trading=True, paper_environment="testnet")
+        connector.exchange = Mock()
+        connector.exchange.fetch_balance.return_value = {"total": {"USDT": 1000.0}}
+        connector.exchange.fetch_open_orders.side_effect = ccxt.ExchangeError(
+            "fetchOpenOrders is not supported"
+        )
+        connector._is_simulated = lambda: False
+
+        with self.assertRaises(AccountAccessError):
+            connector.fetch_account_snapshot()
+
+        diagnostic = connector.diagnose_account_access()
+        self.assertEqual(diagnostic["overall_status"], "BALANCE_ONLY_ORDER_PERMISSION_MISSING")
+        self.assertFalse(diagnostic["orders_ok"])
 
     def test_account_authentication_failure_is_actionable_without_echoing_secrets(self):
         mock_ex = Mock()
@@ -1384,6 +1451,46 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(call_args[0], "BTC/USDT")
             self.assertEqual(call_args[1], 0.01)
 
+    def test_rejected_strategy_sell_restores_stop_after_confirmed_zero_fill(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_current_price.return_value = 49000.0
+            bot.exchange.cancel_order.return_value = True
+            bot.exchange.place_native_stop_loss.return_value = {"id": "replacement-stop", "status": "open"}
+            position = bot.risk_manager.open_position("BTC/USDT", 50000.0, 0.01, order_id="buy_1")
+            position.stop_order_id = "initial-stop"
+            position.stop_client_order_id = "initial-stop-client"
+            bot.risk_manager._save_positions()
+            bot._submit_market_order = Mock(return_value=(None, "rejected-sell"))
+
+            bot._handle_sell_signal(TradeSignal(Signal.SELL, "BTC/USDT", 0.9, "test rejection", {}))
+
+            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertEqual(position.stop_order_id, "replacement-stop")
+            self.assertTrue(bot.exchange.place_native_stop_loss.called)
+
+    def test_open_sell_order_does_not_create_duplicate_protective_sell(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_current_price.return_value = 49000.0
+            bot.exchange.cancel_order.return_value = True
+            position = bot.risk_manager.open_position("BTC/USDT", 50000.0, 0.01, order_id="buy_1")
+            position.stop_order_id = "initial-stop"
+            position.stop_client_order_id = "initial-stop-client"
+            bot.risk_manager._save_positions()
+            bot._submit_market_order = Mock(return_value=({"id": "still-open", "status": "open", "filled": "0"}, "open-sell"))
+
+            bot._handle_sell_signal(TradeSignal(Signal.SELL, "BTC/USDT", 0.9, "test open order", {}))
+
+            self.assertTrue(bot.risk_manager._is_halted)
+            bot.exchange.place_native_stop_loss.assert_not_called()
+
     def test_f05_sync_exchange_stop_on_breakeven_or_trailing(self):
         """F-05: Tighter break-even or trailing stops synchronize to exchange."""
         with TemporaryDirectory() as persistence_dir:
@@ -1472,6 +1579,15 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(req.full_url, "https://discord.com/api/webhooks/123/xyz")
             body = json.loads(req.data.decode("utf-8"))
             self.assertIn("Test discord alert", body["content"])
+
+    def test_discord_webhook_failure_does_not_log_credential_url(self):
+        webhook_url = "https://discord.com/api/webhooks/123/secret-token"
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(discord_webhook_url=webhook_url)
+        with patch("bot_engine.urllib.request.urlopen", side_effect=urllib.error.URLError(webhook_url)):
+            with self.assertLogs("bot.engine", level="WARNING") as captured:
+                bot._send_discord_notification("test")
+        self.assertNotIn(webhook_url, "\n".join(captured.output))
 
     def test_email_notification_dispatch(self):
         config = BotConfig(

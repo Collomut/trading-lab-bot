@@ -323,7 +323,10 @@ class WebDashboard:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in continuous background loop: {e}")
+                # Exchange/network exceptions may contain signed URLs or API
+                # metadata. Log the class only; endpoint handlers expose safe
+                # actionable messages where appropriate.
+                logger.error("Error in continuous background loop (%s)", type(e).__name__)
 
             await asyncio.sleep(interval)
 

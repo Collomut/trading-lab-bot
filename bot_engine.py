@@ -202,7 +202,9 @@ class TradingBot:
             server.quit()
             logger.info("Email alert dispatched to %s", self.config.alert_email)
         except Exception as e:
-            logger.warning("Failed to send email notification: %s", str(e))
+            # SMTP exceptions can include server addresses and authentication
+            # details. Keep diagnostics useful without logging exception text.
+            logger.warning("Failed to send email notification (%s)", type(e).__name__)
 
     def _send_discord_notification(self, message: str):
         """Send a notification to Discord webhook for instant push notifications."""
@@ -218,7 +220,9 @@ class TradingBot:
             urllib.request.urlopen(req, timeout=5)
             logger.info("Discord webhook notification dispatched")
         except Exception as e:
-            logger.warning("Failed to send Discord webhook notification: %s", str(e))
+            # urllib errors can echo the full webhook URL, which contains its
+            # bearer credential. Never write that URL to application logs.
+            logger.warning("Failed to send Discord webhook notification (%s)", type(e).__name__)
 
     def send_notification(self, message: str, subject: str = "Trading Bot Alert"):
         """Send notifications to all configured channels (Telegram, Email/SMS, Discord)."""
@@ -351,18 +355,33 @@ class TradingBot:
         raw_status = str(order.get("status", "")).lower()
         filled = order.get("filled") or 0
         filled_decimal = Decimal(str(filled))
-        state = {"closed": "FILLED", "open": "OPEN", "canceled": "CANCELED", "rejected": "REJECTED", "expired": "EXPIRED"}.get(raw_status, "UNKNOWN")
-        if state == "OPEN" and filled_decimal > 0 and order.get("id"):
-            if self.exchange.cancel_order(str(order["id"]), symbol):
+        state = {
+            "closed": "FILLED", "open": "OPEN", "new": "OPEN",
+            "partially_filled": "PARTIALLY_FILLED", "canceled": "CANCELED",
+            "rejected": "REJECTED", "expired": "EXPIRED",
+        }.get(raw_status, "UNKNOWN")
+        if state in {"OPEN", "PARTIALLY_FILLED"}:
+            # Market orders should finish quickly. Cancel any remaining
+            # quantity and re-read the exchange state before a caller treats
+            # the order as terminal or places another sell/stop order.
+            order_id = str(order.get("id") or "")
+            if not order_id:
+                state = "UNKNOWN"
+            else:
+                self.exchange.cancel_order(order_id, symbol)
                 try:
-                    order = self.exchange.fetch_order(str(order["id"]), symbol)
+                    order = self.exchange.fetch_order(order_id, symbol)
                     raw_status = str(order.get("status", "")).lower()
                     filled = order.get("filled") or 0
                     filled_decimal = Decimal(str(filled))
-                    state = {"closed": "FILLED", "open": "OPEN", "canceled": "CANCELED", "rejected": "REJECTED", "expired": "EXPIRED"}.get(raw_status, "UNKNOWN")
+                    state = {
+                        "closed": "FILLED", "open": "OPEN", "new": "OPEN",
+                        "partially_filled": "PARTIALLY_FILLED", "canceled": "CANCELED",
+                        "rejected": "REJECTED", "expired": "EXPIRED",
+                    }.get(raw_status, "UNKNOWN")
                 except Exception:
                     state = "UNKNOWN"
-            else:
+            if state in {"OPEN", "PARTIALLY_FILLED"} and filled_decimal > 0:
                 state = "PARTIALLY_FILLED"
         if state in {"FILLED", "CANCELED", "EXPIRED"} and Decimal(str(filled)) > 0 and Decimal(str(filled)) < amount_decimal * Decimal("0.99999999"):
             state = "PARTIAL_CLOSED"
@@ -454,7 +473,7 @@ class TradingBot:
 
     def _recover_terminal_partial_sell(self, symbol: str, order: dict, client_order_id: str, requested_amount) -> bool:
         """Reconcile a terminal partial exit, protect its remainder, then halt for review."""
-        if not isinstance(order, dict) or str(order.get("status", "")).lower() not in {"closed", "canceled", "expired"}:
+        if not isinstance(order, dict) or str(order.get("status", "")).lower() not in {"closed", "canceled", "rejected", "expired"}:
             return False
         try:
             filled = Decimal(str(order.get("filled") or 0))
@@ -640,6 +659,15 @@ class TradingBot:
         })
         return True
 
+    def _sell_was_not_submitted(self, symbol: str, decision_key: str) -> bool:
+        """Allow stop restoration only when durable state proves no sell POST occurred."""
+        client_id = self._client_order_id(symbol, "sell", str(decision_key))
+        try:
+            order = self.risk_manager.store.get_order(client_id)
+        except Exception:
+            return False
+        return order is None or order.get("state") == "PENDING"
+
     @staticmethod
     def _confirmed_full_fill(order: dict, requested_amount: float) -> bool:
         """Accept only an explicit, complete market-order fill."""
@@ -649,6 +677,19 @@ class TradingBot:
             filled = Decimal(str(order.get("filled")))
             requested = Decimal(str(requested_amount))
             return filled.is_finite() and requested.is_finite() and filled > 0 and requested > 0 and filled >= requested * Decimal("0.99999999")
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _terminal_zero_fill(order: dict) -> bool:
+        """Whether an exit is conclusively terminal with no fill to protect against."""
+        if not isinstance(order, dict) or str(order.get("status", "")).lower() not in {
+            "closed", "canceled", "rejected", "expired",
+        }:
+            return False
+        try:
+            filled = Decimal(str(order.get("filled") or 0))
+            return filled.is_finite() and filled == 0
         except (InvalidOperation, TypeError, ValueError):
             return False
 
@@ -874,10 +915,18 @@ class TradingBot:
             filled_quantity = Decimal(str(order.get("filled") or 0))
             requested_quantity = Decimal(str(amount))
             partial_terminal_fill = (
-                raw_fill_status in {"closed", "canceled", "expired"} and
+                raw_fill_status in {"closed", "canceled", "rejected", "expired"} and
                 filled_quantity > 0 and filled_quantity < requested_quantity * Decimal("0.99999999")
             )
             if not self._confirmed_full_fill(order, amount) and not partial_terminal_fill:
+                if self._terminal_zero_fill(order):
+                    self.risk_manager.store.mark_order_applied(client_order_id)
+                    self.risk_manager.store.append_event("entry_order_no_fill", {
+                        "symbol": symbol, "order_id": str(order.get("id", "")),
+                        "status": raw_fill_status,
+                    })
+                    logger.info("Entry order for %s ended without a fill; no position was opened", symbol)
+                    return
                 self.risk_manager.halt(f"Unconfirmed or partial buy fill for {symbol}; reconcile exchange orders and balances")
                 logger.error("Buy order for %s was not confirmed fully filled; new orders halted", symbol)
                 return
@@ -1023,14 +1072,42 @@ class TradingBot:
         try:
             order, client_order_id = self._submit_market_order(symbol, "sell", position_amount, decision_key)
         except Exception as exc:
-            self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
-            self.risk_manager.halt(f"Sell order state requires reconciliation for {symbol}; protective stop restored")
-            logger.error("Sell order state requires reconciliation for %s: %s; protective stop restored", symbol, exc)
+            safe_to_reprotect = self._sell_was_not_submitted(symbol, decision_key)
+            restored = safe_to_reprotect and self._place_and_persist_native_stop(
+                symbol, f"reprotect_{int(time.time()*1000)}",
+                fallback_sl=old_stop_price, fallback_amount=position_amount,
+            )
+            self.risk_manager.halt(
+                f"Sell order state requires reconciliation for {symbol}; "
+                + ("protective stop restored" if restored else "do not duplicate an uncertain sell; operator reconciliation required")
+            )
+            logger.error("Sell order state requires reconciliation for %s (%s)", symbol, type(exc).__name__)
+            return
+        if not order:
+            restored = self._place_and_persist_native_stop(
+                symbol, f"reprotect_{int(time.time()*1000)}",
+                fallback_sl=old_stop_price, fallback_amount=position_amount,
+            )
+            self.risk_manager.halt(
+                f"Sell order was rejected for {symbol}; "
+                f"protective stop {'restored' if restored else 'could not be restored; operator action required'}"
+            )
             return
         if order:
             if not self._confirmed_full_fill(order, position_amount):
                 if self._recover_terminal_partial_sell(symbol, order, client_order_id, position_amount):
                     return
+                if str(order.get("status", "")).lower() not in {"closed", "canceled", "rejected", "expired"}:
+                    self.risk_manager.halt(
+                        f"Sell order for {symbol} remains open or uncertain; trading halted until the order is reconciled"
+                    )
+                    return
+                if not self._terminal_zero_fill(order):
+                    self.risk_manager.halt(
+                        f"Partial sell for {symbol} could not be reconciled; protective order was not duplicated"
+                    )
+                    return
+                self.risk_manager.store.mark_order_applied(client_order_id)
                 self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
                 self.risk_manager.halt(f"Unconfirmed or partial sell fill for {symbol}; protective stop restored, reconcile exchange orders and balances")
                 logger.error("Sell order for %s was not confirmed fully filled; position remains protected", symbol)
@@ -1121,14 +1198,42 @@ class TradingBot:
                 key = f"stop:{position.order_id}:{reason}:{int(time.time() // 60)}"
                 order, client_order_id = self._submit_market_order(symbol, "sell", position_amount, key)
             except Exception as exc:
-                self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
-                self.risk_manager.halt(f"Stop-exit order state requires reconciliation for {symbol}; protective stop restored")
-                logger.error("Stop-exit order state requires reconciliation for %s: %s; protective stop restored", symbol, exc)
+                safe_to_reprotect = self._sell_was_not_submitted(symbol, key)
+                restored = safe_to_reprotect and self._place_and_persist_native_stop(
+                    symbol, f"reprotect_{int(time.time()*1000)}",
+                    fallback_sl=old_stop_price, fallback_amount=position_amount,
+                )
+                self.risk_manager.halt(
+                    f"Stop-exit order state requires reconciliation for {symbol}; "
+                    + ("protective stop restored" if restored else "do not duplicate an uncertain sell; operator reconciliation required")
+                )
+                logger.error("Stop-exit order state requires reconciliation for %s (%s)", symbol, type(exc).__name__)
+                return
+            if not order:
+                restored = self._place_and_persist_native_stop(
+                    symbol, f"reprotect_{int(time.time()*1000)}",
+                    fallback_sl=old_stop_price, fallback_amount=position_amount,
+                )
+                self.risk_manager.halt(
+                    f"Stop-exit order was rejected for {symbol}; "
+                    f"protective stop {'restored' if restored else 'could not be restored; operator action required'}"
+                )
                 return
             if order:
                 if not self._confirmed_full_fill(order, position_amount):
                     if self._recover_terminal_partial_sell(symbol, order, client_order_id, position_amount):
                         return
+                    if str(order.get("status", "")).lower() not in {"closed", "canceled", "rejected", "expired"}:
+                        self.risk_manager.halt(
+                            f"Stop-exit order for {symbol} remains open or uncertain; trading halted until the order is reconciled"
+                        )
+                        return
+                    if not self._terminal_zero_fill(order):
+                        self.risk_manager.halt(
+                            f"Partial stop-exit for {symbol} could not be reconciled; protective order was not duplicated"
+                        )
+                        return
+                    self.risk_manager.store.mark_order_applied(client_order_id)
                     self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
                     self.risk_manager.halt(f"Unconfirmed or partial stop-exit for {symbol}; protective stop restored, reconcile exchange orders and balances")
                     logger.error("Stop-exit for %s was not confirmed fully filled; position remains protected", symbol)
@@ -1232,12 +1337,22 @@ class TradingBot:
                 return False, f"Entries paused. {detail} Inspect the Testnet account before attempting recovery."
 
             for symbol, position in list(self.risk_manager.open_positions.items()):
+                safe_to_reprotect = False
+                key = f"emergency-stop:{position.order_id}:{datetime.now(timezone.utc).date().isoformat()}"
                 try:
-                    key = f"emergency-stop:{position.order_id}:{datetime.now(timezone.utc).date().isoformat()}"
                     order, client_id = self._submit_market_order(symbol, "sell", position.amount, key)
+                    if not order:
+                        safe_to_reprotect = True
+                        raise RuntimeError("the exchange explicitly rejected the close order")
                     if not self._confirmed_full_fill(order, position.amount):
                         if self._recover_terminal_partial_sell(symbol, order, client_id, position.amount):
                             return False, f"Emergency stop reconciled a partial close for {symbol}; remaining amount was re-protected and trading is halted."
+                        if str(order.get("status", "")).lower() not in {"closed", "canceled", "rejected", "expired"}:
+                            raise RuntimeError("the sell order remains open or uncertain; reconciliation is required before another sell order")
+                        if not self._terminal_zero_fill(order):
+                            raise RuntimeError("the terminal partial fill could not be reconciled; manual account review is required")
+                        safe_to_reprotect = True
+                        self.risk_manager.store.mark_order_applied(client_id)
                         raise RuntimeError("the close order was not fully confirmed")
                     fill_price = float(order.get("average") or order.get("price") or 0)
                     if not math.isfinite(fill_price) or fill_price <= 0:
@@ -1247,6 +1362,12 @@ class TradingBot:
                         raise RuntimeError("closed-position state could not be persisted")
                     self.risk_manager.store.mark_order_applied(client_id)
                 except Exception as exc:
+                    safe_to_reprotect = safe_to_reprotect or self._sell_was_not_submitted(symbol, key)
+                    if safe_to_reprotect:
+                        self._place_and_persist_native_stop(
+                            symbol, f"reprotect_{int(time.time()*1000)}",
+                            fallback_sl=position.stop_loss_price, fallback_amount=position.amount,
+                        )
                     self.risk_manager.halt(f"Emergency stop failed to close tracked position {symbol}; operator action required")
                     return False, f"Entries paused. Could not safely confirm the close for {symbol} ({type(exc).__name__})."
 
@@ -1363,10 +1484,42 @@ class TradingBot:
             # not race a market sell against the still-open stop.
             if not self._cancel_exchange_stop(symbol):
                 raise RuntimeError("Could not safely cancel the temporary stop before the Testnet sell")
-            sell, sell_client_id = self._submit_market_order(symbol, "sell", net_amount, "testnet-smoke-sell")
+            try:
+                sell, sell_client_id = self._submit_market_order(symbol, "sell", net_amount, "testnet-smoke-sell")
+            except Exception:
+                safe_to_reprotect = self._sell_was_not_submitted(symbol, "testnet-smoke-sell")
+                if safe_to_reprotect:
+                    restored = self._place_and_persist_native_stop(
+                        symbol, f"reprotect_{int(time.time()*1000)}",
+                        fallback_sl=self.risk_manager.open_positions[symbol].stop_loss_price,
+                        fallback_amount=net_amount,
+                    )
+                    self.risk_manager.halt(
+                        "Testnet smoke sell was not submitted; "
+                        f"protective stop {'restored' if restored else 'could not be restored; operator action required'}"
+                    )
+                else:
+                    self.risk_manager.halt("Testnet smoke sell outcome is uncertain; do not duplicate the sell, reconcile immediately")
+                raise
             if not self._confirmed_full_fill(sell, net_amount):
                 if self._recover_terminal_partial_sell(symbol, sell, sell_client_id, net_amount):
                     raise RuntimeError("Partial Testnet sell was reconciled, re-protected, and halted for review")
+                if sell is None or self._terminal_zero_fill(sell):
+                    if sell is not None:
+                        self.risk_manager.store.mark_order_applied(sell_client_id)
+                    restored = self._place_and_persist_native_stop(
+                        symbol, f"reprotect_{int(time.time()*1000)}",
+                        fallback_sl=self.risk_manager.open_positions[symbol].stop_loss_price,
+                        fallback_amount=net_amount,
+                    )
+                    self.risk_manager.halt(
+                        "Testnet smoke sell failed; "
+                        f"protective stop {'restored' if restored else 'could not be restored; operator action required'}"
+                    )
+                elif isinstance(sell, dict) and str(sell.get("status", "")).lower() in {"closed", "canceled", "rejected", "expired"}:
+                    self.risk_manager.halt("Testnet smoke sell partial fill could not be reconciled; protective order was not duplicated")
+                else:
+                    self.risk_manager.halt("Testnet smoke sell outcome remains open or uncertain; manual reconciliation required")
                 self.risk_manager.halt("Testnet smoke sell was not confirmed fully filled; position remains tracked")
                 raise RuntimeError("Sell was not fully confirmed; use the emergency stop and reconcile")
             sell_price = float(sell.get("average") or sell.get("price") or 0)

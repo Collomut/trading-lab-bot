@@ -167,15 +167,19 @@ class RiskManager:
             self._equity_basis_migration_pending = not basis_matches and prior_equity_baseline_exists
             self._rolling_peak_equity = rolling_peak if basis_matches else 0.0
             self._consecutive_losses = consecutive
-            if self._consecutive_losses >= self.config.max_consecutive_losses:
-                self._is_halted = True
-                self._halt_reason = f"Consecutive loss limit persists ({self._consecutive_losses}); entries paused"
             if state_date == today:
                 self._daily_loss = daily_loss
                 self._is_halted = is_halted
                 self._halt_reason = str(state.get("halt_reason", ""))
                 self._daily_starting_equity = daily_start if basis_matches else 0.0
                 self._daily_loss_reset_date = today
+            # A crash can happen after the loss counter is persisted but before
+            # the corresponding halt write. Never let a stale false flag erase
+            # a loss limit that the durable counter itself proves was reached.
+            if self._consecutive_losses >= self.config.max_consecutive_losses:
+                self._is_halted = True
+                if not self._halt_reason:
+                    self._halt_reason = f"Consecutive loss limit persists ({self._consecutive_losses}); entries paused"
         except Exception as exc:
             # Fail closed: corrupt state should prevent new orders until reconciled.
             self._is_halted = True
@@ -295,11 +299,28 @@ class RiskManager:
                 logger.info("✅ Trading resumed — new day, daily loss limit reset")
             self._save_daily_state()
 
+    def _has_persisted_trade_history(self) -> bool:
+        """Check durable strategy history before clearing a legacy equity halt."""
+        if self.trade_history:
+            return True
+        list_trades = getattr(self.store, "list_trades", None)
+        if callable(list_trades):
+            if list_trades(1):
+                return True
+        # SQLite deployments keep completed strategy records in this JSONL
+        # file; its contents survive a process restart even though the
+        # in-memory TradeRecord list does not.
+        trade_log = self.persistence_path.parent / "trades.jsonl"
+        return trade_log.exists() and trade_log.stat().st_size > 0
+
     def monitor_equity(self, equity: float, *, account_reconciled: bool = False) -> bool:
         """Persist daily and rolling equity peaks and halt on threshold breaches."""
         if not isinstance(equity, (int, float)) or not math.isfinite(equity) or equity <= 0:
             self.halt("Account equity unavailable or invalid; operator review required")
             return False
+        # Reset the daily anchor before comparing today's equity. This also
+        # runs during quiet markets when no BUY signal reaches can_open_position.
+        self._reset_daily_if_needed()
         if self._equity_basis_migration_pending:
             previous_basis = self._equity_basis or "legacy whole-account equity"
             previous_halt = self._halt_reason
@@ -316,7 +337,7 @@ class RiskManager:
                 equity_halt
                 and account_reconciled
                 and not self.open_positions
-                and not self.trade_history
+                and not self._has_persisted_trade_history()
                 and not self.store.unresolved_orders()
                 and self._consecutive_losses < self.config.max_consecutive_losses
                 and self._daily_loss > -(equity * self.config.max_daily_loss_pct / 100.0)
