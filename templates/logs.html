@@ -52,6 +52,7 @@
   const eventNames={
     worker_started:'Bot worker started',
     risk_halt:'Trading safety halt',
+    risk_equity_basis_migrated:'Risk baseline corrected',
     mode_changed:'Trading mode changed',
     reconciliation_failed:'Account check failed',
     protective_stop_placed:'Protective stop placed',
@@ -98,6 +99,9 @@
     }else if(e.type==='testnet_smoke_trade_completed'){
       titleText=`Testnet order-path check · ${d.symbol||'symbol unavailable'}`;
       badgeText='Complete';badgeTone='is-buy';
+    }else if(e.type==='risk_equity_basis_migrated'){
+      badgeText=d.legacy_equity_halt_cleared?'Old halt cleared':'Halt retained';
+      badgeTone=d.legacy_equity_halt_cleared?'is-buy':'is-wait';
     }else if(e.type==='risk_halt'||e.type==='analysis_error'||e.type==='market_data_issue'||e.type==='reconciliation_failed'){
       badgeTone='is-alert';
     }

@@ -594,6 +594,36 @@ class TradingBot:
             logger.error("Account state failed reconciliation; all new orders blocked (%s)", type(exc).__name__)
             return False
 
+    def _bot_managed_equity(self) -> Decimal:
+        """Value only bot capital: quote cash plus bot-tracked open positions.
+
+        Pre-existing exchange balances are recorded in baseline_asset_balances
+        and are not bot positions. They must not drive this bot's drawdown
+        circuit breaker or make Testnet seed assets appear to be deployed
+        strategy capital.
+        """
+        if not isinstance(self._last_account_balance, dict):
+            raise ValueError("account balance snapshot is unavailable")
+        totals = self._last_account_balance.get("total", {}) or {}
+        cash = Decimal(str(totals.get("USDT") or 0))
+        if not cash.is_finite() or cash < 0:
+            raise ValueError("USDT account balance is invalid")
+        equity = cash
+        for symbol, position in self.risk_manager.open_positions.items():
+            amount = Decimal(str(position.amount))
+            if not amount.is_finite() or amount <= 0:
+                raise ValueError(f"tracked position amount is invalid for {symbol}")
+            raw_price = self.exchange.get_current_price(symbol)
+            if raw_price is None:
+                raise ValueError(f"market valuation is unavailable for tracked position {symbol}")
+            mark = Decimal(str(raw_price))
+            if not mark.is_finite() or mark <= 0:
+                raise ValueError(f"market valuation is invalid for tracked position {symbol}")
+            equity += amount * mark
+        if not equity.is_finite() or equity <= 0:
+            raise ValueError("bot-managed equity is invalid")
+        return equity
+
     def _cancel_exchange_stop(self, symbol: str) -> bool:
         position = self.risk_manager.open_positions.get(symbol)
         if not position or not position.stop_order_id:
@@ -1388,20 +1418,10 @@ class TradingBot:
             if not self._reconcile_exchange_state():
                 return False
             try:
-                totals = self._last_account_balance.get("total", {})
-                equity = Decimal(str(totals.get("USDT") or 0))
-                for base in sorted({pair.strip().split("/")[0] for pair in self.config.strategy.trading_pairs}):
-                    symbol = next(pair.strip() for pair in self.config.strategy.trading_pairs if pair.strip().split("/")[0] == base)
-                    quantity = Decimal(str(totals.get(base) or 0))
-                    if quantity > 0:
-                        raw_price = self.exchange.get_current_price(symbol)
-                        if raw_price is None or raw_price <= 0:
-                            raise ValueError(f"market valuation is unavailable for {symbol}")
-                        mark = Decimal(str(raw_price))
-                        if not mark.is_finite() or mark <= 0:
-                            raise ValueError("market valuation is unavailable")
-                        equity += quantity * mark
-                if not self.risk_manager.monitor_equity(float(equity)):
+                equity = self._bot_managed_equity()
+                if not self.risk_manager.monitor_equity(
+                    float(equity), account_reconciled=self._last_reconciliation_ok
+                ):
                     logger.error("Equity risk circuit breaker is active: %s", self.risk_manager._halt_reason)
             except Exception as exc:
                 self.risk_manager.halt("Account equity valuation failed; operator review required")

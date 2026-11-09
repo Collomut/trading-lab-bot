@@ -635,6 +635,17 @@ class WebDashboard:
             }
         if event_type == "risk_halt":
             return {"reason": str(details.get("reason", "Trading halted"))[:500]}
+        if event_type == "risk_equity_basis_migrated":
+            cleared = details.get("legacy_equity_halt_cleared") is True
+            return {
+                "managed_equity": details.get("managed_equity"),
+                "legacy_equity_halt_cleared": cleared,
+                "message": (
+                    "Risk baseline now measures USDT cash and bot-tracked positions; the obsolete seed-balance drawdown halt was cleared after clean account reconciliation."
+                    if cleared else
+                    "Risk baseline now measures USDT cash and bot-tracked positions; an existing safety halt remains active for review."
+                ),
+            }
         if event_type == "worker_started":
             return {"status": "Background worker started"}
         if event_type == "mode_changed":

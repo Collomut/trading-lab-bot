@@ -587,6 +587,71 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertFalse(rm.monitor_equity(940.0))
             self.assertIn("rolling", rm._halt_reason.lower())
 
+    def test_legacy_whole_account_equity_halt_migrates_after_clean_reconciliation(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            first.store.write_state("daily_risk", {
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "daily_loss": 0.0,
+                "daily_starting_equity": 87186.49,
+                "rolling_peak_equity": 88817.88,
+                "consecutive_losses": 1,
+                "is_halted": True,
+                "halt_reason": "Daily equity drawdown limit reached: 4.60%",
+            })
+
+            migrated = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertTrue(migrated._is_halted)
+            self.assertTrue(migrated.monitor_equity(10000.0, account_reconciled=True))
+            self.assertFalse(migrated._is_halted)
+            self.assertEqual(migrated._daily_starting_equity, 10000.0)
+            self.assertEqual(migrated._rolling_peak_equity, 10000.0)
+            self.assertEqual(migrated._consecutive_losses, 1)
+            saved = migrated.store.read_state("daily_risk")
+            self.assertEqual(saved["equity_basis"], RiskManager.EQUITY_BASIS)
+            audit = migrated.store.list_events(event_type="risk_equity_basis_migrated")
+            self.assertEqual(len(audit), 1)
+            self.assertTrue(audit[0]["details"]["legacy_equity_halt_cleared"])
+
+    def test_equity_basis_migration_does_not_clear_halt_with_open_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            first.store.write_state("daily_risk", {
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "daily_loss": 0.0,
+                "daily_starting_equity": 87186.49,
+                "rolling_peak_equity": 88817.88,
+                "consecutive_losses": 1,
+                "is_halted": True,
+                "halt_reason": "Daily equity drawdown limit reached: 4.60%",
+            })
+
+            migrated = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            migrated.open_positions["BTC/USDT"] = Position(
+                "BTC/USDT", "long", 50000.0, 0.01,
+                datetime.now(timezone.utc).isoformat(), 49000.0, 51500.0,
+            )
+            self.assertTrue(migrated.monitor_equity(10000.0, account_reconciled=True))
+            self.assertTrue(migrated._is_halted)
+            self.assertIn("Daily equity drawdown", migrated._halt_reason)
+
+    def test_legacy_equity_halt_requires_reconciled_account_to_clear(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            first.store.write_state("daily_risk", {
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "daily_loss": 0.0,
+                "daily_starting_equity": 87186.49,
+                "rolling_peak_equity": 88817.88,
+                "consecutive_losses": 1,
+                "is_halted": True,
+                "halt_reason": "Daily equity drawdown limit reached: 4.60%",
+            })
+
+            migrated = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertTrue(migrated.monitor_equity(10000.0))
+            self.assertTrue(migrated._is_halted)
+
     def test_invalid_persisted_daily_loss_halts_startup(self):
         with TemporaryDirectory() as persistence_dir:
             today = datetime.now(timezone.utc).date().isoformat()
@@ -1005,6 +1070,25 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
 
 class TestBotEngineOrderLifecycle(unittest.TestCase):
     """Verifies complete order execution, fee deduction, stop loss synchronization, recovery, and alerts."""
+
+    def test_risk_equity_excludes_preexisting_exchange_seed_balances(self):
+        bot = object.__new__(TradingBot)
+        bot._last_account_balance = {"total": {
+            "USDT": "10000", "BTC": "1.1", "ETH": "1", "SOL": "4",
+        }}
+        bot.risk_manager = SimpleNamespace(open_positions={})
+        bot.exchange = Mock()
+
+        self.assertEqual(bot._bot_managed_equity(), Decimal("10000"))
+        bot.exchange.get_current_price.assert_not_called()
+
+        bot.risk_manager.open_positions["BTC/USDT"] = Position(
+            "BTC/USDT", "long", 50000.0, 0.1,
+            datetime.now(timezone.utc).isoformat(), 49000.0, 51500.0,
+        )
+        bot.exchange.get_current_price.return_value = 51000.0
+        self.assertEqual(bot._bot_managed_equity(), Decimal("15100.00"))
+        bot.exchange.get_current_price.assert_called_once_with("BTC/USDT")
 
     def test_client_order_id_is_deterministic_and_exchange_sized(self):
         first = TradingBot._client_order_id("BTC/USDT", "buy", "candle-123")

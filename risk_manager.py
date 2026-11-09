@@ -99,6 +99,8 @@ class RiskManager:
     Production-grade Risk Manager.
     """
 
+    EQUITY_BASIS = "usdt_cash_plus_tracked_positions_v1"
+
     def __init__(self, config: RiskConfig, persistence_dir: str = "data"):
         self.config = config
         self.persistence_path = Path(persistence_dir) / "open_positions.json"
@@ -126,6 +128,8 @@ class RiskManager:
         self._daily_loss_reset_date = datetime.now(timezone.utc).date()
         self._is_halted = False
         self._halt_reason = ""
+        self._equity_basis: str | None = None
+        self._equity_basis_migration_pending = False
 
         # Restore both risk state stores before allowing any entries. Position
         # state is also a risk control: unreadable state must halt new entries.
@@ -157,7 +161,11 @@ class RiskManager:
                     not math.isfinite(daily_start) or daily_start < 0 or
                     not math.isfinite(rolling_peak) or rolling_peak < 0 or consecutive < 0):
                 raise ValueError("daily equity risk state contains invalid values")
-            self._rolling_peak_equity = rolling_peak
+            self._equity_basis = state.get("equity_basis")
+            basis_matches = self._equity_basis == self.EQUITY_BASIS
+            prior_equity_baseline_exists = daily_start > 0 or rolling_peak > 0
+            self._equity_basis_migration_pending = not basis_matches and prior_equity_baseline_exists
+            self._rolling_peak_equity = rolling_peak if basis_matches else 0.0
             self._consecutive_losses = consecutive
             if self._consecutive_losses >= self.config.max_consecutive_losses:
                 self._is_halted = True
@@ -166,7 +174,7 @@ class RiskManager:
                 self._daily_loss = daily_loss
                 self._is_halted = is_halted
                 self._halt_reason = str(state.get("halt_reason", ""))
-                self._daily_starting_equity = daily_start
+                self._daily_starting_equity = daily_start if basis_matches else 0.0
                 self._daily_loss_reset_date = today
         except Exception as exc:
             # Fail closed: corrupt state should prevent new orders until reconciled.
@@ -180,6 +188,7 @@ class RiskManager:
             "daily_loss": self._daily_loss,
             "daily_starting_equity": self._daily_starting_equity,
             "rolling_peak_equity": self._rolling_peak_equity,
+            "equity_basis": self._equity_basis,
             "consecutive_losses": self._consecutive_losses,
             "is_halted": self._is_halted,
             "halt_reason": self._halt_reason,
@@ -286,11 +295,61 @@ class RiskManager:
                 logger.info("✅ Trading resumed — new day, daily loss limit reset")
             self._save_daily_state()
 
-    def monitor_equity(self, equity: float) -> bool:
+    def monitor_equity(self, equity: float, *, account_reconciled: bool = False) -> bool:
         """Persist daily and rolling equity peaks and halt on threshold breaches."""
         if not isinstance(equity, (int, float)) or not math.isfinite(equity) or equity <= 0:
             self.halt("Account equity unavailable or invalid; operator review required")
             return False
+        if self._equity_basis_migration_pending:
+            previous_basis = self._equity_basis or "legacy whole-account equity"
+            previous_halt = self._halt_reason
+            self._daily_starting_equity = float(equity)
+            self._rolling_peak_equity = float(equity)
+            self._equity_basis = self.EQUITY_BASIS
+            self._equity_basis_migration_pending = False
+
+            equity_halt = previous_halt.startswith((
+                "Daily equity drawdown limit reached:",
+                "Rolling peak-to-trough drawdown limit reached:",
+            ))
+            safe_to_clear_legacy_halt = (
+                equity_halt
+                and account_reconciled
+                and not self.open_positions
+                and not self.trade_history
+                and not self.store.unresolved_orders()
+                and self._consecutive_losses < self.config.max_consecutive_losses
+                and self._daily_loss > -(equity * self.config.max_daily_loss_pct / 100.0)
+            )
+            cleared_halt = bool(safe_to_clear_legacy_halt)
+            if cleared_halt:
+                self._is_halted = False
+                self._halt_reason = ""
+            try:
+                self._save_daily_state()
+            except Exception:
+                logger.exception("Could not persist migrated equity risk baseline")
+                return False
+            try:
+                self.store.append_event("risk_equity_basis_migrated", {
+                    "previous_basis": previous_basis,
+                    "equity_basis": self.EQUITY_BASIS,
+                    "managed_equity": round(float(equity), 2),
+                    "legacy_equity_halt_cleared": cleared_halt,
+                })
+            except Exception:
+                self.halt("Equity risk baseline audit record failed; operator review required")
+                logger.exception("Could not audit equity risk baseline migration")
+                return False
+            logger.warning(
+                "Migrated equity risk basis from %s to %s at %.2f USDT%s",
+                previous_basis, self.EQUITY_BASIS, equity,
+                "; cleared obsolete equity halt after clean reconciliation" if cleared_halt else "",
+            )
+        elif self._equity_basis is None:
+            # First-ever equity observation: bind the starting values to the
+            # current bot-managed equity basis before applying risk limits.
+            self._equity_basis = self.EQUITY_BASIS
         if self._daily_starting_equity <= 0:
             self._daily_starting_equity = float(equity)
         if self._rolling_peak_equity <= 0:
