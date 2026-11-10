@@ -1,0 +1,568 @@
+{
+  "method": {
+    "data": "Binance Spot monthly 1h BTC/ETH/SOL candles, Jan 2021-Oct 2026",
+    "base_costs_per_side_bps": {
+      "fee": 10.0,
+      "slippage": 5.0
+    },
+    "stress_costs_per_side_bps": {
+      "fee": 20.0,
+      "slippage": 10.0
+    },
+    "sizing": "same 1% equity risk ceiling, 10% max notional, 3 open positions, ATR stop, 3% target, and correlation cap",
+    "risk_halts": "same consecutive-loss, daily-loss, and rolling-drawdown controls; separate no-halt run is diagnostic only",
+    "limitations": [
+      "OHLCV cannot reproduce order-book fills, exact spread, latency, or intrabar stop sequencing.",
+      "The dataset has been used in earlier research, so it is not a fresh out-of-sample holdout.",
+      "Candidate filters reduce entries; they are not proof of a predictive edge."
+    ]
+  },
+  "variants": {
+    "current_baseline": {
+      "parameters": {},
+      "funnel": {
+        "BTCUSDT": {
+          "eligible_buy_signals": 226,
+          "candidate_buy_signals": 716,
+          "buy_vetoed_by_regime": 288,
+          "buy_vetoed_by_trend": 202,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        },
+        "ETHUSDT": {
+          "eligible_buy_signals": 206,
+          "candidate_buy_signals": 690,
+          "buy_vetoed_by_regime": 277,
+          "buy_vetoed_by_trend": 207,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        },
+        "SOLUSDT": {
+          "eligible_buy_signals": 160,
+          "candidate_buy_signals": 649,
+          "buy_vetoed_by_regime": 259,
+          "buy_vetoed_by_trend": 230,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        }
+      },
+      "costs": {
+        "base": {
+          "no_permanent_halt": {
+            "whole_period": {
+              "closed_trades": 396,
+              "winning_trades": 157,
+              "losing_trades": 239,
+              "win_rate_pct": 39.65,
+              "net_pnl_usdt": -520.99,
+              "profit_factor": 0.84,
+              "segment_max_drawdown_pct": 7.386,
+              "ending_equity_usdt": 9479.01
+            },
+            "periods": {
+              "2021_2023": {
+                "closed_trades": 191,
+                "winning_trades": 81,
+                "losing_trades": 110,
+                "win_rate_pct": 42.41,
+                "net_pnl_usdt": -156.48,
+                "profit_factor": 0.899,
+                "segment_max_drawdown_pct": 5.417,
+                "ending_equity_usdt": 9843.52
+              },
+              "2024_2025": {
+                "closed_trades": 153,
+                "winning_trades": 62,
+                "losing_trades": 91,
+                "win_rate_pct": 40.52,
+                "net_pnl_usdt": -256.04,
+                "profit_factor": 0.804,
+                "segment_max_drawdown_pct": 3.937,
+                "ending_equity_usdt": 9587.48
+              },
+              "2026_through_oct": {
+                "closed_trades": 52,
+                "winning_trades": 14,
+                "losing_trades": 38,
+                "win_rate_pct": 26.92,
+                "net_pnl_usdt": -108.47,
+                "profit_factor": 0.728,
+                "segment_max_drawdown_pct": 1.169,
+                "ending_equity_usdt": 9479.01
+              }
+            }
+          },
+          "current_risk_halts": {
+            "closed_trades": 24,
+            "net_pnl_usdt": 218.21,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1627088400000
+          }
+        },
+        "stress": {
+          "no_permanent_halt": {
+            "whole_period": {
+              "closed_trades": 396,
+              "winning_trades": 143,
+              "losing_trades": 253,
+              "win_rate_pct": 36.11,
+              "net_pnl_usdt": -1510.07,
+              "profit_factor": 0.595,
+              "segment_max_drawdown_pct": 16.619,
+              "ending_equity_usdt": 8489.93
+            },
+            "periods": {
+              "2021_2023": {
+                "closed_trades": 190,
+                "winning_trades": 73,
+                "losing_trades": 117,
+                "win_rate_pct": 38.42,
+                "net_pnl_usdt": -600.37,
+                "profit_factor": 0.663,
+                "segment_max_drawdown_pct": 8.183,
+                "ending_equity_usdt": 9399.63
+              },
+              "2024_2025": {
+                "closed_trades": 153,
+                "winning_trades": 57,
+                "losing_trades": 96,
+                "win_rate_pct": 37.25,
+                "net_pnl_usdt": -626.87,
+                "profit_factor": 0.569,
+                "segment_max_drawdown_pct": 7.153,
+                "ending_equity_usdt": 8772.76
+              },
+              "2026_through_oct": {
+                "closed_trades": 53,
+                "winning_trades": 13,
+                "losing_trades": 40,
+                "win_rate_pct": 24.53,
+                "net_pnl_usdt": -282.83,
+                "profit_factor": 0.431,
+                "segment_max_drawdown_pct": 3.412,
+                "ending_equity_usdt": 8489.93
+              }
+            }
+          },
+          "current_risk_halts": {
+            "closed_trades": 24,
+            "net_pnl_usdt": 153.88,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1627088400000
+          }
+        }
+      }
+    },
+    "adx_min_20": {
+      "parameters": {
+        "min_trend_adx": 20.0
+      },
+      "funnel": {
+        "BTCUSDT": {
+          "eligible_buy_signals": 149,
+          "candidate_buy_signals": 716,
+          "buy_vetoed_by_regime": 368,
+          "buy_vetoed_by_trend": 199,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        },
+        "ETHUSDT": {
+          "eligible_buy_signals": 161,
+          "candidate_buy_signals": 690,
+          "buy_vetoed_by_regime": 326,
+          "buy_vetoed_by_trend": 203,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        },
+        "SOLUSDT": {
+          "eligible_buy_signals": 103,
+          "candidate_buy_signals": 649,
+          "buy_vetoed_by_regime": 323,
+          "buy_vetoed_by_trend": 223,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        }
+      },
+      "costs": {
+        "base": {
+          "no_permanent_halt": {
+            "whole_period": {
+              "closed_trades": 287,
+              "winning_trades": 118,
+              "losing_trades": 169,
+              "win_rate_pct": 41.11,
+              "net_pnl_usdt": -380.8,
+              "profit_factor": 0.839,
+              "segment_max_drawdown_pct": 6.08,
+              "ending_equity_usdt": 9619.2
+            },
+            "periods": {
+              "2021_2023": {
+                "closed_trades": 144,
+                "winning_trades": 60,
+                "losing_trades": 84,
+                "win_rate_pct": 41.67,
+                "net_pnl_usdt": -187.82,
+                "profit_factor": 0.847,
+                "segment_max_drawdown_pct": 4.555,
+                "ending_equity_usdt": 9812.18
+              },
+              "2024_2025": {
+                "closed_trades": 107,
+                "winning_trades": 47,
+                "losing_trades": 60,
+                "win_rate_pct": 43.93,
+                "net_pnl_usdt": -137.41,
+                "profit_factor": 0.843,
+                "segment_max_drawdown_pct": 2.369,
+                "ending_equity_usdt": 9674.77
+              },
+              "2026_through_oct": {
+                "closed_trades": 36,
+                "winning_trades": 11,
+                "losing_trades": 25,
+                "win_rate_pct": 30.56,
+                "net_pnl_usdt": -55.57,
+                "profit_factor": 0.792,
+                "segment_max_drawdown_pct": 0.898,
+                "ending_equity_usdt": 9619.2
+              }
+            }
+          },
+          "current_risk_halts": {
+            "closed_trades": 35,
+            "net_pnl_usdt": 170.21,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1635782400000
+          }
+        },
+        "stress": {
+          "no_permanent_halt": {
+            "whole_period": {
+              "closed_trades": 287,
+              "winning_trades": 103,
+              "losing_trades": 184,
+              "win_rate_pct": 35.89,
+              "net_pnl_usdt": -1172.44,
+              "profit_factor": 0.576,
+              "segment_max_drawdown_pct": 13.06,
+              "ending_equity_usdt": 8827.56
+            },
+            "periods": {
+              "2021_2023": {
+                "closed_trades": 143,
+                "winning_trades": 52,
+                "losing_trades": 91,
+                "win_rate_pct": 36.36,
+                "net_pnl_usdt": -551.52,
+                "profit_factor": 0.613,
+                "segment_max_drawdown_pct": 7.196,
+                "ending_equity_usdt": 9448.48
+              },
+              "2024_2025": {
+                "closed_trades": 107,
+                "winning_trades": 42,
+                "losing_trades": 65,
+                "win_rate_pct": 39.25,
+                "net_pnl_usdt": -398.51,
+                "profit_factor": 0.596,
+                "segment_max_drawdown_pct": 4.342,
+                "ending_equity_usdt": 9049.98
+              },
+              "2026_through_oct": {
+                "closed_trades": 37,
+                "winning_trades": 9,
+                "losing_trades": 28,
+                "win_rate_pct": 24.32,
+                "net_pnl_usdt": -222.42,
+                "profit_factor": 0.374,
+                "segment_max_drawdown_pct": 2.625,
+                "ending_equity_usdt": 8827.56
+              }
+            }
+          },
+          "current_risk_halts": {
+            "closed_trades": 29,
+            "net_pnl_usdt": 124.95,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1633381200000
+          }
+        }
+      }
+    },
+    "rising_ema50_3bars": {
+      "parameters": {
+        "trend_slope_bars": 3
+      },
+      "funnel": {
+        "BTCUSDT": {
+          "eligible_buy_signals": 198,
+          "candidate_buy_signals": 716,
+          "buy_vetoed_by_regime": 288,
+          "buy_vetoed_by_trend": 230,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        },
+        "ETHUSDT": {
+          "eligible_buy_signals": 183,
+          "candidate_buy_signals": 690,
+          "buy_vetoed_by_regime": 277,
+          "buy_vetoed_by_trend": 230,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        },
+        "SOLUSDT": {
+          "eligible_buy_signals": 146,
+          "candidate_buy_signals": 649,
+          "buy_vetoed_by_regime": 259,
+          "buy_vetoed_by_trend": 244,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        }
+      },
+      "costs": {
+        "base": {
+          "no_permanent_halt": {
+            "whole_period": {
+              "closed_trades": 353,
+              "winning_trades": 140,
+              "losing_trades": 213,
+              "win_rate_pct": 39.66,
+              "net_pnl_usdt": -405.61,
+              "profit_factor": 0.86,
+              "segment_max_drawdown_pct": 6.257,
+              "ending_equity_usdt": 9594.39
+            },
+            "periods": {
+              "2021_2023": {
+                "closed_trades": 165,
+                "winning_trades": 72,
+                "losing_trades": 93,
+                "win_rate_pct": 43.64,
+                "net_pnl_usdt": -31.49,
+                "profit_factor": 0.975,
+                "segment_max_drawdown_pct": 4.587,
+                "ending_equity_usdt": 9968.51
+              },
+              "2024_2025": {
+                "closed_trades": 139,
+                "winning_trades": 54,
+                "losing_trades": 85,
+                "win_rate_pct": 38.85,
+                "net_pnl_usdt": -283.44,
+                "profit_factor": 0.773,
+                "segment_max_drawdown_pct": 4.591,
+                "ending_equity_usdt": 9685.07
+              },
+              "2026_through_oct": {
+                "closed_trades": 49,
+                "winning_trades": 14,
+                "losing_trades": 35,
+                "win_rate_pct": 28.57,
+                "net_pnl_usdt": -90.68,
+                "profit_factor": 0.753,
+                "segment_max_drawdown_pct": 1.164,
+                "ending_equity_usdt": 9594.39
+              }
+            }
+          },
+          "current_risk_halts": {
+            "closed_trades": 24,
+            "net_pnl_usdt": 218.21,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1627088400000
+          }
+        },
+        "stress": {
+          "no_permanent_halt": {
+            "whole_period": {
+              "closed_trades": 353,
+              "winning_trades": 129,
+              "losing_trades": 224,
+              "win_rate_pct": 36.54,
+              "net_pnl_usdt": -1280.11,
+              "profit_factor": 0.617,
+              "segment_max_drawdown_pct": 14.36,
+              "ending_equity_usdt": 8719.89
+            },
+            "periods": {
+              "2021_2023": {
+                "closed_trades": 164,
+                "winning_trades": 65,
+                "losing_trades": 99,
+                "win_rate_pct": 39.63,
+                "net_pnl_usdt": -415.58,
+                "profit_factor": 0.718,
+                "segment_max_drawdown_pct": 6.428,
+                "ending_equity_usdt": 9584.42
+              },
+              "2024_2025": {
+                "closed_trades": 139,
+                "winning_trades": 51,
+                "losing_trades": 88,
+                "win_rate_pct": 36.69,
+                "net_pnl_usdt": -612.14,
+                "profit_factor": 0.561,
+                "segment_max_drawdown_pct": 7.2,
+                "ending_equity_usdt": 8972.28
+              },
+              "2026_through_oct": {
+                "closed_trades": 50,
+                "winning_trades": 13,
+                "losing_trades": 37,
+                "win_rate_pct": 26.0,
+                "net_pnl_usdt": -252.39,
+                "profit_factor": 0.463,
+                "segment_max_drawdown_pct": 3.126,
+                "ending_equity_usdt": 8719.89
+              }
+            }
+          },
+          "current_risk_halts": {
+            "closed_trades": 24,
+            "net_pnl_usdt": 153.88,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1627088400000
+          }
+        }
+      }
+    },
+    "atr_min_0_30_pct": {
+      "parameters": {
+        "min_atr_pct": 0.3
+      },
+      "funnel": {
+        "BTCUSDT": {
+          "eligible_buy_signals": 216,
+          "candidate_buy_signals": 716,
+          "buy_vetoed_by_regime": 301,
+          "buy_vetoed_by_trend": 199,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        },
+        "ETHUSDT": {
+          "eligible_buy_signals": 201,
+          "candidate_buy_signals": 690,
+          "buy_vetoed_by_regime": 282,
+          "buy_vetoed_by_trend": 207,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        },
+        "SOLUSDT": {
+          "eligible_buy_signals": 159,
+          "candidate_buy_signals": 649,
+          "buy_vetoed_by_regime": 260,
+          "buy_vetoed_by_trend": 230,
+          "buy_vetoed_by_volume": 0,
+          "buy_vetoed_by_confidence": 0
+        }
+      },
+      "costs": {
+        "base": {
+          "no_permanent_halt": {
+            "whole_period": {
+              "closed_trades": 387,
+              "winning_trades": 155,
+              "losing_trades": 232,
+              "win_rate_pct": 40.05,
+              "net_pnl_usdt": -494.63,
+              "profit_factor": 0.845,
+              "segment_max_drawdown_pct": 7.128,
+              "ending_equity_usdt": 9505.37
+            },
+            "periods": {
+              "2021_2023": {
+                "closed_trades": 187,
+                "winning_trades": 80,
+                "losing_trades": 107,
+                "win_rate_pct": 42.78,
+                "net_pnl_usdt": -156.49,
+                "profit_factor": 0.897,
+                "segment_max_drawdown_pct": 5.417,
+                "ending_equity_usdt": 9843.51
+              },
+              "2024_2025": {
+                "closed_trades": 151,
+                "winning_trades": 61,
+                "losing_trades": 90,
+                "win_rate_pct": 40.4,
+                "net_pnl_usdt": -251.67,
+                "profit_factor": 0.806,
+                "segment_max_drawdown_pct": 3.829,
+                "ending_equity_usdt": 9591.84
+              },
+              "2026_through_oct": {
+                "closed_trades": 49,
+                "winning_trades": 14,
+                "losing_trades": 35,
+                "win_rate_pct": 28.57,
+                "net_pnl_usdt": -86.47,
+                "profit_factor": 0.771,
+                "segment_max_drawdown_pct": 0.94,
+                "ending_equity_usdt": 9505.37
+              }
+            }
+          },
+          "current_risk_halts": {
+            "closed_trades": 24,
+            "net_pnl_usdt": 218.21,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1627088400000
+          }
+        },
+        "stress": {
+          "no_permanent_halt": {
+            "whole_period": {
+              "closed_trades": 387,
+              "winning_trades": 141,
+              "losing_trades": 246,
+              "win_rate_pct": 36.43,
+              "net_pnl_usdt": -1465.43,
+              "profit_factor": 0.6,
+              "segment_max_drawdown_pct": 16.18,
+              "ending_equity_usdt": 8534.57
+            },
+            "periods": {
+              "2021_2023": {
+                "closed_trades": 186,
+                "winning_trades": 72,
+                "losing_trades": 114,
+                "win_rate_pct": 38.71,
+                "net_pnl_usdt": -590.03,
+                "profit_factor": 0.662,
+                "segment_max_drawdown_pct": 8.082,
+                "ending_equity_usdt": 9409.97
+              },
+              "2024_2025": {
+                "closed_trades": 151,
+                "winning_trades": 56,
+                "losing_trades": 95,
+                "win_rate_pct": 37.09,
+                "net_pnl_usdt": -619.16,
+                "profit_factor": 0.571,
+                "segment_max_drawdown_pct": 7.027,
+                "ending_equity_usdt": 8790.81
+              },
+              "2026_through_oct": {
+                "closed_trades": 50,
+                "winning_trades": 13,
+                "losing_trades": 37,
+                "win_rate_pct": 26.0,
+                "net_pnl_usdt": -256.24,
+                "profit_factor": 0.456,
+                "segment_max_drawdown_pct": 3.103,
+                "ending_equity_usdt": 8534.57
+              }
+            }
+          },
+          "current_risk_halts": {
+            "closed_trades": 24,
+            "net_pnl_usdt": 153.88,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1627088400000
+          }
+        }
+      }
+    }
+  }
+}

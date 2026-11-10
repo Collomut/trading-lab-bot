@@ -19,7 +19,7 @@ Railway files outside a mounted volume are ephemeral. The bot stores positions, 
 1. **Macro Trend Regime Filter**: Automatically vetoes BUY signals during downtrends (checks against a fixed 50-period EMA).
 2. **Process-monitored exit thresholds**: The worker checks break-even and trailing thresholds, but these are not exchange-side orders and can fail during downtime or network errors.
 3. **ATR-Aware Sizing**: Calculates Average True Range (ATR) to avoid getting shaken out by normal market wicks.
-4. **Fixed Market-Regime Gate**: The combined strategy pauses new buys when ADX is below `MIN_TREND_ADX` or ATR exceeds `MAX_ATR_PCT`. It does not alter thresholds automatically; exits and SELL signals remain available.
+4. **Fixed Market-Regime Gate**: The combined strategy pauses new buys when ADX is below `MIN_TREND_ADX` (default 20) or ATR exceeds `MAX_ATR_PCT`. It does not alter thresholds automatically; exits and SELL signals remain available.
 5. **Volume Confirmation**: Rejects fakeout signals during low-volume market dead zones.
 6. **Transactional State & Order Journal**: Persists positions/risk state in SQLite and records a deterministic client ID before submitting an order. An ambiguous or unapplied order intent halts trading for reconciliation rather than being retried.
 7. **Entry Preflight**: Uses exchange amount precision/limits and checks top-of-book spread and visible depth before entries. Values are configurable with `MAX_SPREAD_BPS` and `MAX_SLIPPAGE_BPS`.

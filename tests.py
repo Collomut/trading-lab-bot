@@ -270,6 +270,11 @@ class TestTechnicalIndicatorsAndStrategies(unittest.TestCase):
             self.assertIn(vote["signal"], {"BUY", "SELL", "HOLD"})
             self.assertTrue(vote["reason"])
 
+    def test_adx_default_uses_stricter_loss_reduction_threshold(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(StrategyConfig().min_trend_adx, 20.0)
+            self.assertEqual(CombinedStrategy().min_trend_adx, 20.0)
+
     def test_combined_strategy_consensus(self):
         strat = CombinedStrategy(use_trend_filter=False)
         sig = strat.analyze(self.df.copy(), "BTC/USDT")

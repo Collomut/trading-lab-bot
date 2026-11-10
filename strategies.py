@@ -350,7 +350,7 @@ class CombinedStrategy:
         use_trend_filter: bool = True,
         trend_period: int = 50,
         regime_filter_enabled: bool = True,
-        min_trend_adx: float = 18.0,
+        min_trend_adx: float = 20.0,
         max_atr_pct: float = 3.0,
     ):
         self.ema = EMA_Crossover_Strategy()
@@ -554,7 +554,7 @@ def get_strategy(
     name: str,
     *,
     regime_filter_enabled: bool = True,
-    min_trend_adx: float = 18.0,
+    min_trend_adx: float = 20.0,
     max_atr_pct: float = 3.0,
 ):
     """Factory function to get a strategy by name."""

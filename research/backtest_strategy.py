@@ -35,7 +35,8 @@ STRESS_SLIPPAGE_BPS = 10.0
 def compute_signals(symbol: str, crossover_window: int = 2, trend_enabled: bool = True,
                     regime_enabled: bool = True, consensus_required: int = 2,
                     interval: str = "1h", min_trend_adx: float = 18.0,
-                    max_atr_pct: float = 3.0):
+                    max_atr_pct: float = 3.0, min_atr_pct: float = 0.0,
+                    trend_slope_bars: int = 0):
     if interval not in {"15m", "1h"}:
         raise ValueError(f"Unsupported research interval: {interval}")
     path = DATA / f"{symbol}_{interval}.csv"
@@ -106,10 +107,13 @@ def compute_signals(symbol: str, crossover_window: int = 2, trend_enabled: bool 
     sell_conf = np.where(sell_n > 0, sell_conf_sum / np.maximum(sell_n, 1) + 0.1, 0.0).clip(0, 0.95)
 
     atr_pct = df.atr / close * 100.0
-    regime_ok = df.adx.notna() & atr_pct.notna() & (atr_pct <= max_atr_pct) & (df.adx >= min_trend_adx)
+    regime_ok = (df.adx.notna() & atr_pct.notna() & (atr_pct >= min_atr_pct)
+                 & (atr_pct <= max_atr_pct) & (df.adx >= min_trend_adx))
     if not regime_enabled:
         regime_ok = pd.Series(True, index=df.index)
     trend_ok = close >= df.ema50
+    if trend_slope_bars > 0:
+        trend_ok &= df.ema50 > df.ema50.shift(trend_slope_bars)
     if not trend_enabled:
         trend_ok = pd.Series(True, index=df.index)
     vol_avg = df.vol_sma20.where(df.vol_sma20.notna(), volume)
@@ -197,13 +201,14 @@ def compute_pullback_signals(symbol: str, *, rsi_mode: str = "rising45", slope_b
 
 def validate_against_actual_strategy(symbol: str, frame: pd.DataFrame, sample_count: int = 100,
                                      crossover_window: int = 2, trend_enabled: bool = True,
-                                     regime_enabled: bool = True, interval: str = "1h"):
+                                     regime_enabled: bool = True, interval: str = "1h",
+                                     min_trend_adx: float = 18.0):
     """Compare vectorized baseline to the repository's CombinedStrategy on deterministic samples."""
     raw = pd.read_csv(DATA / f"{symbol}_{interval}.csv")
     rng = np.random.default_rng(20261108)
     valid = np.arange(100, len(frame)-1)
     indices = sorted(rng.choice(valid, size=min(sample_count, len(valid)), replace=False).tolist())
-    strat = CombinedStrategy(regime_filter_enabled=regime_enabled, min_trend_adx=18.0, max_atr_pct=3.0)
+    strat = CombinedStrategy(regime_filter_enabled=regime_enabled, min_trend_adx=min_trend_adx, max_atr_pct=3.0)
     strat.use_trend_filter = trend_enabled
     strat.ema.crossover_lookback = crossover_window
     strat.macd.crossover_lookback = crossover_window

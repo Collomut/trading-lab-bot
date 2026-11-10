@@ -2,7 +2,7 @@
 
 **Reviewed:** 2026-11-10
 
-**Decision:** do not change the active strategy or timeframe. The tested ways to raise trade count materially worsened historical net performance and drawdown; the current strategy also lacks a positive historical edge.
+**Decision from this frequency study:** do not move the bot to 15-minute or mixed-timeframe entries. Those candidates materially worsened historical net performance and drawdown. A separate ADX20 loss-reduction follow-up is documented in `LOSS_REDUCTION_REVIEW.md`.
 
 ## Question and candidates
 
@@ -44,7 +44,7 @@ The positive base-cost P&L in the halted hourly run is not a strategy edge: the 
 
 ## Decision and next step
 
-No tested candidate meets the requested condition of more trades without materially worse risk. I left the application's strategy, runtime variables, position sizing, and Railway deployment unchanged. Do not move this bot to 15-minute trading or real-money use based on these results.
+No tested interval candidate meets the requested condition of more trades without materially worse risk. Do not move this bot to 15-minute trading based on these results. The subsequent ADX20 setting change is evaluated separately in `LOSS_REDUCTION_REVIEW.md`; neither that change nor this study makes the strategy profitable or ready for real-money use.
 
 The next useful activity test is a **read-only shadow run** on Testnet: calculate both the existing and candidate signals, record which gates would allow entries and hypothetical fills, and submit no orders until a candidate shows positive net expectancy after fees/slippage across forward observation and stable drawdown. Do not use the current losing 15-minute candidates for live orders.
 
