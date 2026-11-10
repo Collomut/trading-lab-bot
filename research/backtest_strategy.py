@@ -33,10 +33,20 @@ STRESS_SLIPPAGE_BPS = 10.0
 
 
 def compute_signals(symbol: str, crossover_window: int = 2, trend_enabled: bool = True,
-                    regime_enabled: bool = True, consensus_required: int = 2):
-    path = DATA / f"{symbol}_1h.csv"
+                    regime_enabled: bool = True, consensus_required: int = 2,
+                    interval: str = "1h", min_trend_adx: float = 18.0,
+                    max_atr_pct: float = 3.0):
+    if interval not in {"15m", "1h"}:
+        raise ValueError(f"Unsupported research interval: {interval}")
+    path = DATA / f"{symbol}_{interval}.csv"
     raw = pd.read_csv(path)
     raw = raw.drop_duplicates("timestamp_ms").sort_values("timestamp_ms").reset_index(drop=True)
+    interval_ms = {"15m": 15 * 60_000, "1h": 60 * 60_000}[interval]
+    # Match the production candle-sequence guard: do not generate a signal from
+    # a rolling input window containing timestamp gaps or fewer than 100 bars.
+    contiguous_step = raw.timestamp_ms.diff().eq(interval_ms)
+    sequence_ok = contiguous_step.rolling(LOOKBACK_CANDLES - 1,
+                                          min_periods=LOOKBACK_CANDLES - 1).sum().eq(LOOKBACK_CANDLES - 1)
     # Only complete hourly bars are present in Binance's monthly archive.
     df = raw.copy()
     close, high, low, volume = df.close, df.high, df.low, df.volume
@@ -96,7 +106,7 @@ def compute_signals(symbol: str, crossover_window: int = 2, trend_enabled: bool 
     sell_conf = np.where(sell_n > 0, sell_conf_sum / np.maximum(sell_n, 1) + 0.1, 0.0).clip(0, 0.95)
 
     atr_pct = df.atr / close * 100.0
-    regime_ok = df.adx.notna() & atr_pct.notna() & (atr_pct <= 3.0) & (df.adx >= 18.0)
+    regime_ok = df.adx.notna() & atr_pct.notna() & (atr_pct <= max_atr_pct) & (df.adx >= min_trend_adx)
     if not regime_enabled:
         regime_ok = pd.Series(True, index=df.index)
     trend_ok = close >= df.ema50
@@ -104,11 +114,11 @@ def compute_signals(symbol: str, crossover_window: int = 2, trend_enabled: bool 
         trend_ok = pd.Series(True, index=df.index)
     vol_avg = df.vol_sma20.where(df.vol_sma20.notna(), volume)
     volume_ok = (vol_avg <= 0) | (volume >= 0.3 * vol_avg)
-    enough = np.arange(len(df)) >= 30
+    enough = sequence_ok
     regime_ok = regime_ok & enough
     # Use actual component sub-strategy count and the gates in CombinedStrategy.
-    candidate_buy = buy_n >= consensus_required
-    candidate_sell = sell_n >= consensus_required
+    candidate_buy = (buy_n >= consensus_required) & sequence_ok
+    candidate_sell = (sell_n >= consensus_required) & sequence_ok
     reason = np.full(len(df), "no_consensus", dtype=object)
     signal = np.full(len(df), "HOLD", dtype=object)
     reason[candidate_sell] = "sell_consensus"
@@ -130,6 +140,7 @@ def compute_signals(symbol: str, crossover_window: int = 2, trend_enabled: bool 
         "timestamp_ms": raw.timestamp_ms, "open": raw.open, "high": raw.high,
         "low": raw.low, "close": raw.close, "volume": raw.volume,
         "atr": df.atr, "adx": df.adx, "atr_pct": atr_pct, "ema50": df.ema50,
+        "sequence_ok": sequence_ok,
         "buy_votes": buy_n, "sell_votes": sell_n,
         "ema_buy": ema_buy, "rsi_buy": rsi_buy, "macd_buy": macd_buy,
         "ema_sell": ema_sell, "rsi_sell": rsi_sell, "macd_sell": macd_sell,
@@ -186,9 +197,9 @@ def compute_pullback_signals(symbol: str, *, rsi_mode: str = "rising45", slope_b
 
 def validate_against_actual_strategy(symbol: str, frame: pd.DataFrame, sample_count: int = 100,
                                      crossover_window: int = 2, trend_enabled: bool = True,
-                                     regime_enabled: bool = True):
+                                     regime_enabled: bool = True, interval: str = "1h"):
     """Compare vectorized baseline to the repository's CombinedStrategy on deterministic samples."""
-    raw = pd.read_csv(DATA / f"{symbol}_1h.csv")
+    raw = pd.read_csv(DATA / f"{symbol}_{interval}.csv")
     rng = np.random.default_rng(20261108)
     valid = np.arange(100, len(frame)-1)
     indices = sorted(rng.choice(valid, size=min(sample_count, len(valid)), replace=False).tolist())
@@ -212,10 +223,11 @@ def nav(cash, positions, frames, i):
     return cash + sum(p["qty"] * frames[s].iloc[i].close for s, p in positions.items())
 
 
-def correlation_ok(candidate: str, positions: dict, frames: dict, i: int) -> bool:
+def correlation_ok(candidate: str, positions: dict, frames: dict, i: int,
+                   lookback_bars: int = 100) -> bool:
     if not positions:
         return True
-    start = max(0, i-100)
+    start = max(0, i-lookback_bars)
     a = frames[candidate].close.iloc[start:i+1].pct_change().dropna()
     for existing in positions:
         b = frames[existing].close.iloc[start:i+1].pct_change().dropna()
@@ -229,8 +241,9 @@ def correlation_ok(candidate: str, positions: dict, frames: dict, i: int) -> boo
 
 
 def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: bool = True,
-             start_timestamp_ms: int | None = None, end_timestamp_ms: int | None = None):
-    # Common UTC hourly timestamps across the selected Binance symbols.
+             start_timestamp_ms: int | None = None, end_timestamp_ms: int | None = None,
+             blueprint_stop_model: bool = False, correlation_lookback_bars: int = 100):
+    # Use common timestamps across all selected Binance symbols and intervals.
     common = set(frames[next(iter(frames))].timestamp_ms)
     for f in frames.values():
         common &= set(f.timestamp_ms)
@@ -302,13 +315,21 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
                 if prev_signal.signal != "BUY" or sym in positions:
                     continue
                 current_nav = cash + sum(p["qty"]*events[s].loc[ts].open for s,p in positions.items())
-                if len(positions) >= MAX_OPEN_POSITIONS or cash <= 0 or not correlation_ok(sym, positions, frames, i-1):
+                if (len(positions) >= MAX_OPEN_POSITIONS or cash <= 0
+                        or not correlation_ok(sym, positions, frames, i-1, correlation_lookback_bars)):
                     continue
                 fill = float(events[sym].loc[ts].open) * (1 + slip)
                 atr = float(prev_signal.atr) if math.isfinite(float(prev_signal.atr)) else 0.0
-                stop_dist = max(fill*0.01, min(fill*0.03, 1.5*atr)) if atr > 0 else fill*0.02
-                stop = fill-stop_dist
-                target = fill*1.03
+                if blueprint_stop_model and "swing_low_reference" in prev_signal.index:
+                    stop = max(float(prev_signal.swing_low_reference), fill * 0.985)
+                    if not math.isfinite(stop) or stop <= 0 or stop >= fill:
+                        continue
+                    stop_dist = fill - stop
+                    target = fill + 2.0 * stop_dist
+                else:
+                    stop_dist = max(fill*0.01, min(fill*0.03, 1.5*atr)) if atr > 0 else fill*0.02
+                    stop = fill-stop_dist
+                    target = fill*1.03
                 risk_qty = (cash*MAX_RISK_PER_TRADE_PCT/100)/stop_dist
                 max_qty = (cash*POSITION_SIZE_PCT/100)/fill
                 qty = min(risk_qty, max_qty)
