@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m2"><script src="/assets/app.js" defer></script></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m3"><script src="/assets/app.js" defer></script></head><body>
 <nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link active" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav>
 <main class="container"><header class="page-head"><div><div class="eyebrow">Paper-trading dashboard</div><h1>Overview</h1></div><div class="status"><span id="dot" class="dot"></span><span id="connection">Connecting…</span></div></header>
 <div class="notice compact"><strong>Practice mode</strong><span id="mode">Loading…</span><span class="muted-inline">· App-monitored exits can fail during outages.</span></div>
@@ -10,16 +10,15 @@
   <!-- Binance Terminal Header -->
   <div class="chart-heading">
     <div class="chart-brand-row">
-      <span class="binance-pill"><span class="pulse-beacon"></span> BINANCE SPOT</span>
       <h2 id="chart-title">Market chart</h2>
     </div>
     <div class="chart-controls">
       <div class="chart-auto-refresh" title="Auto-refreshing Binance market feed">
         <span class="refresh-spin-dot"></span>
-        <span>Auto: <b id="refresh-countdown">30s</b></span>
+        <span>Updates in <b id="refresh-countdown">30s</b></span>
       </div>
       <select id="symbol" aria-label="Trading pair"></select>
-      <select id="timeframe" aria-label="Chart timeframe">
+      <select id="timeframe" aria-label="Chart timeframe" class="visually-hidden" tabindex="-1" aria-hidden="true">
         <option value="15m">15m</option>
         <option value="1h" selected>1h</option>
         <option value="4h">4h</option>
@@ -37,8 +36,7 @@
     <div class="chart-24h-strip">
       <div class="stat-pill"><span class="stat-lbl">24h High</span><b id="stat-24h-high">—</b></div>
       <div class="stat-pill"><span class="stat-lbl">24h Low</span><b id="stat-24h-low">—</b></div>
-      <div class="stat-pill"><span class="stat-lbl">24h Volume</span><b id="stat-24h-vol">—</b></div>
-      <div class="stat-pill"><span class="stat-lbl">24h Amplitude</span><b id="stat-24h-amp">—</b></div>
+      <span id="stat-24h-vol" hidden></span><span id="stat-24h-amp" hidden></span>
     </div>
     <span id="chart-ohlc" class="ohlc-readout"></span>
   </div>
@@ -52,24 +50,27 @@
       <button type="button" class="chart-pill" data-tf="1d">1D</button>
     </div>
     <div class="chart-toolbar-group">
-      <button type="button" class="chart-pill active" id="btn-mode-candles" title="Candlestick Chart">🕯️ Candles</button>
-      <button type="button" class="chart-pill" id="btn-mode-area" title="Neon Area Line Chart">📈 Line</button>
+      <button type="button" class="chart-pill active" id="btn-mode-candles" title="Candlestick chart">Candles</button>
+      <button type="button" class="chart-pill" id="btn-mode-area" title="Line chart">Line</button>
     </div>
-    <div class="chart-toolbar-group">
-      <button type="button" class="ind-pill active ind-ma7" id="btn-ind-ma7" title="7-period Moving Average"><span class="dot-ind gold"></span> MA(7)</button>
-      <button type="button" class="ind-pill active ind-ma25" id="btn-ind-ma25" title="25-period Moving Average"><span class="dot-ind cyan"></span> MA(25)</button>
-      <button type="button" class="ind-pill active ind-ema99" id="btn-ind-ema99" title="99-period Exponential Moving Average"><span class="dot-ind violet"></span> EMA(99)</button>
-      <button type="button" class="ind-pill active ind-vol" id="btn-ind-vol" title="Volume Bars"><span class="dot-ind green"></span> VOL</button>
-    </div>
-    <div class="chart-toolbar-group">
+    <details class="chart-indicators">
+      <summary>Indicators</summary>
+      <div class="chart-indicator-menu">
+        <button type="button" class="ind-pill ind-ma7" id="btn-ind-ma7" title="7-period Moving Average"><span class="dot-ind gold"></span> MA(7)</button>
+        <button type="button" class="ind-pill ind-ma25" id="btn-ind-ma25" title="25-period Moving Average"><span class="dot-ind cyan"></span> MA(25)</button>
+        <button type="button" class="ind-pill ind-ema99" id="btn-ind-ema99" title="99-period Exponential Moving Average"><span class="dot-ind violet"></span> EMA(99)</button>
+        <button type="button" class="ind-pill active ind-vol" id="btn-ind-vol" title="Volume bars"><span class="dot-ind green"></span> Volume</button>
+      </div>
+    </details>
+    <div class="chart-toolbar-group chart-zoom-controls" aria-label="Chart zoom controls">
       <button type="button" class="icon-pill" id="btn-zoom-in" title="Zoom in (+)">＋</button>
       <button type="button" class="icon-pill" id="btn-zoom-out" title="Zoom out (-)">－</button>
-      <button type="button" class="icon-pill" id="btn-zoom-reset" title="Reset zoom and view">⟲ Reset</button>
+      <button type="button" class="icon-pill" id="btn-zoom-reset" title="Reset zoom and view">Reset</button>
     </div>
   </div>
 
   <!-- Real-Time HUD strip -->
-  <div class="chart-hud" id="chart-hud">
+  <div class="chart-hud visually-hidden" id="chart-hud" aria-hidden="true">
     <span class="hud-item"><span class="hud-lbl">Time</span><span class="hud-val" id="hud-time">—</span></span>
     <span class="hud-item"><span class="hud-lbl">O</span><span class="hud-val" id="hud-o">—</span></span>
     <span class="hud-item"><span class="hud-lbl">H</span><span class="hud-val" id="hud-h">—</span></span>
@@ -93,8 +94,7 @@
   <!-- Footer Info & Disclaimers -->
   <div class="chart-foot">
     <span id="chart-range">—</span>
-    <span id="chart-meta">Candles and volume · refreshed every 30 seconds</span>
-    <span>Exchange market data · not a trading signal</span>
+    <span id="chart-meta">Market data · not a trading signal</span>
   </div>
   <div id="chart-error" class="help error-text" aria-live="polite"></div>
 </section>
@@ -116,9 +116,9 @@ let refreshCountdown = 30;
 
 const chartState = {
   viewMode: 'candles', // 'candles' | 'area'
-  showMA7: true,
-  showMA25: true,
-  showEMA99: true,
+  showMA7: false,
+  showMA25: false,
+  showEMA99: false,
   showVol: true,
   visibleCount: 55,
   panOffset: 0,
@@ -344,7 +344,7 @@ function render() {
   const bodyW = Math.max(2, Math.min(22, slotW * 0.72));
 
   // 1. Background
-  ctx.fillStyle = isDark ? '#11151b' : '#fafbfc';
+  ctx.fillStyle = isDark ? '#0b0b0b' : '#fafbfc';
   ctx.fillRect(0, 0, W, H);
 
   if (isDark) {
@@ -611,7 +611,7 @@ function render() {
 
       // Price badge on right axis at my
       const hoverPrice = yToPrice(my);
-      ctx.fillStyle = isDark ? '#2b313a' : '#334155';
+      ctx.fillStyle = isDark ? '#252525' : '#334155';
       roundRect(ctx, badgeX, my - 9, badgeW, 18, 3);
       ctx.fill();
       ctx.strokeStyle = isDark ? '#475569' : '#94a3b8';
@@ -631,7 +631,7 @@ function render() {
       ctx.font = '10px "JetBrains Mono", monospace';
       const textW = ctx.measureText(timeStr).width + 12;
       const timeX = Math.max(L, Math.min(W - R - textW, hx - textW / 2));
-      ctx.fillStyle = isDark ? '#2b313a' : '#334155';
+      ctx.fillStyle = isDark ? '#252525' : '#334155';
       roundRect(ctx, timeX, H - B + 2, textW, 18, 3);
       ctx.fill();
       ctx.strokeStyle = isDark ? '#475569' : '#94a3b8';
