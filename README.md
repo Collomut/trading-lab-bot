@@ -1,8 +1,8 @@
-# 🤖 Automated Crypto Trading Bot
+# Trading Lab: Automated Crypto Trading Bot
 
 A cryptocurrency trading research and paper-trading project written in Python.
 
-> ⚠️ **DISCLAIMER:** Trading cryptocurrency involves financial risk. No trading bot can guarantee profits. Past backtest performance does not guarantee future results. Start with **paper trading** to verify real-time performance.
+> **DISCLAIMER:** Trading cryptocurrency involves financial risk. No trading bot can guarantee profits. Past backtest performance does not guarantee future results. Start with **paper trading** to verify real-time performance.
 
 ---
 
@@ -33,12 +33,10 @@ Railway files outside a mounted volume are ephemeral. The bot stores positions, 
 
 ## Backtest (exploratory only)
 
-The existing quick backtest is exploratory only. It uses a short recent sample and does not model exchange fees, slippage, partial fills, latency, or out-of-sample walk-forward validation. Its printed returns and win rates are not evidence of a tradable edge and must not be used to justify live trading.
-
-No historical headline return or win-rate figure in this repository has been independently reproduced. The command prints an exploratory replay only; do not interpret it as evidence of profitability.
+The quick backtest is exploratory only. It uses a short recent sample and does not model exchange fees, slippage, partial fills, latency, or out-of-sample walk-forward validation. Historical returns and win rates have not been independently reproduced and are not evidence of a tradable edge. Do not use them to justify live trading.
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Run Unit Tests
 Verify all strategy and risk calculations in under 1 second:
@@ -74,7 +72,7 @@ python main.py --interval 60
 
 ---
 
-## ⚙️ Configuration (`.env`)
+## Configuration (`.env`)
 
 ```ini
 # Exchange
@@ -121,6 +119,14 @@ SQLite remains the default when `DATABASE_URL` is empty. To cut over, set `DATAB
 When `DATABASE_URL` is configured, Railway runs `migrate_sqlite_to_postgres.py` before the app starts. The importer takes a consistent SQLite backup on the mounted Railway volume, copies schema migrations, positions, risk state, order intents, audit events, and JSONL trade history in one Postgres transaction, and records a one-time import marker. It refuses an incomplete SQLite schema, malformed trade-history rows, or unmarked existing Postgres data. It never deletes the source SQLite file or JSONL log. If the import or database connection fails, the app does not start, so it cannot silently trade using a fresh/empty Postgres database.
 
 Postgres tables are in the private `bot_private` schema and are accessed only over the server-side database connection. The app keeps the volume-mounted SQLite file and JSONL log as rollback evidence. Use one Railway replica and no deployment overlap during the cutover; the existing order reconciliation must pass before entries can resume. A successful import does not itself prove account reconciliation, strategy profitability, or live-market readiness.
+
+## Project documentation
+
+- [Current pre-launch readiness review](docs/audits/pre-launch-readiness.md)
+- [Strategy research and reproducibility notes](research/README.md)
+- [Testnet limits](docs/testnet_limits.md)
+- [Testnet reset recovery](docs/testnet_reset_recovery.md)
+- Historical audit snapshots are kept in [`docs/audits/archive/`](docs/audits/archive/).
 
 ## Live trading
 

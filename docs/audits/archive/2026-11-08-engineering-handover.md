@@ -5,7 +5,7 @@
 **Audited change branch:** `audit-hardening-unreleased`  
 **Deployment boundary:** Spot Testnet/paper only. Live order placement remains blocked. This handover is not authorization to enable live trading.
 
-Use this together with [`AUDIT_RESPONSE.md`](AUDIT_RESPONSE.md), which maps the original review checklist to current code and tests. This file replaces the older handover draft: findings already corrected in the current branch have been removed from the open backlog.
+Use this together with [`2026-11-08-audit-response.md`](2026-11-08-audit-response.md), which maps the original review checklist to the code and tests at that time. This is a historical snapshot; see the current pre-launch review before making release decisions.
 
 ## Current strengths to preserve
 
