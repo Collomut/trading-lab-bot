@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m3"><script src="/assets/app.js" defer></script></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m4"><script src="/assets/app.js" defer></script></head><body>
 <nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link active" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav>
 <main class="container"><header class="page-head"><div><div class="eyebrow">Paper-trading dashboard</div><h1>Overview</h1></div><div class="status"><span id="dot" class="dot"></span><span id="connection">Connecting…</span></div></header>
 <div class="notice compact"><strong>Practice mode</strong><span id="mode">Loading…</span><span class="muted-inline">· App-monitored exits can fail during outages.</span></div>
@@ -7,16 +7,11 @@
 <div class="overview-metrics"><section class="card metric-card"><div class="metric-label">Available USDT</div><div class="metric" id="cash-balance">—</div></section><section class="card metric-card"><div class="metric-label">Bot-Tracked Value</div><div class="metric" id="net-worth">—</div></section><section class="card metric-card"><div class="metric-label">Estimated P&amp;L (Net)</div><div class="metric" id="pnl">—</div></section><section class="card metric-card"><div class="metric-label">Open positions</div><div class="metric" id="open-count">—</div></section></div>
 
 <section class="card chart-card">
-  <!-- Binance Terminal Header -->
   <div class="chart-heading">
     <div class="chart-brand-row">
-      <h2 id="chart-title">Market chart</h2>
+      <h2 id="chart-title">Market</h2>
     </div>
     <div class="chart-controls">
-      <div class="chart-auto-refresh" title="Auto-refreshing Binance market feed">
-        <span class="refresh-spin-dot"></span>
-        <span>Updates in <b id="refresh-countdown">30s</b></span>
-      </div>
       <select id="symbol" aria-label="Trading pair"></select>
       <select id="timeframe" aria-label="Chart timeframe" class="visually-hidden" tabindex="-1" aria-hidden="true">
         <option value="15m">15m</option>
@@ -27,21 +22,17 @@
     </div>
   </div>
 
-  <!-- Big Ticker, 24h Stats Ribbon & OHLC Readout -->
   <div class="chart-price-row">
     <div class="price-main-col">
       <strong id="chart-price">—</strong>
-      <span id="chart-change" class="tag">—</span>
+      <span id="chart-change" class="tag" title="Change across the loaded candles" aria-label="Price change across the loaded candles">—</span>
     </div>
     <div class="chart-24h-strip">
-      <div class="stat-pill"><span class="stat-lbl">24h High</span><b id="stat-24h-high">—</b></div>
-      <div class="stat-pill"><span class="stat-lbl">24h Low</span><b id="stat-24h-low">—</b></div>
-      <span id="stat-24h-vol" hidden></span><span id="stat-24h-amp" hidden></span>
+      <div class="stat-pill"><span class="stat-lbl">Loaded high</span><b id="chart-high">—</b></div>
+      <div class="stat-pill"><span class="stat-lbl">Loaded low</span><b id="chart-low">—</b></div>
     </div>
-    <span id="chart-ohlc" class="ohlc-readout"></span>
   </div>
 
-  <!-- Futuristic Toolbar -->
   <div class="chart-toolbar">
     <div class="chart-toolbar-group chart-timeframe-pills">
       <button type="button" class="chart-pill" data-tf="15m">15m</button>
@@ -62,11 +53,6 @@
         <button type="button" class="ind-pill active ind-vol" id="btn-ind-vol" title="Volume bars"><span class="dot-ind green"></span> Volume</button>
       </div>
     </details>
-    <div class="chart-toolbar-group chart-zoom-controls" aria-label="Chart zoom controls">
-      <button type="button" class="icon-pill" id="btn-zoom-in" title="Zoom in (+)">＋</button>
-      <button type="button" class="icon-pill" id="btn-zoom-out" title="Zoom out (-)">－</button>
-      <button type="button" class="icon-pill" id="btn-zoom-reset" title="Reset zoom and view">Reset</button>
-    </div>
   </div>
 
   <!-- Real-Time HUD strip -->
@@ -83,18 +69,17 @@
     <span class="hud-item hud-ema99-text" id="hud-ema99-box"><span class="hud-lbl">EMA(99)</span><span class="hud-val" id="hud-ema99-val">—</span></span>
   </div>
 
-  <!-- Interactive Canvas Viewport -->
   <div class="chart-wrap" id="chart-container">
-    <canvas id="price-chart-canvas" class="chart-canvas" role="img" aria-label="Binance Candlestick Market Chart"></canvas>
+    <canvas id="price-chart-canvas" class="chart-canvas" role="img" aria-label="Candlestick market chart with volume"></canvas>
     <svg id="price-chart" viewBox="0 0 1000 380" role="img" aria-label="Candlestick market chart with volume" style="display:none"></svg>
     <div id="chart-tooltip" class="chart-tooltip" aria-live="polite"></div>
-    <div id="chart-loading-overlay" class="chart-loading-overlay" hidden><div class="cyber-spinner"></div><span>Synchronizing Binance Market Feed…</span></div>
+    <div id="chart-loading-overlay" class="chart-loading-overlay" hidden><div class="cyber-spinner"></div><span>Loading market data…</span></div>
   </div>
 
   <!-- Footer Info & Disclaimers -->
   <div class="chart-foot">
     <span id="chart-range">—</span>
-    <span id="chart-meta">Market data · not a trading signal</span>
+    <span id="chart-meta">Loaded-candle range · scroll to zoom · drag to pan · double-click to reset · not a signal</span>
   </div>
   <div id="chart-error" class="help error-text" aria-live="polite"></div>
 </section>
@@ -112,7 +97,6 @@ let latestPairs = [];
 // ==============================================================================
 let chartData = null;
 let lastSeenPrice = null;
-let refreshCountdown = 30;
 
 const chartState = {
   viewMode: 'candles', // 'candles' | 'area'
@@ -217,17 +201,12 @@ function computeIndicators(candles) {
 
 function computeStats(candles) {
   if (!candles.length) return null;
-  let high = -Infinity, low = Infinity, vol = 0;
+  let high = -Infinity, low = Infinity;
   for (const c of candles) {
     if (c.high > high) high = c.high;
     if (c.low < low) low = c.low;
-    vol += c.volume;
   }
-  const first = candles[0];
-  const last = candles[candles.length - 1];
-  const change = ((last.close - first.open) / first.open) * 100;
-  const amp = low > 0 ? ((high - low) / low) * 100 : 0;
-  return { high, low, vol, change, amp };
+  return { high, low };
 }
 
 function flashPrice(newPrice) {
@@ -251,7 +230,7 @@ function flashPrice(newPrice) {
 }
 
 // ==============================================================================
-// Canvas Rendering Engine (Futuristic Binance Terminal)
+// Canvas chart renderer
 // ==============================================================================
 function render() {
   if (!chartData || !chartData.candles || chartData.candles.length < 2) return;
@@ -344,16 +323,8 @@ function render() {
   const bodyW = Math.max(2, Math.min(22, slotW * 0.72));
 
   // 1. Background
-  ctx.fillStyle = isDark ? '#0b0b0b' : '#fafbfc';
+  ctx.fillStyle = isDark ? '#080808' : '#ffffff';
   ctx.fillRect(0, 0, W, H);
-
-  if (isDark) {
-    const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-    bgGrad.addColorStop(0, 'rgba(22, 27, 34, 0.45)');
-    bgGrad.addColorStop(1, 'rgba(10, 12, 16, 0.85)');
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(0, 0, W, H);
-  }
 
   // 2. Horizontal Price Gridlines & Scale
   const gridColor = isDark ? 'rgba(255, 255, 255, 0.05)' : '#edf2f7';
@@ -363,7 +334,7 @@ function render() {
   ctx.setLineDash([3, 5]);
   ctx.strokeStyle = gridColor;
   ctx.fillStyle = textColor;
-  ctx.font = '10.5px "JetBrains Mono", "SF Mono", "Roboto Mono", monospace';
+  ctx.font = '10.5px system-ui, -apple-system, "Segoe UI", sans-serif';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
 
@@ -522,7 +493,7 @@ function render() {
   }
 
   // 7. Highest & Lowest Markers
-  ctx.font = '10px "JetBrains Mono", monospace';
+  ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif';
   ctx.fillStyle = textColor;
   ctx.textAlign = 'left';
   const highX = x(highestIdx);
@@ -572,7 +543,7 @@ function render() {
   ctx.fill();
 
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 10px "JetBrains Mono", monospace';
+  ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(formatPrice(lastClose), badgeX + badgeW / 2, lastY);
@@ -618,7 +589,7 @@ function render() {
       ctx.stroke();
 
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 10px "JetBrains Mono", monospace';
+      ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(formatPrice(hoverPrice), badgeX + badgeW / 2, my);
@@ -628,7 +599,7 @@ function render() {
       const timeStr = chartData.timeframe === '1d'
         ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
         : d.toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-      ctx.font = '10px "JetBrains Mono", monospace';
+      ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif';
       const textW = ctx.measureText(timeStr).width + 12;
       const timeX = Math.max(L, Math.min(W - R - textW, hx - textW / 2));
       ctx.fillStyle = isDark ? '#252525' : '#334155';
@@ -686,10 +657,6 @@ function updateHUD(candle, origIdx) {
     $('hud-ema99-val').textContent = ema99 != null ? formatPrice(ema99) : '—';
   }
 
-  const ohlcEl = $('chart-ohlc');
-  if (ohlcEl) {
-    ohlcEl.textContent = `O ${formatPrice(candle.open)}  H ${formatPrice(candle.high)}  L ${formatPrice(candle.low)}  C ${formatPrice(candle.close)}`;
-  }
 }
 
 function updateTooltip(candle, origIdx, hx, my, W, H) {
@@ -761,10 +728,8 @@ function drawChart(data) {
 
   const stats = computeStats(chartData.candles);
   if (stats) {
-    $('stat-24h-high').textContent = formatPrice(stats.high);
-    $('stat-24h-low').textContent = formatPrice(stats.low);
-    $('stat-24h-vol').textContent = formatVol(stats.vol);
-    $('stat-24h-amp').textContent = `${stats.amp.toFixed(2)}%`;
+    $('chart-high').textContent = formatPrice(stats.high);
+    $('chart-low').textContent = formatPrice(stats.low);
   }
 
   const last = chartData.candles[chartData.candles.length - 1];
@@ -780,8 +745,7 @@ function drawChart(data) {
   badge.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
   badge.className = `tag ${up ? 'positive' : 'negative'}`;
 
-  $('chart-ohlc').textContent = `O ${formatPrice(last.open)}  H ${formatPrice(last.high)}  L ${formatPrice(last.low)}  C ${formatPrice(last.close)}`;
-  $('chart-title').textContent = `${data.symbol} · ${data.timeframe}`;
+  $('chart-title').textContent = 'Market';
   $('chart-range').textContent = `${new Date(Number(first.time)).toLocaleString()} — ${new Date(Number(last.time)).toLocaleString()}`;
   $('chart-error').textContent = '';
 
@@ -918,24 +882,6 @@ function initChartInteractivity() {
   bindIndToggle('btn-ind-ema99', 'showEMA99', 'hud-ema99-box');
   bindIndToggle('btn-ind-vol', 'showVol', null);
 
-  // Zoom controls
-  $('btn-zoom-in')?.addEventListener('click', () => {
-    if (!chartData || !chartData.candles) return;
-    chartState.visibleCount = Math.max(15, chartState.visibleCount - 8);
-    render();
-  });
-  $('btn-zoom-out')?.addEventListener('click', () => {
-    if (!chartData || !chartData.candles) return;
-    chartState.visibleCount = Math.min(chartData.candles.length, chartState.visibleCount + 8);
-    render();
-  });
-  $('btn-zoom-reset')?.addEventListener('click', () => {
-    if (!chartData || !chartData.candles) return;
-    chartState.visibleCount = Math.min(55, chartData.candles.length);
-    chartState.panOffset = 0;
-    render();
-  });
-
   // Window resize observer
   window.addEventListener('resize', () => render());
 
@@ -943,13 +889,6 @@ function initChartInteractivity() {
   const themeObserver = new MutationObserver(() => render());
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 }
-
-// 1s countdown timer
-setInterval(() => {
-  refreshCountdown = (refreshCountdown <= 1) ? 30 : refreshCountdown - 1;
-  const el = $('refresh-countdown');
-  if (el) el.textContent = `${refreshCountdown}s`;
-}, 1000);
 
 // ==============================================================================
 // Status & Trading Controls

@@ -1712,3 +1712,207 @@ footer {
   .chart-zoom-controls #btn-zoom-in,
   .chart-zoom-controls #btn-zoom-out { display: none; }
 }
+
+/* Clean market chart styling aligned with the dashboard type and palette. */
+.chart-card {
+  padding: 16px 18px 12px;
+  border-radius: 10px;
+  background: var(--paper);
+  border-color: var(--line);
+  box-shadow: none;
+  font-family: inherit;
+}
+:root[data-theme="dark"] .chart-card {
+  background: #111;
+  border-color: #292929;
+}
+:root[data-theme="light"] .chart-card {
+  background: #fff;
+  border-color: var(--line);
+}
+.chart-heading {
+  padding-bottom: 10px;
+  border-color: var(--line);
+}
+:root[data-theme="dark"] .chart-heading { border-color: #292929; }
+.chart-brand-row h2 {
+  margin: 0;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -.02em;
+}
+.chart-controls select#symbol {
+  min-width: 118px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  border-color: var(--line);
+}
+.chart-controls select#symbol:focus-visible,
+.chart-pill:focus-visible,
+.chart-indicators > summary:focus-visible,
+.ind-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.chart-price-row {
+  justify-content: flex-start;
+  gap: 28px;
+  min-height: 58px;
+  margin: 7px 0 2px;
+}
+.price-main-col { gap: 10px; align-items: center; }
+.price-main-col > strong {
+  color: var(--ink);
+  font-family: inherit;
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 650;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.035em;
+}
+.chart-price-row strong.flash-up,
+.chart-price-row strong.flash-down { text-shadow: none; }
+.chart-24h-strip { gap: 20px; }
+.stat-pill { gap: 2px; }
+.stat-lbl {
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: .01em;
+  text-transform: none;
+}
+.stat-pill b {
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+.chart-toolbar {
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+  margin: 0;
+  border-color: var(--line);
+}
+:root[data-theme="dark"] .chart-toolbar { border-color: #292929; }
+.chart-toolbar-group { gap: 3px; }
+.chart-pill, .ind-pill, .icon-pill,
+.chart-indicators > summary {
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  box-shadow: none;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.chart-pill:hover, .ind-pill:hover, .icon-pill:hover,
+.chart-indicators > summary:hover { background: var(--soft); color: var(--ink); }
+.chart-pill.active {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent) !important;
+  background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
+  color: var(--accent) !important;
+  font-weight: 650;
+}
+:root[data-theme="dark"] .chart-pill.active { color: #e1b850 !important; }
+.chart-indicators > summary { list-style: none; cursor: pointer; user-select: none; }
+.chart-indicators > summary::-webkit-details-marker { display: none; }
+.chart-indicators > summary::after { content: "⌄"; margin-left: 7px; color: var(--subtle); }
+.chart-indicators[open] > summary { border-color: var(--line); color: var(--ink); }
+.chart-indicator-menu {
+  gap: 3px;
+  padding: 6px;
+  border-color: var(--line);
+  border-radius: 7px;
+  background: var(--paper);
+  box-shadow: 0 8px 24px rgb(0 0 0 / .16);
+}
+:root[data-theme="dark"] .chart-indicator-menu { background: #151515; }
+.chart-wrap {
+  height: clamp(340px, 38vw, 440px);
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+:root[data-theme="dark"] .chart-wrap { background: #080808; border-color: #242424; }
+:root[data-theme="light"] .chart-wrap { background: #fff; border-color: var(--line); }
+.chart-tooltip {
+  min-width: 190px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  box-shadow: 0 6px 20px rgb(0 0 0 / .18);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  backdrop-filter: none;
+}
+:root[data-theme="dark"] .chart-tooltip { background: #171717; border-color: #333; }
+.tooltip-head { color: var(--muted); border-color: var(--line); font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1.4; }
+.tooltip-row .lbl { color: var(--muted); }
+.chart-loading-overlay {
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+  backdrop-filter: blur(2px);
+}
+.cyber-spinner {
+  width: 24px;
+  height: 24px;
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-top-color: var(--accent);
+}
+.chart-foot {
+  padding-top: 8px;
+  border-color: var(--line);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+}
+:root[data-theme="dark"] .chart-foot { border-color: #292929; }
+
+@media (max-width: 700px) {
+  .chart-card { padding: 12px 10px 10px; }
+  .chart-heading { gap: 8px; }
+  .chart-brand-row h2 { font-size: 16px; }
+  .chart-controls { gap: 5px; }
+  .chart-controls select#symbol { min-width: 100px; padding: 7px 8px; }
+  .chart-price-row { gap: 14px; min-height: 50px; }
+  .price-main-col { gap: 7px; }
+  .price-main-col > strong { font-size: 23px; }
+  .chart-24h-strip { gap: 12px; }
+  .chart-toolbar { gap: 6px; overflow-x: auto; scrollbar-width: none; }
+  .chart-toolbar::-webkit-scrollbar { display: none; }
+  .chart-toolbar-group { flex-shrink: 0; }
+  .chart-timeframe-pills { gap: 1px; }
+  .chart-wrap { height: 340px; }
+  .chart-indicator-menu { left: auto; right: 0; }
+}
+@media (max-width: 420px) {
+  .chart-price-row { justify-content: space-between; gap: 6px; }
+  .chart-24h-strip { gap: 8px; }
+  .chart-wrap { height: 310px; }
+  .chart-foot { align-items: flex-start; flex-direction: column; }
+}
