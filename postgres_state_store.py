@@ -13,11 +13,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
-from psycopg_pool import ConnectionPool
+try:
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+    from psycopg_pool import ConnectionPool
+except ImportError:
+    sql = None
+    conninfo_to_dict = make_conninfo = dict_row = Jsonb = ConnectionPool = None
 
 
 def _executemany(conn, query, params):
@@ -63,6 +67,8 @@ class PostgresStateStore:
     S = "bot_private"
 
     def __init__(self, database_url: str, *, require_import: bool = True):
+        if sql is None:
+            raise RuntimeError("psycopg is required to connect to Postgres. Install psycopg[binary,pool].")
         if not database_url:
             raise ValueError("DATABASE_URL is required")
         conninfo = _conninfo_from_url(database_url)

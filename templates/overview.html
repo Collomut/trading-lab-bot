@@ -5,30 +5,1132 @@
 <section class="card trading-controls-card"><div class="trading-controls-header"><strong>Trading controls</strong><div class="help">Resume requires a fresh successful account check. Safety-halt recovery also requires your review and no open bot positions or unresolved orders. Daily and drawdown limits stay in force.</div></div><div class="trading-controls-actions"><button id="entry-control" type="button" class="button">Pause entries</button><button id="emergency-stop" type="button" class="button secondary">Emergency stop</button><button id="run-cycle" type="button" class="button secondary">Run check now</button><button id="test-alert" type="button" class="button secondary">Test alerts</button><button id="testnet-smoke" type="button" class="button secondary" hidden style="display:none">One-time Testnet smoke trade · up to $10</button></div><span id="control-status" class="help" aria-live="polite"></span></section>
 <div id="account-alert" class="notice compact" role="status" hidden style="display:none"><strong>Account check</strong><span id="account-message"></span></div>
 <div class="overview-metrics"><section class="card metric-card"><div class="metric-label">Available USDT</div><div class="metric" id="cash-balance">—</div></section><section class="card metric-card"><div class="metric-label">Bot-Tracked Value</div><div class="metric" id="net-worth">—</div></section><section class="card metric-card"><div class="metric-label">Estimated P&amp;L (Net)</div><div class="metric" id="pnl">—</div></section><section class="card metric-card"><div class="metric-label">Open positions</div><div class="metric" id="open-count">—</div></section></div>
-<section class="card chart-card"><div class="chart-heading"><div><h2 id="chart-title">Market chart</h2><div class="help" id="chart-meta">Candles and volume · refreshed every 30 seconds</div></div><div class="chart-controls"><select id="symbol" aria-label="Trading pair"></select><select id="timeframe" aria-label="Chart timeframe"><option value="15m">15 min</option><option value="1h" selected>1 hour</option><option value="4h">4 hours</option><option value="1d">1 day</option></select></div></div><div class="chart-price-row"><strong id="chart-price">—</strong><span id="chart-change" class="tag">—</span><span id="chart-ohlc" class="ohlc-readout"></span></div><div class="chart-wrap"><svg id="price-chart" viewBox="0 0 1000 380" role="img" aria-label="Candlestick market chart with volume"></svg><div id="chart-tooltip" class="chart-tooltip" aria-live="polite"></div></div><div class="chart-foot"><span id="chart-range">—</span><span>Exchange market data · not a trading signal</span></div><div id="chart-error" class="help error-text" aria-live="polite"></div></section>
-<div class="section-links"><a class="card link-card" href="/positions"><strong>Positions</strong><span>Entry, exit levels, and open P&amp;L →</span></a><a class="card link-card" href="/history"><strong>Trade history</strong><span>Closed trades and recorded results →</span></a><a class="card link-card" href="/strategy"><strong>Strategy &amp; risk</strong><span>Current settings and limits →</span></a></div>
+
+<section class="card chart-card">
+  <!-- Binance Terminal Header -->
+  <div class="chart-heading">
+    <div class="chart-brand-row">
+      <span class="binance-pill"><span class="pulse-beacon"></span> BINANCE SPOT</span>
+      <h2 id="chart-title">Market chart</h2>
+    </div>
+    <div class="chart-controls">
+      <div class="chart-auto-refresh" title="Auto-refreshing Binance market feed">
+        <span class="refresh-spin-dot"></span>
+        <span>Auto: <b id="refresh-countdown">30s</b></span>
+      </div>
+      <select id="symbol" aria-label="Trading pair"></select>
+      <select id="timeframe" aria-label="Chart timeframe">
+        <option value="15m">15m</option>
+        <option value="1h" selected>1h</option>
+        <option value="4h">4h</option>
+        <option value="1d">1d</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Big Ticker, 24h Stats Ribbon & OHLC Readout -->
+  <div class="chart-price-row">
+    <div class="price-main-col">
+      <strong id="chart-price">—</strong>
+      <span id="chart-change" class="tag">—</span>
+    </div>
+    <div class="chart-24h-strip">
+      <div class="stat-pill"><span class="stat-lbl">24h High</span><b id="stat-24h-high">—</b></div>
+      <div class="stat-pill"><span class="stat-lbl">24h Low</span><b id="stat-24h-low">—</b></div>
+      <div class="stat-pill"><span class="stat-lbl">24h Volume</span><b id="stat-24h-vol">—</b></div>
+      <div class="stat-pill"><span class="stat-lbl">24h Amplitude</span><b id="stat-24h-amp">—</b></div>
+    </div>
+    <span id="chart-ohlc" class="ohlc-readout"></span>
+  </div>
+
+  <!-- Futuristic Toolbar -->
+  <div class="chart-toolbar">
+    <div class="chart-toolbar-group chart-timeframe-pills">
+      <button type="button" class="chart-pill" data-tf="15m">15m</button>
+      <button type="button" class="chart-pill active" data-tf="1h">1h</button>
+      <button type="button" class="chart-pill" data-tf="4h">4h</button>
+      <button type="button" class="chart-pill" data-tf="1d">1D</button>
+    </div>
+    <div class="chart-toolbar-group">
+      <button type="button" class="chart-pill active" id="btn-mode-candles" title="Candlestick Chart">🕯️ Candles</button>
+      <button type="button" class="chart-pill" id="btn-mode-area" title="Neon Area Line Chart">📈 Line</button>
+    </div>
+    <div class="chart-toolbar-group">
+      <button type="button" class="ind-pill active ind-ma7" id="btn-ind-ma7" title="7-period Moving Average"><span class="dot-ind gold"></span> MA(7)</button>
+      <button type="button" class="ind-pill active ind-ma25" id="btn-ind-ma25" title="25-period Moving Average"><span class="dot-ind cyan"></span> MA(25)</button>
+      <button type="button" class="ind-pill active ind-ema99" id="btn-ind-ema99" title="99-period Exponential Moving Average"><span class="dot-ind violet"></span> EMA(99)</button>
+      <button type="button" class="ind-pill active ind-vol" id="btn-ind-vol" title="Volume Bars"><span class="dot-ind green"></span> VOL</button>
+    </div>
+    <div class="chart-toolbar-group">
+      <button type="button" class="icon-pill" id="btn-zoom-in" title="Zoom in (+)">＋</button>
+      <button type="button" class="icon-pill" id="btn-zoom-out" title="Zoom out (-)">－</button>
+      <button type="button" class="icon-pill" id="btn-zoom-reset" title="Reset zoom and view">⟲ Reset</button>
+    </div>
+  </div>
+
+  <!-- Real-Time HUD strip -->
+  <div class="chart-hud" id="chart-hud">
+    <span class="hud-item"><span class="hud-lbl">Time</span><span class="hud-val" id="hud-time">—</span></span>
+    <span class="hud-item"><span class="hud-lbl">O</span><span class="hud-val" id="hud-o">—</span></span>
+    <span class="hud-item"><span class="hud-lbl">H</span><span class="hud-val" id="hud-h">—</span></span>
+    <span class="hud-item"><span class="hud-lbl">L</span><span class="hud-val" id="hud-l">—</span></span>
+    <span class="hud-item"><span class="hud-lbl">C</span><span class="hud-val" id="hud-c">—</span></span>
+    <span class="hud-item"><span class="hud-lbl">Chg</span><span class="hud-val" id="hud-chg">—</span></span>
+    <span class="hud-item"><span class="hud-lbl">Vol</span><span class="hud-val" id="hud-v">—</span></span>
+    <span class="hud-item hud-ma7-text" id="hud-ma7-box"><span class="hud-lbl">MA(7)</span><span class="hud-val" id="hud-ma7-val">—</span></span>
+    <span class="hud-item hud-ma25-text" id="hud-ma25-box"><span class="hud-lbl">MA(25)</span><span class="hud-val" id="hud-ma25-val">—</span></span>
+    <span class="hud-item hud-ema99-text" id="hud-ema99-box"><span class="hud-lbl">EMA(99)</span><span class="hud-val" id="hud-ema99-val">—</span></span>
+  </div>
+
+  <!-- Interactive Canvas Viewport -->
+  <div class="chart-wrap" id="chart-container">
+    <canvas id="price-chart-canvas" class="chart-canvas" role="img" aria-label="Binance Candlestick Market Chart"></canvas>
+    <svg id="price-chart" viewBox="0 0 1000 380" role="img" aria-label="Candlestick market chart with volume" style="display:none"></svg>
+    <div id="chart-tooltip" class="chart-tooltip" aria-live="polite"></div>
+    <div id="chart-loading-overlay" class="chart-loading-overlay" hidden><div class="cyber-spinner"></div><span>Synchronizing Binance Market Feed…</span></div>
+  </div>
+
+  <!-- Footer Info & Disclaimers -->
+  <div class="chart-foot">
+    <span id="chart-range">—</span>
+    <span id="chart-meta">Candles and volume · refreshed every 30 seconds</span>
+    <span>Exchange market data · not a trading signal</span>
+  </div>
+  <div id="chart-error" class="help error-text" aria-live="polite"></div>
+</section>
+
+<div class="section-links"><a class="card link-card" href="/positions"><strong>Positions</strong><span>Entry, exit levels, and open P&amp;L →</span></a><a class="card link-card" href="/history"><strong>Trade history</strong><span>Closed trades and recorded results →</span></a><a class="card link-card" href="/strategy"><strong>Strategy &amp; risk</strong><span>Current settings and limits →</span></a><a class="card link-card" href="/logs"><strong>Decision logs</strong><span>Safety events, checks, and manual actions →</span></a></div>
 <footer>Values are estimates from the bot’s local records. Fees and slippage may be omitted. <a href="/terms">Read the glossary</a></footer></main>
+
 <script>
-const $=id=>document.getElementById(id),money=v=>v==null?'Unavailable':'$'+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});let latestPairs=[];
-async function refreshStatus(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error(`Status unavailable (${r.status})`);const d=await r.json();$('cash-balance').textContent=d.account_available?money(d.cash_balance):'Unavailable';$('net-worth').textContent=money(d.net_worth);const p=$('pnl');p.textContent=money(d.total_gain_loss);p.className='metric '+(d.total_gain_loss>0?'positive':d.total_gain_loss<0?'negative':'');$('open-count').textContent=`${d.positions_count} / ${d.max_positions}`;const paperName=d.fallback_simulated?'Simulated (Testnet fallback)':d.paper_environment==='demo'?'Binance Demo':d.paper_environment==='testnet'?'Spot Testnet':(d.paper_environment||'paper environment');$('mode').textContent=d.paper_trading?`Paper trading · ${paperName} · no real orders`:'Live mode reported';const paused=d.entry_mode==='EXIT_ONLY',manualResume=Boolean(d.manual_resume_available),haltLocked=Boolean(d.halted&&!manualResume);const action=$('entry-control');action.textContent=manualResume?'Review & resume':haltLocked?'Safety halt active':paused?'Resume entries':'Pause entries';action.dataset.manualReview=manualResume?'1':'0';action.dataset.intent=(paused||manualResume)?'resume':'pause';action.disabled=haltLocked||(paused&&!d.resume_available&&!manualResume);$('control-status').textContent=manualResume?`Safety-halt review is ready (${d.halt_reason}). Verify the Testnet account before confirming.`:d.halted?d.halt_reason:paused?'New entries are paused. Existing positions remain monitored.':(!d.exchange_reconciled?'Account reconciliation pending':'');const hasIssue=Boolean(d.account_issue||!d.account_available);const alertBox=$('account-alert');alertBox.hidden=!hasIssue;alertBox.style.display=hasIssue?'flex':'none';$('account-message').textContent=d.account_issue||(!d.account_available?'Account balance is unavailable; new trading is blocked.':'');const showSmoke=Boolean(d.paper_trading&&d.paper_environment==='testnet'&&!d.fallback_simulated);const smokeBtn=$('testnet-smoke');smokeBtn.hidden=!showSmoke;smokeBtn.style.display=showSmoke?'inline-flex':'none';smokeBtn.disabled=d.halted||!d.account_available||!d.exchange_reconciled||d.positions_count>0||d.testnet_smoke_attempted;smokeBtn.textContent=d.testnet_smoke_attempted?'✓ Smoke trade verified':'One-time Testnet smoke trade · up to $10';if(d.testnet_smoke_attempted){smokeBtn.title='Order routing check passed: buy, sell, and safety stops confirmed.'}else{smokeBtn.title=''}$('connection').textContent=d.account_available&&d.exchange_reconciled?`${d.exchange} · ${d.fallback_simulated?'simulated wallet':'account verified'} · updated ${new Date().toLocaleTimeString()}`:d.account_available?`${d.exchange} · balance loaded, trading blocked`:'Account unavailable · trading blocked';$('dot').className=d.account_available&&d.exchange_reconciled?'dot ok':'dot bad';latestPairs=Object.keys(d.prices||{});const sel=$('symbol'),old=sel.value;if(latestPairs.join('|')!==[...sel.options].map(o=>o.value).join('|')){sel.replaceChildren();for(const pair of latestPairs){const o=document.createElement('option');o.value=pair;o.textContent=pair;sel.append(o)}if(latestPairs.includes(old))sel.value=old;if(sel.value)loadChart()}}catch(e){$('connection').textContent=e.message;$('dot').className='dot bad'}}
-function drawChart(data){
- const svg=$('price-chart'),tooltip=$('chart-tooltip'),candles=(data.candles||[]).filter(c=>[c.time,c.open,c.high,c.low,c.close,c.volume].every(v=>Number.isFinite(Number(v)))&&Number(c.open)>0&&Number(c.high)>0&&Number(c.low)>0&&Number(c.close)>0&&Number(c.volume)>=0);
- svg.replaceChildren();if(candles.length<2)throw Error('Not enough market candles to draw the chart.');
- const W=1000,H=380,L=22,R=86,T=18,priceBottom=270,volumeTop=296,volumeBottom=342,xLabelY=365,plotW=W-L-R,slot=plotW/candles.length,bodyW=Math.max(2,Math.min(10,slot*.58));
- let low=Math.min(...candles.map(c=>Number(c.low))),high=Math.max(...candles.map(c=>Number(c.high)));if(low===high){low*=.999;high*=1.001}const pad=(high-low)*.07;low=Math.max(Number.MIN_VALUE,low-pad);high+=pad;
- const y=v=>T+(high-Number(v))*(priceBottom-T)/(high-low),x=i=>L+slot*(i+.5),maxVolume=Math.max(...candles.map(c=>Number(c.volume)),1),volY=v=>volumeBottom-Number(v)/maxVolume*(volumeBottom-volumeTop);
- const add=(tag,attrs={},parent=svg)=>{const el=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(attrs))el.setAttribute(k,v);parent.append(el);return el},label=(txt,attrs={})=>{const el=add('text',{class:'chart-axis',...attrs});el.textContent=txt;return el},shortPrice=v=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:Number(v)<1?6:2});
- for(let i=0;i<=4;i++){const value=high-(high-low)*i/4,yy=y(value);add('line',{x1:L,x2:W-R+4,y1:yy,y2:yy,class:'chart-grid'});label(shortPrice(value),{x:W-R+12,y:yy+4})}
- add('line',{x1:L,x2:W-R,y1:volumeTop-9,y2:volumeTop-9,class:'chart-grid'});label('VOL',{x:W-R+12,y:volumeTop+12});
- candles.forEach((c,i)=>{const up=Number(c.close)>=Number(c.open),kind=up?'up':'down',cx=x(i),top=y(Math.max(Number(c.open),Number(c.close))),bottom=y(Math.min(Number(c.open),Number(c.close)));add('line',{x1:cx,x2:cx,y1:y(c.high),y2:y(c.low),class:`candle-wick ${kind}`});add('rect',{x:cx-bodyW/2,y:top,width:bodyW,height:Math.max(1,bottom-top),class:`candle-body ${kind}`});const vy=volY(c.volume);add('rect',{x:cx-bodyW/2,y:vy,width:bodyW,height:Math.max(1,volumeBottom-vy),class:`volume-bar ${kind}`})});
- const tickCount=5;for(let i=0;i<tickCount;i++){const idx=Math.min(candles.length-1,Math.round(i*(candles.length-1)/(tickCount-1))),date=new Date(Number(candles[idx].time));label(data.timeframe==='1d'?date.toLocaleDateString(undefined,{month:'short',day:'numeric'}):date.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}),{x:x(idx),y:xLabelY,'text-anchor':i===0?'start':i===tickCount-1?'end':'middle'})}
- const last=candles.at(-1),latest=Number(last.close),pct=(latest/Number(candles[0].open)-1)*100,badge=$('chart-change'),up=latest>=Number(candles[0].open);$('chart-price').textContent=money(latest);badge.textContent=`${pct>=0?'+':''}${pct.toFixed(2)}%`;badge.className=`tag ${up?'positive':'negative'}`;$('chart-ohlc').textContent=`O ${shortPrice(last.open)}  H ${shortPrice(last.high)}  L ${shortPrice(last.low)}  C ${shortPrice(last.close)}`;$('chart-title').textContent=`${data.symbol} · ${data.timeframe}`;$('chart-range').textContent=`${new Date(Number(candles[0].time)).toLocaleString()} — ${new Date(Number(last.time)).toLocaleString()}`;$('chart-error').textContent='';
- const cross=add('line',{x1:L,x2:L,y1:T,y2:volumeBottom,class:'chart-crosshair',visibility:'hidden'});svg.onpointermove=e=>{const rect=svg.getBoundingClientRect(),svgX=(e.clientX-rect.left)/rect.width*W,index=Math.max(0,Math.min(candles.length-1,Math.floor((svgX-L)/slot))),c=candles[index],cx=x(index),when=new Date(Number(c.time)).toLocaleString();cross.setAttribute('x1',cx);cross.setAttribute('x2',cx);cross.setAttribute('visibility','visible');tooltip.textContent=`${when}\nO ${shortPrice(c.open)}   H ${shortPrice(c.high)}\nL ${shortPrice(c.low)}   C ${shortPrice(c.close)}\nVolume ${Number(c.volume).toLocaleString(undefined,{maximumFractionDigits:3})}`;tooltip.classList.add('visible');tooltip.style.left=(cx>W*.65?'auto':'10px');tooltip.style.right=(cx>W*.65?'10px':'auto')};svg.onpointerleave=()=>{cross.setAttribute('visibility','hidden');tooltip.classList.remove('visible')};
-}async function loadChart(){const pair=$('symbol').value;if(!pair)return;const query=new URLSearchParams({symbol:pair,timeframe:$('timeframe').value});$('chart-error').textContent='Loading candles…';try{const r=await fetch('/api/candles?'+query,{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.error||`Chart unavailable (${r.status})`);drawChart(d)}catch(e){$('chart-error').textContent=e.message}}
-$('symbol').addEventListener('change',loadChart);$('timeframe').addEventListener('change',loadChart);refreshStatus();setInterval(refreshStatus,10000);setInterval(loadChart,30000);
-$('entry-control').addEventListener('click',async()=>{const paused=$('entry-control').dataset.intent==='resume',manualReview=paused&&$('entry-control').dataset.manualReview==='1';if(manualReview&&!confirm('Confirm you reviewed the Binance Spot Testnet account and verified there are no open bot positions or unresolved orders. The bot will reconcile again. A consecutive-loss review resets only that streak; daily and drawdown limits remain active.'))return;if(paused&&!manualReview&&!confirm('Reconcile the Testnet account and resume new entries? Resume will be blocked if the account or any safety check is unhealthy.'))return;if(!paused&&!confirm('Pause all new entries? Existing positions will still be monitored.'))return;$('entry-control').disabled=true;$('control-status').textContent=paused?'Checking the account before resuming…':'Pausing new entries…';try{const r=await fetch(paused?'/api/resume':'/api/exit-only',{method:'POST',headers:{'Content-Type':'application/json'},body:paused?JSON.stringify({manual_review_confirmed:manualReview}):undefined}),d=await r.json();$('control-status').textContent=d.message||'Trading control updated';if(!r.ok)throw Error(d.message||'Unable to change entry mode');refreshStatus()}catch(e){$('control-status').textContent=e.message;refreshStatus()}});
-$('emergency-stop').addEventListener('click',async()=>{if(!confirm('Cancel open exchange orders and market-close every bot-tracked position? This permanently halts trading until manual review.'))return;$('emergency-stop').disabled=true;$('control-status').textContent='Emergency stop running…';try{const r=await fetch('/api/emergency-stop',{method:'POST',headers:{'Content-Type':'application/json'}}),d=await r.json();$('control-status').textContent=d.message||'Emergency stop completed';if(!r.ok)throw Error(d.message||'Emergency stop needs operator attention');refreshStatus()}catch(e){$('control-status').textContent=e.message;$('emergency-stop').disabled=false}});
-$('run-cycle').addEventListener('click',async()=>{const btn=$('run-cycle');btn.disabled=true;$('control-status').textContent='Running strategy and market check…';try{const r=await fetch('/api/run-cycle',{method:'POST',headers:{'Content-Type':'application/json'}});if(!r.ok){const err=await r.json().catch(()=>({}));throw Error(err.error||`Check failed (${r.status})`)}$('control-status').textContent='Strategy check finished successfully.';refreshStatus()}catch(e){$('control-status').textContent=e.message}finally{btn.disabled=false}});
-$('test-alert').addEventListener('click',async()=>{const btn=$('test-alert');btn.disabled=true;$('control-status').textContent='Dispatching test alert…';try{const r=await fetch('/api/test-notification',{method:'POST',headers:{'Content-Type':'application/json'}}),d=await r.json();$('control-status').textContent=d.message||(r.ok?'Test alert sent!':'Test alert failed')}catch(e){$('control-status').textContent=e.message}finally{btn.disabled=false}});
-$('testnet-smoke').addEventListener('click',async()=>{if(!confirm('Send a one-time Binance Spot Testnet market buy of at most $10, then immediately submit the matching sell? This is an order-routing check, not a strategy signal.'))return;$('testnet-smoke').disabled=true;$('control-status').textContent='Submitting Testnet buy and sell…';try{const r=await fetch('/api/testnet-smoke-trade',{method:'POST',headers:{'Content-Type':'application/json'}}),d=await r.json();if(!r.ok)throw Error(d.error||'Smoke trade needs operator attention');$('control-status').textContent=`Testnet smoke complete · ${d.symbol} · buy ${d.buy_order_id} / sell ${d.sell_order_id} · before-fee P&L ${money(d.pnl_before_fees)}`;refreshStatus()}catch(e){$('control-status').textContent=e.message;refreshStatus()}});
+const $ = id => document.getElementById(id);
+const money = v => v == null ? 'Unavailable' : '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+let latestPairs = [];
+
+// ==============================================================================
+// State & Helpers
+// ==============================================================================
+let chartData = null;
+let lastSeenPrice = null;
+let refreshCountdown = 30;
+
+const chartState = {
+  viewMode: 'candles', // 'candles' | 'area'
+  showMA7: true,
+  showMA25: true,
+  showEMA99: true,
+  showVol: true,
+  visibleCount: 55,
+  panOffset: 0,
+  isHovering: false,
+  mouseX: null,
+  mouseY: null,
+  isDragging: false,
+  dragStartX: 0,
+  dragStartOffset: 0,
+  indicators: null
+};
+
+function formatPrice(v) {
+  const num = Number(v);
+  if (!Number.isFinite(num)) return '—';
+  if (num >= 1000) return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (num >= 1) return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+  if (num >= 0.0001) return num.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+  return num.toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 8 });
+}
+
+function formatVol(v) {
+  const num = Number(v);
+  if (!Number.isFinite(num)) return '—';
+  if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+  if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+  return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  if (ctx.roundRect) {
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+  }
+}
+
+function computeIndicators(candles) {
+  const n = candles.length;
+  const ma7 = new Array(n).fill(null);
+  const ma25 = new Array(n).fill(null);
+  const ema99 = new Array(n).fill(null);
+  const volMa = new Array(n).fill(null);
+
+  // MA 7
+  let sum7 = 0;
+  for (let i = 0; i < n; i++) {
+    sum7 += candles[i].close;
+    if (i >= 7) sum7 -= candles[i - 7].close;
+    if (i >= 6) ma7[i] = sum7 / 7;
+  }
+
+  // MA 25
+  let sum25 = 0;
+  for (let i = 0; i < n; i++) {
+    sum25 += candles[i].close;
+    if (i >= 25) sum25 -= candles[i - 25].close;
+    if (i >= 24) ma25[i] = sum25 / 25;
+  }
+
+  // EMA 99
+  const period = 99;
+  const k = 2 / (period + 1);
+  let prevEma = null;
+  for (let i = 0; i < n; i++) {
+    const c = candles[i].close;
+    if (prevEma === null) {
+      prevEma = c;
+    } else {
+      prevEma = c * k + prevEma * (1 - k);
+    }
+    if (i >= Math.min(8, n - 1)) ema99[i] = prevEma;
+  }
+
+  // Vol MA 10
+  let vSum = 0;
+  for (let i = 0; i < n; i++) {
+    vSum += candles[i].volume;
+    if (i >= 10) vSum -= candles[i - 10].volume;
+    if (i >= 9) volMa[i] = vSum / 10;
+  }
+
+  return { ma7, ma25, ema99, volMa };
+}
+
+function computeStats(candles) {
+  if (!candles.length) return null;
+  let high = -Infinity, low = Infinity, vol = 0;
+  for (const c of candles) {
+    if (c.high > high) high = c.high;
+    if (c.low < low) low = c.low;
+    vol += c.volume;
+  }
+  const first = candles[0];
+  const last = candles[candles.length - 1];
+  const change = ((last.close - first.open) / first.open) * 100;
+  const amp = low > 0 ? ((high - low) / low) * 100 : 0;
+  return { high, low, vol, change, amp };
+}
+
+function flashPrice(newPrice) {
+  const el = $('chart-price');
+  if (!el || lastSeenPrice === null) {
+    lastSeenPrice = newPrice;
+    return;
+  }
+  if (newPrice > lastSeenPrice) {
+    el.classList.remove('flash-up', 'flash-down');
+    void el.offsetWidth;
+    el.classList.add('flash-up');
+    setTimeout(() => el.classList.remove('flash-up'), 800);
+  } else if (newPrice < lastSeenPrice) {
+    el.classList.remove('flash-up', 'flash-down');
+    void el.offsetWidth;
+    el.classList.add('flash-down');
+    setTimeout(() => el.classList.remove('flash-down'), 800);
+  }
+  lastSeenPrice = newPrice;
+}
+
+// ==============================================================================
+// Canvas Rendering Engine (Futuristic Binance Terminal)
+// ==============================================================================
+function render() {
+  if (!chartData || !chartData.candles || chartData.candles.length < 2) return;
+  const canvas = $('price-chart-canvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.round(rect.width * dpr);
+  const targetH = Math.round(rect.height * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.save();
+  ctx.scale(dpr, dpr);
+
+  const W = rect.width, H = rect.height;
+  const isDark = document.documentElement.dataset.theme === 'dark';
+
+  const L = 12;
+  const R = 76; // Price scale width
+  const T = 14;
+  const B = 24; // Time scale height
+  const plotW = W - L - R;
+  const totalChartH = H - T - B;
+
+  const showVol = chartState.showVol;
+  const priceH = showVol ? totalChartH * 0.77 : totalChartH;
+  const volH = showVol ? totalChartH * 0.19 : 0;
+  const priceBottom = T + priceH;
+  const volTop = showVol ? priceBottom + (totalChartH * 0.04) : priceBottom;
+  const volBottom = H - B;
+
+  const allCandles = chartData.candles;
+  const maxPan = Math.max(0, allCandles.length - 15);
+  chartState.panOffset = Math.max(0, Math.min(chartState.panOffset, maxPan));
+  const visCount = Math.max(15, Math.min(chartState.visibleCount, allCandles.length));
+
+  const endIdx = allCandles.length - chartState.panOffset;
+  const startIdx = Math.max(0, endIdx - visCount);
+  const visCandles = allCandles.slice(startIdx, endIdx);
+  const visLen = visCandles.length;
+  if (visLen < 2) { ctx.restore(); return; }
+
+  let minP = Infinity, maxP = -Infinity, maxV = 0;
+  let highestIdx = 0, lowestIdx = 0;
+  for (let i = 0; i < visLen; i++) {
+    const c = visCandles[i];
+    if (c.high > maxP) { maxP = c.high; highestIdx = i; }
+    if (c.low < minP) { minP = c.low; lowestIdx = i; }
+    if (c.volume > maxV) maxV = c.volume;
+  }
+
+  if (chartState.indicators) {
+    for (let i = 0; i < visLen; i++) {
+      const origI = startIdx + i;
+      if (chartState.showMA7 && chartState.indicators.ma7[origI]) {
+        const v = chartState.indicators.ma7[origI];
+        if (v > maxP) maxP = v;
+        if (v < minP) minP = v;
+      }
+      if (chartState.showMA25 && chartState.indicators.ma25[origI]) {
+        const v = chartState.indicators.ma25[origI];
+        if (v > maxP) maxP = v;
+        if (v < minP) minP = v;
+      }
+      if (chartState.showEMA99 && chartState.indicators.ema99[origI]) {
+        const v = chartState.indicators.ema99[origI];
+        if (v > maxP) maxP = v;
+        if (v < minP) minP = v;
+      }
+    }
+  }
+
+  if (minP === maxP) { minP *= 0.999; maxP *= 1.001; }
+  const pad = (maxP - minP) * 0.07;
+  minP = Math.max(1e-9, minP - pad);
+  maxP += pad;
+
+  const yPrice = p => T + (maxP - p) / (maxP - minP) * (priceBottom - T);
+  const yToPrice = y => maxP - (y - T) / (priceBottom - T) * (maxP - minP);
+  const yVol = v => volBottom - (v / (maxV || 1)) * (volBottom - volTop);
+
+  const slotW = plotW / visLen;
+  const x = i => L + slotW * (i + 0.5);
+  const bodyW = Math.max(2, Math.min(22, slotW * 0.72));
+
+  // 1. Background
+  ctx.fillStyle = isDark ? '#11151b' : '#fafbfc';
+  ctx.fillRect(0, 0, W, H);
+
+  if (isDark) {
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+    bgGrad.addColorStop(0, 'rgba(22, 27, 34, 0.45)');
+    bgGrad.addColorStop(1, 'rgba(10, 12, 16, 0.85)');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // 2. Horizontal Price Gridlines & Scale
+  const gridColor = isDark ? 'rgba(255, 255, 255, 0.05)' : '#edf2f7';
+  const textColor = isDark ? '#848e9c' : '#64748b';
+  const priceSteps = 5;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 5]);
+  ctx.strokeStyle = gridColor;
+  ctx.fillStyle = textColor;
+  ctx.font = '10.5px "JetBrains Mono", "SF Mono", "Roboto Mono", monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+
+  for (let i = 0; i <= priceSteps; i++) {
+    const pVal = minP + (maxP - minP) * (priceSteps - i) / priceSteps;
+    const yy = yPrice(pVal);
+    ctx.beginPath();
+    ctx.moveTo(L, Math.round(yy) + 0.5);
+    ctx.lineTo(W - R, Math.round(yy) + 0.5);
+    ctx.stroke();
+    ctx.fillText(formatPrice(pVal), W - R + 8, yy);
+  }
+
+  // 3. Vertical Time Gridlines & Scale
+  const timeTickCount = Math.max(3, Math.min(6, Math.floor(plotW / 120)));
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+
+  for (let k = 0; k < timeTickCount; k++) {
+    const idx = Math.min(visLen - 1, Math.round(k * (visLen - 1) / (timeTickCount - 1)));
+    const cx = x(idx);
+    const date = new Date(Number(visCandles[idx].time));
+    const timeStr = chartData.timeframe === '1d'
+      ? date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
+      : date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+    ctx.beginPath();
+    ctx.moveTo(Math.round(cx) + 0.5, T);
+    ctx.lineTo(Math.round(cx) + 0.5, volBottom);
+    ctx.stroke();
+
+    ctx.fillText(timeStr, cx, H - B + 6);
+  }
+  ctx.setLineDash([]);
+
+  // 4. Volume Sub-panel
+  if (showVol) {
+    ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.08)' : '#e2e8f0';
+    ctx.beginPath();
+    ctx.moveTo(L, Math.round(volTop - 4) + 0.5);
+    ctx.lineTo(W - R, Math.round(volTop - 4) + 0.5);
+    ctx.stroke();
+
+    ctx.fillStyle = textColor;
+    ctx.font = '9.5px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('VOL', L + 4, volTop + 2);
+
+    for (let i = 0; i < visLen; i++) {
+      const c = visCandles[i];
+      const isUp = c.close >= c.open;
+      const vy = yVol(c.volume);
+      const vh = Math.max(1, volBottom - vy);
+      const cx = x(i);
+      ctx.fillStyle = isUp
+        ? (isDark ? 'rgba(14, 203, 129, 0.45)' : 'rgba(14, 203, 129, 0.55)')
+        : (isDark ? 'rgba(246, 70, 93, 0.45)' : 'rgba(246, 70, 93, 0.55)');
+      ctx.fillRect(Math.round(cx - bodyW / 2), Math.round(vy), Math.round(bodyW), Math.round(vh));
+    }
+
+    if (chartState.indicators && chartState.indicators.volMa) {
+      ctx.strokeStyle = isDark ? 'rgba(132, 142, 156, 0.6)' : '#94a3b8';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      let hasStarted = false;
+      for (let i = 0; i < visLen; i++) {
+        const origI = startIdx + i;
+        const vma = chartState.indicators.volMa[origI];
+        if (vma != null) {
+          const vx = x(i);
+          const vy = yVol(vma);
+          if (!hasStarted) { ctx.moveTo(vx, vy); hasStarted = true; }
+          else ctx.lineTo(vx, vy);
+        }
+      }
+      ctx.stroke();
+    }
+  }
+
+  // 5. Candlesticks or Area Mode
+  const green = '#0ecb81';
+  const red = '#f6465d';
+
+  if (chartState.viewMode === 'area') {
+    const grad = ctx.createLinearGradient(0, T, 0, priceBottom);
+    grad.addColorStop(0, 'rgba(240, 185, 11, 0.35)');
+    grad.addColorStop(1, 'rgba(240, 185, 11, 0.0)');
+
+    ctx.beginPath();
+    ctx.moveTo(x(0), yPrice(visCandles[0].close));
+    for (let i = 1; i < visLen; i++) {
+      ctx.lineTo(x(i), yPrice(visCandles[i].close));
+    }
+    ctx.lineTo(x(visLen - 1), priceBottom);
+    ctx.lineTo(x(0), priceBottom);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.strokeStyle = '#f0b90b';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x(0), yPrice(visCandles[0].close));
+    for (let i = 1; i < visLen; i++) {
+      ctx.lineTo(x(i), yPrice(visCandles[i].close));
+    }
+    ctx.stroke();
+  } else {
+    for (let i = 0; i < visLen; i++) {
+      const c = visCandles[i];
+      const isUp = c.close >= c.open;
+      const color = isUp ? green : red;
+      const cx = x(i);
+      const topY = yPrice(Math.max(c.open, c.close));
+      const botY = yPrice(Math.min(c.open, c.close));
+      const bodyH = Math.max(1.2, botY - topY);
+
+      // Center wick
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(cx) + 0.5, Math.round(yPrice(c.high)));
+      ctx.lineTo(Math.round(cx) + 0.5, Math.round(yPrice(c.low)));
+      ctx.stroke();
+
+      // Body
+      ctx.fillStyle = color;
+      ctx.fillRect(Math.round(cx - bodyW / 2), Math.round(topY), Math.round(bodyW), Math.round(bodyH));
+    }
+  }
+
+  // 6. Moving Averages
+  function drawLine(arr, color, lw = 1.4) {
+    if (!arr) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < visLen; i++) {
+      const origI = startIdx + i;
+      const val = arr[origI];
+      if (val != null) {
+        const xx = x(i);
+        const yy = yPrice(val);
+        if (!started) { ctx.moveTo(xx, yy); started = true; }
+        else ctx.lineTo(xx, yy);
+      }
+    }
+    ctx.stroke();
+  }
+
+  if (chartState.indicators) {
+    if (chartState.showMA7) drawLine(chartState.indicators.ma7, '#f0b90b', 1.4);
+    if (chartState.showMA25) drawLine(chartState.indicators.ma25, '#00f0ff', 1.4);
+    if (chartState.showEMA99) drawLine(chartState.indicators.ema99, '#b388ff', 1.4);
+  }
+
+  // 7. Highest & Lowest Markers
+  ctx.font = '10px "JetBrains Mono", monospace';
+  ctx.fillStyle = textColor;
+  ctx.textAlign = 'left';
+  const highX = x(highestIdx);
+  const highY = yPrice(visCandles[highestIdx].high);
+  const highText = '── ' + formatPrice(visCandles[highestIdx].high);
+  if (highX < W - R - 85) {
+    ctx.fillText(highText, highX + 4, highY - 4);
+  } else {
+    ctx.textAlign = 'right';
+    ctx.fillText(formatPrice(visCandles[highestIdx].high) + ' ──', highX - 4, highY - 4);
+    ctx.textAlign = 'left';
+  }
+
+  const lowX = x(lowestIdx);
+  const lowY = yPrice(visCandles[lowestIdx].low);
+  const lowText = '── ' + formatPrice(visCandles[lowestIdx].low);
+  if (lowX < W - R - 85) {
+    ctx.fillText(lowText, lowX + 4, lowY + 11);
+  } else {
+    ctx.textAlign = 'right';
+    ctx.fillText(formatPrice(visCandles[lowestIdx].low) + ' ──', lowX - 4, lowY + 11);
+    ctx.textAlign = 'left';
+  }
+
+  // 8. Laser Current Price Ray & Right Axis Pill
+  const lastCandle = visCandles[visLen - 1];
+  const lastClose = lastCandle.close;
+  const lastY = yPrice(lastClose);
+  const lastUp = lastCandle.close >= lastCandle.open;
+  const liveColor = lastUp ? green : red;
+
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = liveColor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x(visLen - 1), Math.round(lastY) + 0.5);
+  ctx.lineTo(W - R, Math.round(lastY) + 0.5);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const badgeH = 18;
+  const badgeW = R - 6;
+  const badgeX = W - R + 2;
+  const badgeY = lastY - badgeH / 2;
+  ctx.fillStyle = liveColor;
+  roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 10px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(formatPrice(lastClose), badgeX + badgeW / 2, lastY);
+
+  // Radar ping dot on latest candle
+  ctx.fillStyle = liveColor;
+  ctx.beginPath();
+  ctx.arc(x(visLen - 1), lastY, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 9. Interactive Crosshair & Cursor Inspection
+  if (chartState.isHovering && chartState.mouseX != null && chartState.mouseY != null) {
+    const mx = chartState.mouseX;
+    const my = chartState.mouseY;
+
+    if (mx >= L && mx <= W - R && my >= T && my <= volBottom) {
+      const hoverI = Math.max(0, Math.min(visLen - 1, Math.floor((mx - L) / slotW)));
+      const hc = visCandles[hoverI];
+      const hx = x(hoverI);
+
+      // Vertical dashed line
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.35)' : 'rgba(0, 0, 0, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(hx) + 0.5, T);
+      ctx.lineTo(Math.round(hx) + 0.5, volBottom);
+      ctx.stroke();
+
+      // Horizontal dashed line
+      ctx.beginPath();
+      ctx.moveTo(L, Math.round(my) + 0.5);
+      ctx.lineTo(W - R, Math.round(my) + 0.5);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Price badge on right axis at my
+      const hoverPrice = yToPrice(my);
+      ctx.fillStyle = isDark ? '#2b313a' : '#334155';
+      roundRect(ctx, badgeX, my - 9, badgeW, 18, 3);
+      ctx.fill();
+      ctx.strokeStyle = isDark ? '#475569' : '#94a3b8';
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px "JetBrains Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(formatPrice(hoverPrice), badgeX + badgeW / 2, my);
+
+      // Time badge on bottom axis at hx
+      const d = new Date(Number(hc.time));
+      const timeStr = chartData.timeframe === '1d'
+        ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+        : d.toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      ctx.font = '10px "JetBrains Mono", monospace';
+      const textW = ctx.measureText(timeStr).width + 12;
+      const timeX = Math.max(L, Math.min(W - R - textW, hx - textW / 2));
+      ctx.fillStyle = isDark ? '#2b313a' : '#334155';
+      roundRect(ctx, timeX, H - B + 2, textW, 18, 3);
+      ctx.fill();
+      ctx.strokeStyle = isDark ? '#475569' : '#94a3b8';
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.fillText(timeStr, timeX + textW / 2, H - B + 11);
+
+      updateHUD(hc, startIdx + hoverI);
+      updateTooltip(hc, startIdx + hoverI, hx, my, W, H);
+    }
+  } else {
+    updateHUD(lastCandle, allCandles.length - 1);
+    hideTooltip();
+  }
+
+  ctx.restore();
+}
+
+// ==============================================================================
+// HUD and Tooltip Updaters
+// ==============================================================================
+function updateHUD(candle, origIdx) {
+  if (!candle) return;
+  const isUp = candle.close >= candle.open;
+  const chgAmt = candle.close - candle.open;
+  const chgPct = candle.open > 0 ? (chgAmt / candle.open) * 100 : 0;
+  const sign = chgAmt >= 0 ? '+' : '';
+
+  const d = new Date(Number(candle.time));
+  $('hud-time').textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  $('hud-o').textContent = formatPrice(candle.open);
+  $('hud-h').textContent = formatPrice(candle.high);
+  $('hud-l').textContent = formatPrice(candle.low);
+  $('hud-c').textContent = formatPrice(candle.close);
+  $('hud-c').className = 'hud-val ' + (isUp ? 'pos' : 'neg');
+
+  const chgEl = $('hud-chg');
+  chgEl.textContent = `${sign}${formatPrice(chgAmt)} (${sign}${chgPct.toFixed(2)}%)`;
+  chgEl.className = 'hud-val ' + (isUp ? 'pos' : 'neg');
+
+  $('hud-v').textContent = formatVol(candle.volume);
+
+  if (chartState.indicators && origIdx != null) {
+    const ma7 = chartState.indicators.ma7[origIdx];
+    const ma25 = chartState.indicators.ma25[origIdx];
+    const ema99 = chartState.indicators.ema99[origIdx];
+
+    $('hud-ma7-val').textContent = ma7 != null ? formatPrice(ma7) : '—';
+    $('hud-ma25-val').textContent = ma25 != null ? formatPrice(ma25) : '—';
+    $('hud-ema99-val').textContent = ema99 != null ? formatPrice(ema99) : '—';
+  }
+
+  const ohlcEl = $('chart-ohlc');
+  if (ohlcEl) {
+    ohlcEl.textContent = `O ${formatPrice(candle.open)}  H ${formatPrice(candle.high)}  L ${formatPrice(candle.low)}  C ${formatPrice(candle.close)}`;
+  }
+}
+
+function updateTooltip(candle, origIdx, hx, my, W, H) {
+  const tooltip = $('chart-tooltip');
+  if (!tooltip) return;
+
+  const isUp = candle.close >= candle.open;
+  const chgAmt = candle.close - candle.open;
+  const chgPct = candle.open > 0 ? (chgAmt / candle.open) * 100 : 0;
+  const sign = chgAmt >= 0 ? '+' : '';
+  const amp = candle.low > 0 ? ((candle.high - candle.low) / candle.low) * 100 : 0;
+  const d = new Date(Number(candle.time));
+
+  tooltip.innerHTML = `
+    <div class="tooltip-head">
+      <span>${chartData.symbol} · ${chartData.timeframe}</span>
+      <span>${d.toLocaleDateString([], {month:'short', day:'numeric'})} ${d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+    </div>
+    <div class="tooltip-row"><span class="lbl">Open:</span><span class="val">${formatPrice(candle.open)}</span></div>
+    <div class="tooltip-row"><span class="lbl">High:</span><span class="val">${formatPrice(candle.high)}</span></div>
+    <div class="tooltip-row"><span class="lbl">Low:</span><span class="val">${formatPrice(candle.low)}</span></div>
+    <div class="tooltip-row"><span class="lbl">Close:</span><span class="val" style="color:${isUp?'#0ecb81':'#f6465d'}">${formatPrice(candle.close)}</span></div>
+    <div class="tooltip-row"><span class="lbl">Change:</span><span class="val" style="color:${isUp?'#0ecb81':'#f6465d'}">${sign}${chgPct.toFixed(2)}% (${sign}${formatPrice(chgAmt)})</span></div>
+    <div class="tooltip-row"><span class="lbl">Amplitude:</span><span class="val">${amp.toFixed(2)}%</span></div>
+    <div class="tooltip-row"><span class="lbl">Volume:</span><span class="val">${Number(candle.volume).toLocaleString(undefined, {maximumFractionDigits:2})}</span></div>
+  `;
+
+  tooltip.classList.add('visible');
+
+  const tipW = 210;
+  let left = hx + 16;
+  if (left + tipW > W - 10) left = hx - tipW - 16;
+  let top = Math.max(10, Math.min(H - 180, my - 40));
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  tooltip.style.right = 'auto';
+}
+
+function hideTooltip() {
+  const tooltip = $('chart-tooltip');
+  if (tooltip) tooltip.classList.remove('visible');
+}
+
+// ==============================================================================
+// drawChart Entry Point
+// ==============================================================================
+function drawChart(data) {
+  const candles = (data.candles || []).filter(c =>
+    [c.time, c.open, c.high, c.low, c.close, c.volume].every(v => Number.isFinite(Number(v))) &&
+    Number(c.open) > 0 && Number(c.high) > 0 && Number(c.low) > 0 && Number(c.close) > 0 && Number(c.volume) >= 0
+  );
+
+  if (candles.length < 2) throw Error('Not enough market candles to draw the chart.');
+
+  chartData = {
+    symbol: data.symbol,
+    timeframe: data.timeframe,
+    candles: candles.map(c => ({
+      time: Number(c.time),
+      open: Number(c.open),
+      high: Number(c.high),
+      low: Number(c.low),
+      close: Number(c.close),
+      volume: Number(c.volume)
+    }))
+  };
+
+  chartState.indicators = computeIndicators(chartData.candles);
+
+  const stats = computeStats(chartData.candles);
+  if (stats) {
+    $('stat-24h-high').textContent = formatPrice(stats.high);
+    $('stat-24h-low').textContent = formatPrice(stats.low);
+    $('stat-24h-vol').textContent = formatVol(stats.vol);
+    $('stat-24h-amp').textContent = `${stats.amp.toFixed(2)}%`;
+  }
+
+  const last = chartData.candles[chartData.candles.length - 1];
+  const first = chartData.candles[0];
+  const latest = last.close;
+  const pct = ((latest - first.open) / first.open) * 100;
+  const badge = $('chart-change');
+  const up = latest >= first.open;
+
+  $('chart-price').textContent = money(latest);
+  flashPrice(latest);
+
+  badge.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+  badge.className = `tag ${up ? 'positive' : 'negative'}`;
+
+  $('chart-ohlc').textContent = `O ${formatPrice(last.open)}  H ${formatPrice(last.high)}  L ${formatPrice(last.low)}  C ${formatPrice(last.close)}`;
+  $('chart-title').textContent = `${data.symbol} · ${data.timeframe}`;
+  $('chart-range').textContent = `${new Date(Number(first.time)).toLocaleString()} — ${new Date(Number(last.time)).toLocaleString()}`;
+  $('chart-error').textContent = '';
+
+  // Sync timeframe button active states
+  document.querySelectorAll('.chart-timeframe-pills .chart-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tf === data.timeframe);
+  });
+
+  render();
+}
+
+async function loadChart() {
+  const pair = $('symbol').value;
+  if (!pair) return;
+  const overlay = $('chart-loading-overlay');
+  if (overlay && (!chartData || !chartData.candles.length)) overlay.hidden = false;
+
+  const query = new URLSearchParams({ symbol: pair, timeframe: $('timeframe').value });
+  $('chart-error').textContent = '';
+
+  try {
+    const r = await fetch('/api/candles?' + query, { cache: 'no-store' });
+    const d = await r.json();
+    if (!r.ok) throw Error(d.error || `Chart unavailable (${r.status})`);
+    drawChart(d);
+    refreshCountdown = 30;
+  } catch (e) {
+    $('chart-error').textContent = e.message;
+  } finally {
+    if (overlay) overlay.hidden = true;
+  }
+}
+
+// ==============================================================================
+// Event Listeners & Controls Setup
+// ==============================================================================
+function initChartInteractivity() {
+  const canvas = $('price-chart-canvas');
+  if (!canvas) return;
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    if (!chartData || !chartData.candles) return;
+    const zoomIn = e.deltaY < 0;
+    const factor = zoomIn ? -4 : 4;
+    chartState.visibleCount = Math.max(15, Math.min(chartData.candles.length, chartState.visibleCount + factor));
+    render();
+  }, { passive: false });
+
+  canvas.addEventListener('pointerdown', e => {
+    chartState.isDragging = true;
+    chartState.dragStartX = e.clientX;
+    chartState.dragStartOffset = chartState.panOffset;
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+
+  canvas.addEventListener('pointermove', e => {
+    const rect = canvas.getBoundingClientRect();
+    chartState.mouseX = e.clientX - rect.left;
+    chartState.mouseY = e.clientY - rect.top;
+    chartState.isHovering = true;
+
+    if (chartState.isDragging && chartData && chartData.candles) {
+      const dx = e.clientX - chartState.dragStartX;
+      const slotW = (rect.width - 88) / chartState.visibleCount;
+      const candlesMoved = Math.round(dx / slotW);
+      chartState.panOffset = Math.max(0, Math.min(chartData.candles.length - 15, chartState.dragStartOffset + candlesMoved));
+    }
+    render();
+  });
+
+  canvas.addEventListener('pointerup', e => {
+    chartState.isDragging = false;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  });
+
+  canvas.addEventListener('pointerleave', () => {
+    chartState.isHovering = false;
+    chartState.isDragging = false;
+    render();
+  });
+
+  canvas.addEventListener('dblclick', () => {
+    if (!chartData || !chartData.candles) return;
+    chartState.visibleCount = Math.min(55, chartData.candles.length);
+    chartState.panOffset = 0;
+    render();
+  });
+
+  // Timeframe pills
+  document.querySelectorAll('.chart-timeframe-pills .chart-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tf = btn.dataset.tf;
+      if (!tf || $('timeframe').value === tf) return;
+      $('timeframe').value = tf;
+      document.querySelectorAll('.chart-timeframe-pills .chart-pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadChart();
+    });
+  });
+
+  // Mode buttons
+  const btnCandles = $('btn-mode-candles');
+  const btnArea = $('btn-mode-area');
+  if (btnCandles && btnArea) {
+    btnCandles.addEventListener('click', () => {
+      chartState.viewMode = 'candles';
+      btnCandles.classList.add('active');
+      btnArea.classList.remove('active');
+      render();
+    });
+    btnArea.addEventListener('click', () => {
+      chartState.viewMode = 'area';
+      btnArea.classList.add('active');
+      btnCandles.classList.remove('active');
+      render();
+    });
+  }
+
+  // Indicator toggles
+  const bindIndToggle = (id, prop, elId) => {
+    const btn = $(id);
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      chartState[prop] = !chartState[prop];
+      btn.classList.toggle('active', chartState[prop]);
+      const hudEl = $(elId);
+      if (hudEl) hudEl.style.display = chartState[prop] ? 'inline-flex' : 'none';
+      render();
+    });
+  };
+  bindIndToggle('btn-ind-ma7', 'showMA7', 'hud-ma7-box');
+  bindIndToggle('btn-ind-ma25', 'showMA25', 'hud-ma25-box');
+  bindIndToggle('btn-ind-ema99', 'showEMA99', 'hud-ema99-box');
+  bindIndToggle('btn-ind-vol', 'showVol', null);
+
+  // Zoom controls
+  $('btn-zoom-in')?.addEventListener('click', () => {
+    if (!chartData || !chartData.candles) return;
+    chartState.visibleCount = Math.max(15, chartState.visibleCount - 8);
+    render();
+  });
+  $('btn-zoom-out')?.addEventListener('click', () => {
+    if (!chartData || !chartData.candles) return;
+    chartState.visibleCount = Math.min(chartData.candles.length, chartState.visibleCount + 8);
+    render();
+  });
+  $('btn-zoom-reset')?.addEventListener('click', () => {
+    if (!chartData || !chartData.candles) return;
+    chartState.visibleCount = Math.min(55, chartData.candles.length);
+    chartState.panOffset = 0;
+    render();
+  });
+
+  // Window resize observer
+  window.addEventListener('resize', () => render());
+
+  // Theme observer
+  const themeObserver = new MutationObserver(() => render());
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+}
+
+// 1s countdown timer
+setInterval(() => {
+  refreshCountdown = (refreshCountdown <= 1) ? 30 : refreshCountdown - 1;
+  const el = $('refresh-countdown');
+  if (el) el.textContent = `${refreshCountdown}s`;
+}, 1000);
+
+// ==============================================================================
+// Status & Trading Controls
+// ==============================================================================
+async function refreshStatus() {
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' });
+    if (!r.ok) throw Error(`Status unavailable (${r.status})`);
+    const d = await r.json();
+
+    $('cash-balance').textContent = d.account_available ? money(d.cash_balance) : 'Unavailable';
+    $('net-worth').textContent = money(d.net_worth);
+    const p = $('pnl');
+    p.textContent = money(d.total_gain_loss);
+    p.className = 'metric ' + (d.total_gain_loss > 0 ? 'positive' : d.total_gain_loss < 0 ? 'negative' : '');
+    $('open-count').textContent = `${d.positions_count} / ${d.max_positions}`;
+
+    const paperName = d.fallback_simulated ? 'Simulated (Testnet fallback)' :
+                      d.paper_environment === 'demo' ? 'Binance Demo' :
+                      d.paper_environment === 'testnet' ? 'Spot Testnet' :
+                      (d.paper_environment || 'paper environment');
+    $('mode').textContent = d.paper_trading ? `Paper trading · ${paperName} · no real orders` : 'Live mode reported';
+
+    const paused = d.entry_mode === 'EXIT_ONLY';
+    const manualResume = Boolean(d.manual_resume_available || d.review_required);
+    const haltLocked = Boolean(d.halted && !manualResume);
+    const action = $('entry-control');
+    action.textContent = manualResume ? 'Review & resume' : haltLocked ? 'Safety halt active' : paused ? 'Resume entries' : 'Pause entries';
+    action.dataset.manualReview = manualResume ? '1' : '0';
+    action.dataset.intent = (paused || manualResume) ? 'resume' : 'pause';
+    action.disabled = haltLocked || (paused && !d.resume_available && !manualResume);
+
+    $('control-status').textContent = manualResume ? `Safety-halt review is ready (${d.halt_reason}). Verify the Testnet account before confirming.` :
+                                      d.halted ? d.halt_reason :
+                                      paused ? 'New entries are paused. Existing positions remain monitored.' :
+                                      (!d.exchange_reconciled ? 'Account reconciliation pending' : '');
+
+    const hasIssue = Boolean(d.account_issue || !d.account_available);
+    const alertBox = $('account-alert');
+    alertBox.hidden = !hasIssue;
+    alertBox.style.display = hasIssue ? 'flex' : 'none';
+    $('account-message').textContent = d.account_issue || (!d.account_available ? 'Account balance is unavailable; new trading is blocked.' : '');
+
+    const showSmoke = Boolean(d.paper_trading && d.paper_environment === 'testnet' && !d.fallback_simulated);
+    const smokeBtn = $('testnet-smoke');
+    smokeBtn.hidden = !showSmoke;
+    smokeBtn.style.display = showSmoke ? 'inline-flex' : 'none';
+    smokeBtn.disabled = d.halted || !d.account_available || !d.exchange_reconciled || d.positions_count > 0 || d.testnet_smoke_attempted;
+    smokeBtn.textContent = d.testnet_smoke_attempted ? '✓ Smoke trade verified' : 'One-time Testnet smoke trade · up to $10';
+    if (d.testnet_smoke_attempted) {
+      smokeBtn.title = 'Order routing check passed: buy, sell, and safety stops confirmed.';
+    } else {
+      smokeBtn.title = '';
+    }
+
+    $('connection').textContent = d.account_available && d.exchange_reconciled
+      ? `${d.exchange} · ${d.fallback_simulated ? 'simulated wallet' : 'account verified'} · updated ${new Date().toLocaleTimeString()}`
+      : d.account_available
+      ? `${d.exchange} · balance loaded, trading blocked`
+      : 'Account unavailable · trading blocked';
+    $('dot').className = d.account_available && d.exchange_reconciled ? 'dot ok' : 'dot bad';
+
+    latestPairs = Object.keys(d.prices || {});
+    const sel = $('symbol'), old = sel.value;
+    if (latestPairs.join('|') !== [...sel.options].map(o => o.value).join('|')) {
+      sel.replaceChildren();
+      for (const pair of latestPairs) {
+        const o = document.createElement('option');
+        o.value = pair;
+        o.textContent = pair;
+        sel.append(o);
+      }
+      if (latestPairs.includes(old)) sel.value = old;
+      if (sel.value) loadChart();
+    }
+  } catch (e) {
+    $('connection').textContent = e.message;
+    $('dot').className = 'dot bad';
+  }
+}
+
+$('symbol').addEventListener('change', loadChart);
+$('timeframe').addEventListener('change', () => {
+  document.querySelectorAll('.chart-timeframe-pills .chart-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tf === $('timeframe').value);
+  });
+  loadChart();
+});
+
+initChartInteractivity();
+refreshStatus();
+setInterval(refreshStatus, 10000);
+setInterval(loadChart, 30000);
+
+$('entry-control').addEventListener('click', async () => {
+  const paused = $('entry-control').dataset.intent === 'resume';
+  const manualReview = paused && $('entry-control').dataset.manualReview === '1';
+  if (manualReview && !confirm('Confirm you reviewed the Binance Spot Testnet account and verified there are no open bot positions or unresolved orders. The bot will reconcile again. A consecutive-loss review resets only that streak; daily and drawdown limits remain active.')) return;
+  if (paused && !manualReview && !confirm('Reconcile the Testnet account and resume new entries? Resume will be blocked if the account or any safety check is unhealthy.')) return;
+  if (!paused && !confirm('Pause all new entries? Existing positions will still be monitored.')) return;
+  $('entry-control').disabled = true;
+  $('control-status').textContent = paused ? 'Checking the account before resuming…' : 'Pausing new entries…';
+  try {
+    const r = await fetch(paused ? '/api/resume' : '/api/exit-only', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: paused ? JSON.stringify({ manual_review_confirmed: manualReview }) : undefined
+    });
+    const d = await r.json();
+    $('control-status').textContent = d.message || 'Trading control updated';
+    if (!r.ok) throw Error(d.message || 'Unable to change entry mode');
+    refreshStatus();
+  } catch (e) {
+    $('control-status').textContent = e.message;
+    refreshStatus();
+  }
+});
+
+$('emergency-stop').addEventListener('click', async () => {
+  if (!confirm('Cancel open exchange orders and market-close every bot-tracked position? This permanently halts trading until manual review.')) return;
+  $('emergency-stop').disabled = true;
+  $('control-status').textContent = 'Emergency stop running…';
+  try {
+    const r = await fetch('/api/emergency-stop', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const d = await r.json();
+    $('control-status').textContent = d.message || 'Emergency stop completed';
+    if (!r.ok) throw Error(d.message || 'Emergency stop needs operator attention');
+    refreshStatus();
+  } catch (e) {
+    $('control-status').textContent = e.message;
+    $('emergency-stop').disabled = false;
+  }
+});
+
+$('run-cycle').addEventListener('click', async () => {
+  const btn = $('run-cycle');
+  btn.disabled = true;
+  $('control-status').textContent = 'Running strategy and market check…';
+  try {
+    const r = await fetch('/api/run-cycle', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw Error(err.error || `Check failed (${r.status})`);
+    }
+    $('control-status').textContent = 'Strategy check finished successfully.';
+    refreshStatus();
+  } catch (e) {
+    $('control-status').textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('test-alert').addEventListener('click', async () => {
+  const btn = $('test-alert');
+  btn.disabled = true;
+  $('control-status').textContent = 'Dispatching test alert…';
+  try {
+    const r = await fetch('/api/test-notification', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const d = await r.json();
+    $('control-status').textContent = d.message || (r.ok ? 'Test alert sent!' : 'Test alert failed');
+  } catch (e) {
+    $('control-status').textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('testnet-smoke').addEventListener('click', async () => {
+  if (!confirm('Send a one-time Binance Spot Testnet market buy of at most $10, then immediately submit the matching sell? This is an order-routing check, not a strategy signal.')) return;
+  $('testnet-smoke').disabled = true;
+  $('control-status').textContent = 'Submitting Testnet buy and sell…';
+  try {
+    const r = await fetch('/api/testnet-smoke-trade', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const d = await r.json();
+    if (!r.ok) throw Error(d.error || 'Smoke trade needs operator attention');
+    $('control-status').textContent = `Testnet smoke complete · ${d.symbol} · buy ${d.buy_order_id} / sell ${d.sell_order_id} · before-fee P&L ${money(d.pnl_before_fees)}`;
+    refreshStatus();
+  } catch (e) {
+    $('control-status').textContent = e.message;
+    refreshStatus();
+  }
+});
 </script></body></html>

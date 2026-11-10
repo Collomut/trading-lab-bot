@@ -412,12 +412,28 @@ button:disabled, .button:disabled {
 }
 
 /* ==========================================================================
-   Chart Components
+   Chart Components (Futuristic Binance Terminal)
    ========================================================================== */
 
 .chart-card {
-  padding: 16px 18px 14px;
+  padding: 18px 20px 14px;
   margin-top: 14px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  transition: box-shadow .2s ease, border-color .2s ease;
+}
+
+:root[data-theme="dark"] .chart-card {
+  background: radial-gradient(circle at top right, #161b22 0%, #11151b 50%, #0c0e12 100%);
+  border: 1px solid #232933;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme="light"] .chart-card {
+  background: #ffffff;
+  border: 1px solid #e5e9f0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.04);
 }
 
 .chart-heading {
@@ -426,12 +442,83 @@ button:disabled, .button:disabled {
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+:root[data-theme="dark"] .chart-heading {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+.chart-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.binance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  background: rgba(240, 185, 11, 0.12);
+  color: #f0b90b;
+  border: 1px solid rgba(240, 185, 11, 0.3);
+  text-shadow: 0 0 12px rgba(240, 185, 11, 0.35);
+}
+
+.pulse-beacon {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #0ecb81;
+  box-shadow: 0 0 8px #0ecb81;
+  animation: beacon-glow 1.8s infinite;
+  flex-shrink: 0;
+}
+
+@keyframes beacon-glow {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(14, 203, 129, 0.7); }
+  70% { transform: scale(1.15); box-shadow: 0 0 0 6px rgba(14, 203, 129, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(14, 203, 129, 0); }
 }
 
 .chart-controls {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.chart-auto-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-family: "JetBrains Mono", "SF Mono", "Roboto Mono", monospace;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--soft);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+:root[data-theme="dark"] .chart-auto-refresh {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #141820;
+}
+
+.refresh-spin-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f0b90b;
+  box-shadow: 0 0 6px rgba(240, 185, 11, 0.6);
 }
 
 select {
@@ -445,32 +532,265 @@ select {
   max-width: 100%;
 }
 
+select#symbol, select#timeframe {
+  font: 600 12px/1 system-ui, -apple-system, sans-serif;
+  color: var(--ink);
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+:root[data-theme="dark"] select#symbol, :root[data-theme="dark"] select#timeframe {
+  background: #161b22;
+  border-color: #2b323d;
+  color: #f0f0f0;
+}
+
+select#symbol:hover, select#symbol:focus,
+select#timeframe:hover, select#timeframe:focus {
+  border-color: #f0b90b;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(240, 185, 11, 0.2);
+}
+
 .chart-price-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px 12px;
-  margin: 8px 0;
-  min-height: 35px;
+  gap: 12px 18px;
+  margin: 12px 0 8px;
+  min-height: 40px;
 }
 
-.chart-price-row > strong {
-  font-size: 24px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
+.price-main-col {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-shrink: 0;
 }
+
+.chart-price-row > strong, .price-main-col > strong {
+  font-size: clamp(24px, 3.5vw, 32px);
+  font-family: "JetBrains Mono", "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  letter-spacing: -.02em;
+  transition: color .25s ease, text-shadow .25s ease;
+}
+
+.chart-price-row strong.flash-up, .price-main-col strong.flash-up {
+  color: #0ecb81 !important;
+  text-shadow: 0 0 16px rgba(14, 203, 129, 0.65);
+}
+
+.chart-price-row strong.flash-down, .price-main-col strong.flash-down {
+  color: #f6465d !important;
+  text-shadow: 0 0 16px rgba(246, 70, 93, 0.65);
+}
+
+.chart-24h-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+}
+
+.stat-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-lbl {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.stat-pill b {
+  font-family: "JetBrains Mono", "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+:root[data-theme="dark"] .stat-pill b {
+  color: #eaecef;
+}
+
+/* Toolbar & quick pills */
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 8px;
+}
+
+:root[data-theme="dark"] .chart-toolbar {
+  border-bottom-color: rgba(255, 255, 255, 0.05);
+}
+
+.chart-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chart-pill, .ind-pill, .icon-pill {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all .15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  user-select: none;
+  white-space: nowrap;
+}
+
+:root[data-theme="dark"] .chart-pill,
+:root[data-theme="dark"] .ind-pill,
+:root[data-theme="dark"] .icon-pill {
+  background: #141820;
+  border-color: #232933;
+  color: #848e9c;
+}
+
+.chart-pill:hover, .ind-pill:hover, .icon-pill:hover {
+  color: var(--ink);
+  border-color: var(--subtle);
+}
+
+:root[data-theme="dark"] .chart-pill:hover,
+:root[data-theme="dark"] .ind-pill:hover,
+:root[data-theme="dark"] .icon-pill:hover {
+  color: #f0f0f0;
+  border-color: #3e4756;
+}
+
+.chart-pill.active {
+  background: rgba(240, 185, 11, 0.15) !important;
+  color: #f0b90b !important;
+  border-color: #f0b90b !important;
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(240, 185, 11, 0.2);
+}
+
+.ind-pill.active {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+:root[data-theme="dark"] .ind-pill.active {
+  color: #eaecef;
+}
+
+.dot-ind {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot-ind.gold { background: #f0b90b; box-shadow: 0 0 6px rgba(240, 185, 11, 0.6); }
+.dot-ind.cyan { background: #00f0ff; box-shadow: 0 0 6px rgba(0, 240, 255, 0.6); }
+.dot-ind.violet { background: #b388ff; box-shadow: 0 0 6px rgba(179, 136, 255, 0.6); }
+.dot-ind.green { background: #0ecb81; box-shadow: 0 0 6px rgba(14, 203, 129, 0.6); }
+
+/* HUD strip */
+.chart-hud {
+  display: flex;
+  align-items: center;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  font-family: "JetBrains Mono", "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  padding: 6px 4px 6px;
+  color: var(--muted);
+  min-height: 26px;
+  user-select: none;
+}
+
+:root[data-theme="dark"] .chart-hud {
+  color: #848e9c;
+}
+
+.hud-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.hud-lbl {
+  color: var(--subtle);
+  font-size: 10px;
+}
+
+.hud-val {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .hud-val {
+  color: #eaecef;
+}
+
+.hud-val.pos { color: #0ecb81 !important; }
+.hud-val.neg { color: #f6465d !important; }
+
+.hud-ma7-text .hud-val { color: #f0b90b !important; }
+.hud-ma25-text .hud-val { color: #00f0ff !important; }
+.hud-ema99-text .hud-val { color: #b388ff !important; }
 
 .ohlc-readout {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  display: none;
 }
 
+/* The chart canvas viewport */
 .chart-wrap {
   position: relative;
   width: 100%;
-  height: 340px;
-  margin-top: 4px;
+  height: 420px;
+  margin-top: 6px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0d1117;
+}
+
+:root[data-theme="light"] .chart-wrap {
+  background: #fafbfc;
+  border: 1px solid #edf0f5;
+}
+
+.chart-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
 }
 
 .chart-wrap svg {
@@ -534,26 +854,62 @@ select {
   vector-effect: non-scaling-stroke;
 }
 
+/* Loading overlay */
+.chart-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(14, 18, 23, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #f0b90b;
+  font-size: 12px;
+  font-weight: 600;
+  z-index: 8;
+  letter-spacing: .04em;
+}
+
+.cyber-spinner {
+  width: 32px;
+  height: 32px;
+  border: 2px solid rgba(240, 185, 11, 0.15);
+  border-top-color: #f0b90b;
+  border-radius: 50%;
+  animation: cyber-spin 0.8s linear infinite;
+}
+
+@keyframes cyber-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Holographic futuristic tooltip */
 .chart-tooltip {
   position: absolute;
-  z-index: 5;
-  top: 8px;
-  left: 10px;
+  z-index: 10;
   display: none;
-  min-width: 160px;
-  max-width: calc(100% - 20px);
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--paper);
-  box-shadow: 0 4px 16px rgb(0 0 0 / .14);
-  color: var(--ink);
+  min-width: 210px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(18, 22, 28, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(240, 185, 11, 0.25);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 16px rgba(240, 185, 11, 0.1);
+  color: #eaecef;
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.55;
   pointer-events: none;
   font-variant-numeric: tabular-nums;
-  white-space: pre-line;
-  word-break: break-word;
+  font-family: "JetBrains Mono", "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] .chart-tooltip {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: #d0d7de;
+  color: #24292f;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 
 .chart-tooltip.visible {
@@ -565,15 +921,55 @@ select {
   margin-bottom: 2px;
 }
 
+.tooltip-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 10.5px;
+  color: #848e9c;
+}
+
+:root[data-theme="light"] .tooltip-head {
+  border-bottom-color: #e1e4e8;
+  color: #57606a;
+}
+
+.tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 0;
+}
+
+.tooltip-row .lbl {
+  color: #848e9c;
+}
+
+:root[data-theme="light"] .tooltip-row .lbl {
+  color: #57606a;
+}
+
+.tooltip-row .val {
+  font-weight: 600;
+}
+
 .chart-foot {
   display: flex;
   justify-content: space-between;
   color: var(--muted);
   font-size: 11px;
-  padding-top: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--line);
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+:root[data-theme="dark"] .chart-foot {
+  border-top-color: rgba(255, 255, 255, 0.06);
 }
 
 .error-text {
@@ -908,7 +1304,27 @@ footer {
   }
 
   .chart-wrap {
-    height: 240px;
+    height: 310px;
+  }
+
+  .chart-24h-strip {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    width: 100%;
+    gap: 8px;
+    padding: 6px 0;
+  }
+
+  .chart-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .chart-toolbar-group {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .chart-tooltip {
