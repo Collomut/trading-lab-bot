@@ -1488,6 +1488,10 @@ footer {
 .log-gate.pass { color:var(--green); }
 .log-gate.block { color:var(--red); }
 .log-gate.inactive { color:var(--muted); }
+.shadow-check { margin-top:11px; padding:10px 12px; border:1px dashed var(--line); border-radius:8px; background:var(--soft); }
+.shadow-check-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; font-size:11px; }
+.shadow-check-note,.shadow-check-meta,.shadow-check-disclaimer { margin:6px 0 0; color:var(--muted); font-size:11px; line-height:1.45; }
+.shadow-check-disclaimer { font-size:10px; }
 .log-summary-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .log-summary-head h2 { margin:3px 0 0; font-size:18px; }
 .summary-window { color:var(--muted); font-size:11px; }

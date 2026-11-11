@@ -65,6 +65,33 @@ from strategies import (
     get_strategy,
     ohlcv_to_dataframe,
 )
+from shadow_strategy import evaluate_shadow_candidate
+
+
+class TestShadowLogSafety(unittest.TestCase):
+    def test_volume_breakout_observer_detects_predeclared_setup(self):
+        candles = []
+        for index in range(260):
+            close = 80 + 0.075 * index + 0.35 * math.sin(index * 0.55)
+            candles.append([index * 3_600_000, close - 0.05, close + 0.5, close - 0.5, close, 100])
+        candles[-1] = [candles[-1][0], 99.4, 101.1, 99.3, 100.8, 150]
+        result = evaluate_shadow_candidate(candles)
+        self.assertEqual(result["signal"], "BUY")
+        self.assertEqual(result["status"], "ok")
+        self.assertGreaterEqual(result["indicators"]["adx"], 20)
+        self.assertGreaterEqual(result["indicators"]["volume_ratio"], 1.2)
+
+    def test_shadow_market_log_is_allowlisted_and_safe(self):
+        safe = WebDashboard._safe_log_details("market_check", {
+            "symbol": "BTC/USDT", "signal": "HOLD", "shadow": {
+                "candidate_id": "volume_breakout_24h_v1", "signal": "BUY", "status": "ok",
+                "reason": "breakout", "private": "must not pass",
+                "indicators": {"adx": 25, "close": 100, "secret": "must not pass"},
+            },
+        })
+        self.assertEqual(safe["shadow"]["signal"], "BUY")
+        self.assertEqual(safe["shadow"]["indicators"], {"adx": 25, "close": 100})
+        self.assertNotIn("private", safe["shadow"])
 
 
 # ==============================================================================
@@ -1149,6 +1176,36 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
 
 class TestBotEngineOrderLifecycle(unittest.TestCase):
     """Verifies complete order execution, fee deduction, stop loss synchronization, recovery, and alerts."""
+
+    def test_shadow_candidate_signal_is_logged_but_never_routes_to_order_handlers(self):
+        bot = object.__new__(TradingBot)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 3_600_000
+        candles = [[now_ms - (149 - i) * 3_600_000, 100, 101, 99, 100, 10] for i in range(150)]
+        bot.config = SimpleNamespace(strategy=SimpleNamespace(timeframe="1h", lookback_candles=150))
+        bot.exchange = Mock()
+        bot.exchange.fetch_closed_ohlcv.side_effect = [candles, candles]
+        bot.strategy = Mock()
+        bot.strategy.analyze.return_value = TradeSignal(Signal.HOLD, "BTC/USDT", 0.0, "Active strategy holds", {})
+        bot.risk_manager = SimpleNamespace(store=Mock())
+        bot._last_analyzed_candle = {}
+        bot._analysis_error_states = {}
+        bot.last_signals = {}
+        bot._handle_buy_signal = Mock()
+        bot._handle_sell_signal = Mock()
+
+        with patch("bot_engine.evaluate_shadow_candidate", return_value={
+            "candidate_id": "volume_breakout_24h_v1", "signal": "BUY", "status": "ok",
+        }):
+            bot.analyze_market("BTC/USDT")
+
+        bot._handle_buy_signal.assert_not_called()
+        bot._handle_sell_signal.assert_not_called()
+        event = bot.risk_manager.store.append_event.call_args.args[1]
+        self.assertEqual(event["signal"], "HOLD")
+        self.assertEqual(event["shadow"]["signal"], "BUY")
+
+    def test_shadow_candidate_requires_history_and_uses_completed_candles(self):
+        self.assertEqual(evaluate_shadow_candidate([])["status"], "insufficient_data")
 
     def test_risk_equity_excludes_preexisting_exchange_seed_balances(self):
         bot = object.__new__(TradingBot)

@@ -28,6 +28,7 @@ from config import BotConfig
 from exchange import AccountAccessError, ExchangeConnector
 from strategies import get_strategy, ohlcv_to_dataframe, Signal
 from risk_manager import RiskManager
+from shadow_strategy import LOOKBACK_CANDLES, evaluate_shadow_candidate
 
 logger = logging.getLogger("bot.engine")
 
@@ -275,6 +276,22 @@ class TradingBot:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+        # Research-only observer. This separate, longer history is never passed
+        # to the active strategy, risk manager, or order handlers.
+        shadow = {"candidate_id": "volume_breakout_24h_v1", "signal": "HOLD", "status": "unavailable"}
+        try:
+            shadow_ohlcv = self.exchange.fetch_closed_ohlcv(
+                symbol, self.config.strategy.timeframe, LOOKBACK_CANDLES
+            )
+            shadow = evaluate_shadow_candidate(shadow_ohlcv)
+        except Exception as exc:
+            # A shadow-data failure must not affect active analysis or execution.
+            shadow = {
+                "candidate_id": "volume_breakout_24h_v1",
+                "signal": "HOLD",
+                "status": f"error_{type(exc).__name__}"[:48],
+            }
+
         # Persist one explainable record per newly completed candle, including HOLDs.
         # Audit failure must not change strategy or order behavior.
         try:
@@ -302,6 +319,7 @@ class TradingBot:
                 "confidence": round(float(signal.confidence), 4),
                 "votes": vote_details,
                 "indicators": indicator_details,
+                "shadow": shadow,
             })
         except Exception:
             logger.exception("Could not persist market decision for %s", symbol)

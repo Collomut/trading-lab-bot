@@ -128,6 +128,25 @@
 
     if(e.type==='market_check'){
       if(d.reason)appendText(card,'p','log-reason',d.reason);
+      const shadow=d.shadow;
+      if(shadow&&shadow.candidate_id){
+        const panel=document.createElement('section');panel.className='shadow-check';
+        const shadowHead=document.createElement('div');shadowHead.className='shadow-check-head';
+        appendText(shadowHead,'strong','',`Research only · ${shadow.candidate_id.replaceAll('_',' ')}`);
+        const shadowSignal=String(shadow.signal||'HOLD').toUpperCase();
+        const shadowTone=shadowSignal==='BUY'?'is-buy':shadowSignal==='SELL'?'is-sell':'is-wait';
+        addBadge(shadowHead,shadow.status==='ok'?shadowSignal:`${shadowSignal} · ${shadow.status.replaceAll('_',' ')}`,shadowTone);
+        panel.append(shadowHead);
+        appendText(panel,'p','shadow-check-note',shadow.reason||'No shadow signal detail available.');
+        const si=shadow.indicators||{};
+        const shadowMeta=[];
+        if(si.adx!=null)shadowMeta.push(`ADX ${si.adx}`);
+        if(si.atr_pct!=null)shadowMeta.push(`ATR ${si.atr_pct}%`);
+        if(si.volume_ratio!=null)shadowMeta.push(`Volume ${si.volume_ratio}× average`);
+        if(shadowMeta.length)appendText(panel,'p','shadow-check-meta',shadowMeta.join(' · '));
+        appendText(panel,'p','shadow-check-disclaimer','Hypothetical signal only. It does not place or simulate an order.');
+        card.append(panel);
+      }
       const votes=d.votes||{};
       const voteLines=document.createElement('div');voteLines.className='log-votes';
       for(const [name,vote] of Object.entries(votes)){

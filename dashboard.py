@@ -613,6 +613,15 @@ class WebDashboard:
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):
                     safe_indicators[key] = value
+            shadow = details.get("shadow", {})
+            shadow = shadow if isinstance(shadow, dict) else {}
+            shadow_indicators = shadow.get("indicators", {})
+            shadow_indicators = shadow_indicators if isinstance(shadow_indicators, dict) else {}
+            safe_shadow_indicators = {
+                key: shadow_indicators[key]
+                for key in ("open", "high", "low", "close", "volume", "breakout_level", "exit_level", "adx", "atr_pct", "volume_ratio", "ema200_rising")
+                if isinstance(shadow_indicators.get(key), (int, float, bool))
+            }
             return {
                 "symbol": str(details.get("symbol", ""))[:32],
                 "timeframe": str(details.get("timeframe", ""))[:12],
@@ -622,6 +631,13 @@ class WebDashboard:
                 "confidence": details.get("confidence"),
                 "votes": safe_votes,
                 "indicators": safe_indicators,
+                "shadow": {
+                    "candidate_id": str(shadow.get("candidate_id", ""))[:48],
+                    "signal": str(shadow.get("signal", "HOLD"))[:12],
+                    "status": str(shadow.get("status", "unknown"))[:48],
+                    "reason": str(shadow.get("reason", ""))[:240],
+                    "indicators": safe_shadow_indicators,
+                },
             }
         if event_type == "order_status":
             return {
