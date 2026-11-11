@@ -195,93 +195,93 @@
         }
       }
     },
-    "volume_confirmed_24h_breakout": {
+    "volume_confirmed_24h_ema100_breakout": {
       "full_2021_2026_oct": {
         "base": {
-          "closed_trades": 1034,
-          "wins": 385,
-          "losses": 649,
-          "win_rate_pct": 37.23,
-          "profit_factor": 0.738,
-          "net_pnl_usdt": -2198.59,
-          "avg_trade_pnl_usdt": -2.13,
-          "max_drawdown_pct": 24.721
+          "closed_trades": 1088,
+          "wins": 409,
+          "losses": 679,
+          "win_rate_pct": 37.59,
+          "profit_factor": 0.731,
+          "net_pnl_usdt": -2342.31,
+          "avg_trade_pnl_usdt": -2.15,
+          "max_drawdown_pct": 26.036
         },
         "stress": {
-          "closed_trades": 1040,
-          "wins": 339,
-          "losses": 701,
+          "closed_trades": 1092,
+          "wins": 356,
+          "losses": 736,
           "win_rate_pct": 32.6,
-          "profit_factor": 0.515,
-          "net_pnl_usdt": -4292.15,
-          "avg_trade_pnl_usdt": -4.13,
-          "max_drawdown_pct": 43.495
+          "profit_factor": 0.508,
+          "net_pnl_usdt": -4478.12,
+          "avg_trade_pnl_usdt": -4.1,
+          "max_drawdown_pct": 45.32
         }
       },
       "train_2021_2023": {
         "base": {
-          "closed_trades": 529,
-          "wins": 202,
-          "losses": 327,
-          "win_rate_pct": 38.19,
-          "profit_factor": 0.749,
-          "net_pnl_usdt": -1220.29,
-          "avg_trade_pnl_usdt": -2.31,
-          "max_drawdown_pct": 13.4
+          "closed_trades": 558,
+          "wins": 214,
+          "losses": 344,
+          "win_rate_pct": 38.35,
+          "profit_factor": 0.728,
+          "net_pnl_usdt": -1374.89,
+          "avg_trade_pnl_usdt": -2.46,
+          "max_drawdown_pct": 14.844
         },
         "stress": {
-          "closed_trades": 532,
-          "wins": 180,
-          "losses": 352,
-          "win_rate_pct": 33.83,
-          "profit_factor": 0.536,
-          "net_pnl_usdt": -2501.37,
-          "avg_trade_pnl_usdt": -4.7,
-          "max_drawdown_pct": 25.281
+          "closed_trades": 559,
+          "wins": 189,
+          "losses": 370,
+          "win_rate_pct": 33.81,
+          "profit_factor": 0.519,
+          "net_pnl_usdt": -2667.49,
+          "avg_trade_pnl_usdt": -4.77,
+          "max_drawdown_pct": 26.921
         }
       },
       "validation_2024_2025": {
         "base": {
-          "closed_trades": 395,
-          "wins": 136,
-          "losses": 259,
-          "win_rate_pct": 34.43,
-          "profit_factor": 0.639,
-          "net_pnl_usdt": -1056.01,
-          "avg_trade_pnl_usdt": -2.67,
-          "max_drawdown_pct": 22.763
+          "closed_trades": 416,
+          "wins": 147,
+          "losses": 269,
+          "win_rate_pct": 35.34,
+          "profit_factor": 0.654,
+          "net_pnl_usdt": -1044.77,
+          "avg_trade_pnl_usdt": -2.51,
+          "max_drawdown_pct": 24.197
         },
         "stress": {
-          "closed_trades": 396,
-          "wins": 121,
-          "losses": 275,
-          "win_rate_pct": 30.56,
-          "profit_factor": 0.437,
-          "net_pnl_usdt": -1609.83,
-          "avg_trade_pnl_usdt": -4.07,
-          "max_drawdown_pct": 41.112
+          "closed_trades": 416,
+          "wins": 128,
+          "losses": 288,
+          "win_rate_pct": 30.77,
+          "profit_factor": 0.444,
+          "net_pnl_usdt": -1628.3,
+          "avg_trade_pnl_usdt": -3.91,
+          "max_drawdown_pct": 42.958
         }
       },
       "recent_2026_jan_oct": {
         "base": {
-          "closed_trades": 110,
-          "wins": 47,
-          "losses": 63,
-          "win_rate_pct": 42.73,
-          "profit_factor": 1.128,
-          "net_pnl_usdt": 77.71,
-          "avg_trade_pnl_usdt": 0.71,
-          "max_drawdown_pct": 24.033
+          "closed_trades": 114,
+          "wins": 48,
+          "losses": 66,
+          "win_rate_pct": 42.11,
+          "profit_factor": 1.123,
+          "net_pnl_usdt": 77.35,
+          "avg_trade_pnl_usdt": 0.68,
+          "max_drawdown_pct": 25.431
         },
         "stress": {
-          "closed_trades": 112,
-          "wins": 38,
-          "losses": 74,
-          "win_rate_pct": 33.93,
-          "profit_factor": 0.706,
-          "net_pnl_usdt": -180.96,
-          "avg_trade_pnl_usdt": -1.62,
-          "max_drawdown_pct": 43.44
+          "closed_trades": 117,
+          "wins": 39,
+          "losses": 78,
+          "win_rate_pct": 33.33,
+          "profit_factor": 0.709,
+          "net_pnl_usdt": -182.33,
+          "avg_trade_pnl_usdt": -1.56,
+          "max_drawdown_pct": 45.278
         }
       }
     },

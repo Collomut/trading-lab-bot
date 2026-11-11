@@ -75,7 +75,7 @@ class TestShadowLogSafety(unittest.TestCase):
             close = 80 + 0.075 * index + 0.35 * math.sin(index * 0.55)
             candles.append([index * 3_600_000, close - 0.05, close + 0.5, close - 0.5, close, 100])
         candles[-1] = [candles[-1][0], 99.4, 101.1, 99.3, 100.8, 150]
-        result = evaluate_shadow_candidate(candles)
+        result = evaluate_shadow_candidate(candles[-150:])
         self.assertEqual(result["signal"], "BUY")
         self.assertEqual(result["status"], "ok")
         self.assertGreaterEqual(result["indicators"]["adx"], 20)
@@ -84,7 +84,7 @@ class TestShadowLogSafety(unittest.TestCase):
     def test_shadow_market_log_is_allowlisted_and_safe(self):
         safe = WebDashboard._safe_log_details("market_check", {
             "symbol": "BTC/USDT", "signal": "HOLD", "shadow": {
-                "candidate_id": "volume_breakout_24h_v1", "signal": "BUY", "status": "ok",
+                "candidate_id": "volume_breakout_24h_ema100_v1", "signal": "BUY", "status": "ok",
                 "reason": "breakout", "private": "must not pass",
                 "indicators": {"adx": 25, "close": 100, "secret": "must not pass"},
             },
@@ -1183,7 +1183,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         candles = [[now_ms - (149 - i) * 3_600_000, 100, 101, 99, 100, 10] for i in range(150)]
         bot.config = SimpleNamespace(strategy=SimpleNamespace(timeframe="1h", lookback_candles=150))
         bot.exchange = Mock()
-        bot.exchange.fetch_closed_ohlcv.side_effect = [candles, candles]
+        bot.exchange.fetch_closed_ohlcv.return_value = candles
         bot.strategy = Mock()
         bot.strategy.analyze.return_value = TradeSignal(Signal.HOLD, "BTC/USDT", 0.0, "Active strategy holds", {})
         bot.risk_manager = SimpleNamespace(store=Mock())
@@ -1194,12 +1194,13 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         bot._handle_sell_signal = Mock()
 
         with patch("bot_engine.evaluate_shadow_candidate", return_value={
-            "candidate_id": "volume_breakout_24h_v1", "signal": "BUY", "status": "ok",
+            "candidate_id": "volume_breakout_24h_ema100_v1", "signal": "BUY", "status": "ok",
         }):
             bot.analyze_market("BTC/USDT")
 
         bot._handle_buy_signal.assert_not_called()
         bot._handle_sell_signal.assert_not_called()
+        bot.exchange.fetch_closed_ohlcv.assert_called_once_with("BTC/USDT", "1h", 150)
         event = bot.risk_manager.store.append_event.call_args.args[1]
         self.assertEqual(event["signal"], "HOLD")
         self.assertEqual(event["shadow"]["signal"], "BUY")

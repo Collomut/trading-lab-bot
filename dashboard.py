@@ -619,7 +619,7 @@ class WebDashboard:
             shadow_indicators = shadow_indicators if isinstance(shadow_indicators, dict) else {}
             safe_shadow_indicators = {
                 key: shadow_indicators[key]
-                for key in ("open", "high", "low", "close", "volume", "breakout_level", "exit_level", "adx", "atr_pct", "volume_ratio", "ema200_rising")
+                for key in ("open", "high", "low", "close", "volume", "breakout_level", "exit_level", "adx", "atr_pct", "volume_ratio", "ema100_rising")
                 if isinstance(shadow_indicators.get(key), (int, float, bool))
             }
             return {

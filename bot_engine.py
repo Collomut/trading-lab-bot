@@ -28,7 +28,7 @@ from config import BotConfig
 from exchange import AccountAccessError, ExchangeConnector
 from strategies import get_strategy, ohlcv_to_dataframe, Signal
 from risk_manager import RiskManager
-from shadow_strategy import LOOKBACK_CANDLES, evaluate_shadow_candidate
+from shadow_strategy import CANDIDATE_ID, evaluate_shadow_candidate
 
 logger = logging.getLogger("bot.engine")
 
@@ -276,18 +276,15 @@ class TradingBot:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Research-only observer. This separate, longer history is never passed
-        # to the active strategy, risk manager, or order handlers.
-        shadow = {"candidate_id": "volume_breakout_24h_v1", "signal": "HOLD", "status": "unavailable"}
+        # Research-only observer. It reads the closed raw candles separately
+        # and is never routed to the active strategy or the order handlers.
+        shadow = {"candidate_id": CANDIDATE_ID, "signal": "HOLD", "status": "unavailable"}
         try:
-            shadow_ohlcv = self.exchange.fetch_closed_ohlcv(
-                symbol, self.config.strategy.timeframe, LOOKBACK_CANDLES
-            )
-            shadow = evaluate_shadow_candidate(shadow_ohlcv)
+            shadow = evaluate_shadow_candidate(ohlcv)
         except Exception as exc:
             # A shadow-data failure must not affect active analysis or execution.
             shadow = {
-                "candidate_id": "volume_breakout_24h_v1",
+                "candidate_id": CANDIDATE_ID,
                 "signal": "HOLD",
                 "status": f"error_{type(exc).__name__}"[:48],
             }

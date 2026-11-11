@@ -13,21 +13,21 @@ from ta.trend import ADXIndicator, EMAIndicator
 from ta.volatility import AverageTrueRange
 
 
-CANDIDATE_ID = "volume_breakout_24h_v1"
-LOOKBACK_CANDLES = 240
+CANDIDATE_ID = "volume_breakout_24h_ema100_v1"
+LOOKBACK_CANDLES = 150
 
 
 def evaluate_shadow_candidate(ohlcv: list) -> dict:
     """Evaluate a completed-candle breakout hypothesis; never execute it.
 
-    BUY requires a close above the previous 24-hour range, rising EMA200,
+    BUY requires a close above the previous 24-hour range, rising EMA100,
     ADX >= 20, ATR between 0.3% and 2.5%, and volume >= 1.2x its 20-bar mean.
     SELL denotes an exit condition (close below the prior 12-hour low or EMA50).
     These are research signals, not calibrated probabilities or orders.
     """
     result = {"candidate_id": CANDIDATE_ID, "signal": "HOLD", "status": "ok"}
     if not isinstance(ohlcv, list) or len(ohlcv) < LOOKBACK_CANDLES:
-        result.update(status="insufficient_data", reason="Needs 240 closed hourly candles")
+        result.update(status="insufficient_data", reason=f"Needs 150 closed hourly candles; received {len(ohlcv) if isinstance(ohlcv, list) else 0}")
         return result
 
     try:
@@ -49,7 +49,7 @@ def evaluate_shadow_candidate(ohlcv: list) -> dict:
         atr = AverageTrueRange(high, low, close, window=14).average_true_range()
         adx = ADXIndicator(high, low, close, window=14).adx()
         ema50 = EMAIndicator(close, window=50).ema_indicator()
-        ema200 = EMAIndicator(close, window=200).ema_indicator()
+        ema100 = EMAIndicator(close, window=100).ema_indicator()
         volume_mean = volume.rolling(20, min_periods=20).mean()
         prior_high = high.shift(1).rolling(24, min_periods=24).max()
         prior_low = low.shift(1).rolling(12, min_periods=12).min()
@@ -66,7 +66,7 @@ def evaluate_shadow_candidate(ohlcv: list) -> dict:
             "adx": float(adx.iloc[i]),
             "atr_pct": float(atr.iloc[i] / close.iloc[i] * 100),
             "volume_ratio": float(volume.iloc[i] / volume_mean.iloc[i]) if volume_mean.iloc[i] > 0 else None,
-            "ema200_rising": bool(ema200.iloc[i] > ema200.iloc[i - 24]),
+            "ema100_rising": bool(ema100.iloc[i] > ema100.iloc[i - 24]),
         }
         if not all(math.isfinite(v) for v in vals.values() if isinstance(v, (int, float))):
             result.update(status="insufficient_indicators", reason="Indicators are not ready")
@@ -75,7 +75,7 @@ def evaluate_shadow_candidate(ohlcv: list) -> dict:
         previous_high = prior_high.iloc[i - 1]
         crossed_up = close.iloc[i] > prior_high.iloc[i] and close.iloc[i - 1] <= previous_high
         buy = (
-            crossed_up and close.iloc[i] > ema200.iloc[i] and vals["ema200_rising"]
+            crossed_up and close.iloc[i] > ema100.iloc[i] and vals["ema100_rising"]
             and vals["adx"] >= 20 and 0.3 <= vals["atr_pct"] <= 2.5
             and vals["volume_ratio"] is not None and vals["volume_ratio"] >= 1.2
         )

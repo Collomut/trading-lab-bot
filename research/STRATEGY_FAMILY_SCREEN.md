@@ -10,7 +10,7 @@ No tested strategy family showed positive net results across the chronological p
 ## Method
 
 - Used Binance Spot 1-hour OHLCV for the same three pairs currently enabled in the bot: BTC/USDT, ETH/USDT, and SOL/USDT, January 2021 through October 2026.
-- Compared the current 2-of-3 entry rules against four predeclared alternatives: 55-bar Donchian breakout with a rising EMA200 and ADX/ATR/volume checks; a volume-confirmed 24-hour breakout with a rising EMA200; an uptrend-filtered Bollinger/RSI mean-reversion setup; and weekly top-two 28-day relative momentum.
+- Compared the current 2-of-3 entry rules against four predeclared alternatives: 55-bar Donchian breakout with a rising EMA200 and ADX/ATR/volume checks; a volume-confirmed 24-hour breakout with a rising EMA100; an uptrend-filtered Bollinger/RSI mean-reversion setup; and weekly top-two 28-day relative momentum.
 - No parameter optimization was performed. Signals use completed candles and fill at the next hourly open.
 - Reused the project's portfolio simulator: 1% account risk sizing, 10% notional cap per position, three-position cap, correlation screen, ATR stop, 3% target, break-even/trailing behavior, and conservative stop-first treatment when both stop and target are inside a candle.
 - Base costs are 10 bps fee and 5 bps slippage on each side. Stress costs double both. Global persistent risk halts are disabled in the comparison so early shutdown does not hide later outcomes; this makes the full-sample comparison more permissive than the deployed risk behavior.
@@ -24,13 +24,13 @@ All results are on a simulated $10,000 account. A profit factor below 1 means gr
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Current 2-of-3, ADX ≥ 20 | 287 | -$381 | 0.839 | 6.08% | -$1,172 | 0.576 | 13.06% |
 | Donchian 55 / EMA200 | 1,083 | -$2,756 | 0.690 | 29.01% | -$4,722 | 0.487 | 47.47% |
-| Volume-confirmed 24h breakout | 1,034 | -$2,199 | 0.738 | 24.72% | -$4,292 | 0.515 | 43.50% |
+| Volume-confirmed 24h breakout / EMA100 | 1,088 | -$2,342 | 0.731 | 26.04% | -$4,478 | 0.508 | 45.32% |
 | Uptrend Bollinger/RSI reversion | 244 | -$1,096 | 0.464 | 11.22% | -$1,634 | 0.303 | 16.46% |
 | Weekly 28-day relative momentum | 229 | -$468 | 0.765 | 4.68% | -$1,029 | 0.555 | 10.29% |
 
 The current-strategy result reproduces the existing ADX20 research baseline. None of the alternatives beat it on net return, and none had a profit factor above 1. The Donchian breakout generated more activity, but with substantially larger losses and drawdown. More trades did not produce an edge.
 
-The current strategy and three alternatives were net-negative in every chronological slice. The 24-hour breakout alternative was negative in 2021–2023 (-$1,220, PF 0.749) and 2024–2025 (-$1,056, PF 0.639), then positive in the already-reviewed January–October 2026 slice (+$78, PF 1.128) while drawing down 24.03%. Across the full period it lost $2,199 at base costs; stress costs increased the loss to $4,292. The recent result is not an untouched holdout and does not establish an edge. More signals came with substantially worse historical drawdown.
+The current strategy and three alternatives were net-negative in every chronological slice. The EMA100 24-hour breakout was negative in 2021–2023 (-$1,375, PF 0.728) and 2024–2025 (-$1,045, PF 0.654), then slightly positive in the already-reviewed January–October 2026 slice (+$77, PF 1.123) with 25.43% drawdown. Under stress costs, that recent slice also turned negative (-$182, PF 0.709, 45.28% drawdown). Across the full period it lost $2,342 at base costs; stress costs increased the loss to $4,478. This is not an untouched holdout and does not establish an edge. More signals came with substantially worse historical drawdown.
 
 ## Comparison with other bot projects
 
@@ -42,7 +42,7 @@ There is no verified public return record that makes it safe to copy an advertis
 
 ## Decision and next step
 
-Do not switch the deployed strategy to any candidate in this screen, and do not loosen gates to force entries. The 24-hour volume-confirmed breakout is now recorded in **read-only shadow mode** for prospective observation because its already-reviewed 2026 segment differed from its earlier history. It remains a weak research hypothesis, not a recommended strategy: the service records its completed-candle signal and market values beside the active decision, and does not simulate fills or route orders. Any later forward evaluation must reconstruct next-bar entries and exits, include actual account fees and conservative slippage, cover different regimes, and account for drawdown. It must pass that evidence check before any Testnet order-path experiment; a historical or forward pass would still not guarantee future profit.
+Do not switch the deployed strategy to any candidate in this screen, and do not loosen gates to force entries. The 24-hour volume-confirmed breakout is recorded in **read-only shadow mode** for prospective observation because the EMA200 version required more history than the service's available 150-candle window. The active service uses the same 150 closed candles as the active strategy and an EMA100 filter, matching the candidate evaluated here. It remains a research hypothesis, not a recommended strategy: the service records completed-candle signals and market values beside active decisions, and does not simulate fills or route orders. Any later forward evaluation must reconstruct next-bar entries and exits, include actual account fees and conservative slippage, cover different regimes, and account for drawdown. It must pass that evidence check before any Testnet order-path experiment; a historical or forward pass would still not guarantee future profit.
 
 Reproduce the screen with:
 

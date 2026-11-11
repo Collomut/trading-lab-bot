@@ -1,6 +1,6 @@
 """Predeclared strategy-family screen; research only, never imported by the bot.
 
-Tests three distinct spot-long ideas against the current entry signals using a
+Tests four distinct spot-long ideas against the current entry signals using a
 shared conservative portfolio simulator. No parameter search is performed.
 The fixed three-asset universe is survivorship-biased and all historical data
 has been inspected in earlier project research; results are exploratory.
@@ -40,6 +40,7 @@ def add_indicators(frames):
         atr = AverageTrueRange(high, low, close, window=14).average_true_range()
         adx = ADXIndicator(high, low, close, window=14).adx()
         ema50 = EMAIndicator(close, window=50).ema_indicator()
+        ema100 = EMAIndicator(close, window=100).ema_indicator()
         ema200 = EMAIndicator(close, window=200).ema_indicator()
         rsi = RSIIndicator(close, window=14).rsi()
         vol_avg = volume.rolling(20, min_periods=20).mean()
@@ -48,6 +49,7 @@ def add_indicators(frames):
         out["atr"] = atr
         out["adx"] = adx
         out["ema50"] = ema50
+        out["ema100"] = ema100
         out["ema200"] = ema200
         out["rsi"] = rsi
         out["atr_pct"] = atr / close * 100
@@ -75,13 +77,13 @@ def build_donchian(frames):
 
 
 def build_volume_breakout(frames):
-    """Predeclared 24-hour range break requiring expanding volume and trend."""
+    """Predeclared 24-hour range break requiring expanding volume and EMA100 trend."""
     out = {}
     for symbol, f in frames.items():
         upper = f.high.shift(1).rolling(24, min_periods=24).max()
         lower = f.low.shift(1).rolling(12, min_periods=12).min()
         vol_avg = f.volume.rolling(20, min_periods=20).mean()
-        trend_up = (f.close > f.ema200) & (f.ema200 > f.ema200.shift(24))
+        trend_up = (f.close > f.ema100) & (f.ema100 > f.ema100.shift(24))
         regime = (f.adx >= 20) & f.atr_pct.between(0.3, 2.5) & f.sequence_ok
         buy = ((f.close > upper) & (f.close.shift(1) <= upper.shift(1)) & trend_up
                & regime & (f.volume >= 1.2 * vol_avg))
@@ -136,7 +138,7 @@ def main():
     candidates = {
         "current_2of3_adx20": raw,
         "donchian55_ema200_adx20": build_donchian(frames),
-        "volume_confirmed_24h_breakout": build_volume_breakout(frames),
+        "volume_confirmed_24h_ema100_breakout": build_volume_breakout(frames),
         "uptrend_rsi_bollinger_reversion": build_mean_reversion(frames),
         "weekly_28d_relative_momentum_top2": build_relative_momentum(frames),
     }
