@@ -75,7 +75,7 @@ class TestShadowLogSafety(unittest.TestCase):
             close = 80 + 0.075 * index + 0.35 * math.sin(index * 0.55)
             candles.append([index * 3_600_000, close - 0.05, close + 0.5, close - 0.5, close, 100])
         candles[-1] = [candles[-1][0], 99.4, 101.1, 99.3, 100.8, 150]
-        result = evaluate_shadow_candidate(candles[-150:])
+        result = evaluate_shadow_candidate(candles[-125:])
         self.assertEqual(result["signal"], "BUY")
         self.assertEqual(result["status"], "ok")
         self.assertGreaterEqual(result["indicators"]["adx"], 20)

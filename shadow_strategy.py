@@ -14,7 +14,8 @@ from ta.volatility import AverageTrueRange
 
 
 CANDIDATE_ID = "volume_breakout_24h_ema100_v1"
-LOOKBACK_CANDLES = 150
+# EMA100 plus its 24-bar slope comparison requires 125 closed bars.
+LOOKBACK_CANDLES = 125
 
 
 def evaluate_shadow_candidate(ohlcv: list) -> dict:
@@ -27,7 +28,7 @@ def evaluate_shadow_candidate(ohlcv: list) -> dict:
     """
     result = {"candidate_id": CANDIDATE_ID, "signal": "HOLD", "status": "ok"}
     if not isinstance(ohlcv, list) or len(ohlcv) < LOOKBACK_CANDLES:
-        result.update(status="insufficient_data", reason=f"Needs 150 closed hourly candles; received {len(ohlcv) if isinstance(ohlcv, list) else 0}")
+        result.update(status="insufficient_data", reason=f"Needs 125 closed candles; received {len(ohlcv) if isinstance(ohlcv, list) else 0}")
         return result
 
     try:
