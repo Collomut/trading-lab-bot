@@ -81,6 +81,13 @@ class TestConfigurationAndValidation(unittest.TestCase):
         structural_errors = [e for e in errors if "API_KEY" not in e and "API_SECRET" not in e]
         self.assertEqual(structural_errors, [])
 
+    def test_default_strategy_profile_matches_example_configuration(self):
+        strategy = StrategyConfig()
+        self.assertEqual(strategy.timeframe, "1h")
+        self.assertEqual(strategy.lookback_candles, 150)
+        self.assertEqual(strategy.trading_pairs, ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+        self.assertEqual(strategy.min_trend_adx, 20.0)
+
     def test_fallback_simulation_is_disabled_by_default(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertFalse(ExchangeConfig().fallback_to_simulation)

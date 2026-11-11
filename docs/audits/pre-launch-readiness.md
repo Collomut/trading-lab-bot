@@ -2,6 +2,12 @@
 
 **Decision: live trading is blocked.** The build rejects live exchange initialization in `ExchangeConnector._create_exchange`; setting `PAPER_TRADING=false` does not enable live orders. This is intentional. “PASS” below means a safeguard exists in this build, not that the strategy is profitable or production-ready.
 
+## Follow-up audit — 2026-11-11
+
+The strategy's code fallbacks previously differed from `.env.example`: with variables omitted, the code selected 15-minute candles, 100 lookback candles, and only BTC/ETH, while the documented operating profile was 1-hour candles, 150 candles, BTC/ETH/SOL, and ADX 20. The code fallbacks and example are now aligned, and a regression test covers that default profile. This prevents an incomplete environment from silently selecting a different strategy profile. Explicit environment variables still take precedence.
+
+The complete local suite passes **110 tests**. This validates mocked/unit behavior only; it does not constitute a deployed Testnet trade, PostgreSQL integration run, or profitability evidence. The launch blockers below remain in effect.
+
 ## Follow-up audit — 2026-11-09
 
 The post-deployment equity-basis correction prompted a focused review of neighboring persistence, order, exchange-state, and secret-handling paths. The review found and fixed: (1) UTC daily-equity anchors were not reset by quiet-market cycles unless an entry check ran; (2) a restored `is_halted=false` could override a persisted consecutive-loss count at its halt threshold; (3) legacy equity-halt migration checked only in-memory trade history, not durable trade records; (4) an unavailable open-order endpoint could be misread as an empty order list; (5) several notification/network exceptions could log a webhook URL or other sensitive request details; and (6) Testnet authentication could silently fall back to a simulated wallet by default. Default fallback is now off; explicit simulation remains available.
