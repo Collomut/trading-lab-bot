@@ -15,7 +15,7 @@ import asyncio
 import logging
 import base64
 import hmac
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from aiohttp import web
 
@@ -681,6 +681,84 @@ class WebDashboard:
             return {"message": "Testnet state reset was recorded; review the operator recovery notes."}
         return {}
 
+    @staticmethod
+    def _summarize_market_activity(market_events, audit_events, *, now=None):
+        """Summarize the last 24 hours of strategy checks without implying orders."""
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        cutoff = now - timedelta(hours=24)
+
+        def event_time(item):
+            try:
+                value = str(item.get("created_at", "")).replace("Z", "+00:00")
+                occurred_at = datetime.fromisoformat(value)
+                if occurred_at.tzinfo is None:
+                    occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+                return occurred_at.astimezone(timezone.utc)
+            except (OverflowError, TypeError, ValueError):
+                return None
+
+        recent_market = [
+            event for event in market_events
+            if (occurred_at := event_time(event)) is not None and occurred_at >= cutoff
+        ]
+        recent_audit = [
+            event for event in audit_events
+            if (occurred_at := event_time(event)) is not None and occurred_at >= cutoff
+        ]
+        signal_counts = {name: 0 for name in ("BUY", "SELL", "HOLD", "OTHER")}
+        vote_counts = {name: {vote: 0 for vote in ("BUY", "SELL", "HOLD")} for name in ("ema", "rsi", "macd")}
+        blocked_by_gate = {}
+        blocked_checks = 0
+        no_consensus = 0
+        all_votes_hold = 0
+
+        for event in recent_market:
+            details = event.get("details") or {}
+            signal = str(details.get("signal", "HOLD")).upper()
+            signal_counts[signal if signal in signal_counts else "OTHER"] += 1
+            reason = str(details.get("reason", "")).lower()
+            no_consensus += reason.startswith("no consensus")
+            votes = details.get("votes") if isinstance(details.get("votes"), dict) else {}
+            normalized_votes = []
+            for indicator in vote_counts:
+                vote = votes.get(indicator, {})
+                vote = str(vote.get("signal", "HOLD")).upper() if isinstance(vote, dict) else "HOLD"
+                if vote not in vote_counts[indicator]:
+                    vote = "HOLD"
+                vote_counts[indicator][vote] += 1
+                normalized_votes.append(vote)
+            all_votes_hold += bool(normalized_votes) and all(vote == "HOLD" for vote in normalized_votes)
+
+            gates = (details.get("indicators") or {}).get("entry_gates", {})
+            failed_gates = []
+            if isinstance(gates, dict):
+                failed_gates = [
+                    name for name, gate in gates.items()
+                    if isinstance(gate, dict)
+                    and gate.get("enabled") is True
+                    and gate.get("relevant_to_current_buy") is True
+                    and gate.get("passed") is False
+                ]
+            if failed_gates:
+                blocked_checks += 1
+                for name in failed_gates:
+                    blocked_by_gate[name] = blocked_by_gate.get(name, 0) + 1
+
+        return {
+            "window_hours": 24,
+            "checks": len(recent_market),
+            "signals": signal_counts,
+            "votes": vote_counts,
+            "no_consensus": no_consensus,
+            "all_votes_hold": all_votes_hold,
+            "buy_setups_blocked": blocked_checks,
+            "blocked_by_gate": blocked_by_gate,
+            "analysis_issues": sum(event.get("event_type") in {"analysis_error", "market_data_issue"} for event in recent_audit),
+            "reconciliation_failures": sum(event.get("event_type") == "reconciliation_failed" for event in recent_audit),
+        }
+
     async def handle_logs_api(self, request):
         try:
             try:
@@ -689,8 +767,11 @@ class WebDashboard:
                 limit = 100
             limit = max(1, min(limit, 100))
             store = self.bot.risk_manager.store
-            market_events = store.list_events(limit, event_type="market_check")
-            audit_events = store.list_events(limit, exclude_event_type="market_check")
+            summary_market_events = store.list_events(200, event_type="market_check")
+            summary_audit_events = store.list_events(200, exclude_event_type="market_check")
+            market_events = summary_market_events[:limit]
+            audit_events = summary_audit_events[:limit]
+            market_summary = self._summarize_market_activity(summary_market_events, summary_audit_events)
 
             def event_order(item):
                 try:
@@ -709,7 +790,7 @@ class WebDashboard:
                 "created_at": item["created_at"],
                 "details": self._safe_log_details(item["event_type"], item["details"]),
             } for item in events[:limit * 2]]
-            return web.json_response({"events": payload, "limit": limit})
+            return web.json_response({"events": payload, "limit": limit, "market_summary": market_summary})
         except Exception:
             logger.exception("Dashboard activity log request failed")
             return web.json_response({"error": "Activity log is temporarily unavailable."}, status=500)

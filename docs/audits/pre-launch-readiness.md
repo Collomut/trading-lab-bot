@@ -6,7 +6,11 @@
 
 The strategy's code fallbacks previously differed from `.env.example`: with variables omitted, the code selected 15-minute candles, 100 lookback candles, and only BTC/ETH, while the documented operating profile was 1-hour candles, 150 candles, BTC/ETH/SOL, and ADX 20. The code fallbacks and example are now aligned, and a regression test covers that default profile. This prevents an incomplete environment from silently selecting a different strategy profile. Explicit environment variables still take precedence.
 
-The complete local suite passes **110 tests**. This validates mocked/unit behavior only; it does not constitute a deployed Testnet trade, PostgreSQL integration run, or profitability evidence. The launch blockers below remain in effect.
+The complete local suite passes **111 tests**. This validates mocked/unit behavior only; it does not constitute a deployed Testnet trade, PostgreSQL integration run, or profitability evidence. The launch blockers below remain in effect.
+
+The active Railway Testnet service was also checked on 2026-11-11: one replica was online, with no Railway-reported recent failures. Supabase contained 315 completed-candle market checks from 2026-11-07 through 2026-11-11. Of these, 306 were HOLD and 9 were SELL; there were no BUY signals. In 225 checks all three indicators returned HOLD, while two BUY setups were recorded as blocked by the downtrend gate. There were no tracked positions or strategy trades. The two filled order intents on record belong to the separately logged Testnet smoke check, not strategy performance. The current no-trade gap is therefore explained by the strategy's signal/gate behavior in this sample, rather than evidence of an offline worker or a recent reconciliation outage.
+
+The Logs page now adds a rolling 24-hour summary of checks, BUY/SELL signals, relevant BUY-gate blocks, and recent data/account issues. This is a visibility improvement only; it does not alter the entry or exit rules. The dashboard's summary reads at most 200 recent records per event class, which covers the current three-pair 24-hour window.
 
 ## Follow-up audit — 2026-11-09
 

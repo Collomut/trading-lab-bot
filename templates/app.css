@@ -1488,6 +1488,16 @@ footer {
 .log-gate.pass { color:var(--green); }
 .log-gate.block { color:var(--red); }
 .log-gate.inactive { color:var(--muted); }
+.log-summary-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.log-summary-head h2 { margin:3px 0 0; font-size:18px; }
+.summary-window { color:var(--muted); font-size:11px; }
+.log-summary-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-top:14px; }
+.log-summary-stat { display:grid; gap:4px; padding:11px 12px; border:1px solid var(--line); border-radius:8px; background:var(--paper); }
+.log-summary-stat span { color:var(--muted); font-size:11px; }
+.log-summary-stat strong { font-size:20px; font-variant-numeric:tabular-nums; }
+.log-summary-note { margin:12px 0 0; color:var(--ink); font-size:13px; line-height:1.5; }
+.log-summary-foot { margin:6px 0 0; color:var(--muted); font-size:11px; }
+@media(max-width:700px) { .log-summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; } .log-summary-stat { padding:10px; } }
 @media(max-width:700px) { .log-card { padding:12px; } .log-head { gap:6px; } }
 
 /* Compact, chart-first market panel. */

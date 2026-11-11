@@ -1712,6 +1712,30 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
         self.assertEqual(resp_live.status, 200)
         self.assertIn('"status": "alive"', resp_live.text)
 
+    def test_market_activity_summary_counts_only_recent_relevant_blocks(self):
+        now = datetime(2026, 11, 11, 12, tzinfo=timezone.utc)
+        market_events = [
+            {"created_at": "2026-11-11T11:00:00Z", "details": {
+                "signal": "HOLD", "reason": "No consensus (BUY: 0/3, SELL: 0/3)",
+                "votes": {name: {"signal": "HOLD"} for name in ("ema", "rsi", "macd")},
+                "indicators": {"entry_gates": {"trend": {"enabled": True, "relevant_to_current_buy": False, "passed": False}}},
+            }},
+            {"created_at": "2026-11-11T10:00:00Z", "details": {
+                "signal": "HOLD", "reason": "BUY BLOCKED by Downtrend filter",
+                "votes": {"ema": {"signal": "BUY"}, "rsi": {"signal": "HOLD"}, "macd": {"signal": "BUY"}},
+                "indicators": {"entry_gates": {"trend": {"enabled": True, "relevant_to_current_buy": True, "passed": False}}},
+            }},
+            {"created_at": "2026-11-09T10:00:00Z", "details": {"signal": "BUY"}},
+        ]
+        audit_events = [{"event_type": "market_data_issue", "created_at": "2026-11-11T09:00:00Z"}]
+        summary = WebDashboard._summarize_market_activity(market_events, audit_events, now=now)
+        self.assertEqual(summary["checks"], 2)
+        self.assertEqual(summary["no_consensus"], 1)
+        self.assertEqual(summary["all_votes_hold"], 1)
+        self.assertEqual(summary["buy_setups_blocked"], 1)
+        self.assertEqual(summary["blocked_by_gate"], {"trend": 1})
+        self.assertEqual(summary["analysis_issues"], 1)
+
     def test_asset_serving_and_cache_control(self):
         req_css = make_mocked_request("GET", "/assets/app.css", match_info={"name": "app.css"})
         resp_css = self.loop.run_until_complete(self.dashboard.handle_asset(req_css))

@@ -26,6 +26,17 @@
     <div class="status"><span id="log-dot" class="dot"></span><span id="log-state">Loading activity…</span></div>
   </header>
   <p class="intro">See what the bot checked, how EMA, RSI, and MACD voted, and when an order or safety event occurred. The log refreshes automatically.</p>
+  <section class="card log-summary-card" aria-labelledby="log-summary-title">
+    <div class="log-summary-head"><div><div class="eyebrow">Rolling 24 hours</div><h2 id="log-summary-title">Why no trade?</h2></div><span id="log-summary-window" class="summary-window">Loading…</span></div>
+    <div class="log-summary-grid">
+      <div class="log-summary-stat"><span>Market checks</span><strong id="summary-checks">—</strong></div>
+      <div class="log-summary-stat"><span>BUY signals</span><strong id="summary-buys">—</strong></div>
+      <div class="log-summary-stat"><span>SELL signals</span><strong id="summary-sells">—</strong></div>
+      <div class="log-summary-stat"><span>BUY setups blocked</span><strong id="summary-blocked">—</strong></div>
+    </div>
+    <p id="log-summary-note" class="log-summary-note" aria-live="polite">Loading the latest strategy decisions…</p>
+    <p class="log-summary-foot">Signals are strategy decisions, not executed trades. This summary does not change the bot's rules.</p>
+  </section>
   <section class="card">
     <div class="log-filters" role="group" aria-label="Filter log entries">
       <button class="log-filter active" type="button" data-filter="all" aria-pressed="true">All activity</button>
@@ -47,6 +58,7 @@
   const dot=document.getElementById('log-dot');
   const status=document.getElementById('log-status');
   const filters=[...document.querySelectorAll('[data-filter]')];
+  const summaryIds={checks:'summary-checks',buys:'summary-buys',sells:'summary-sells',blocked:'summary-blocked'};
   let events=[];
   let activeFilter='all';
   const eventNames={
@@ -176,6 +188,34 @@
     }
     for(const e of visible)feed.append(renderEvent(e));
   }
+  function renderSummary(summary){
+    summary=summary||{};
+    const signals=summary.signals||{};
+    const checks=Number(summary.checks)||0;
+    const buys=Number(signals.BUY)||0;
+    const sells=Number(signals.SELL)||0;
+    const blocked=Number(summary.buy_setups_blocked)||0;
+    for(const [key,id] of Object.entries(summaryIds)){
+      document.getElementById(id).textContent=String(key==='checks'?checks:key==='buys'?buys:key==='sells'?sells:blocked);
+    }
+    document.getElementById('log-summary-window').textContent='Last 24 hours';
+    let note;
+    if(!checks){
+      note='No completed-candle checks were saved in this window. Check the worker and market-data feed.';
+    }else if(!buys){
+      const reasons=[];
+      if(summary.no_consensus)reasons.push(`${summary.no_consensus} checks had fewer than two matching indicator votes`);
+      const gates=Object.entries(summary.blocked_by_gate||{}).map(([name,count])=>`${count} blocked by ${name}`);
+      reasons.push(...gates);
+      note=`No BUY signals were produced${reasons.length?`: ${reasons.join('; ')}`:'.'}`;
+    }else{
+      note=`The strategy produced ${buys} BUY signal${buys===1?'':'s'} and ${sells} SELL signal${sells===1?'':'s'}. Check the order and risk logs to see whether any signal became an order.`;
+    }
+    const issues=Number(summary.analysis_issues)||0;
+    const reconciliation=Number(summary.reconciliation_failures)||0;
+    if(issues||reconciliation)note+=` Recent service issues: ${issues} market-data/analysis issue${issues===1?'':'s'} and ${reconciliation} account-reconciliation failure${reconciliation===1?'':'s'}.`;
+    document.getElementById('log-summary-note').textContent=note;
+  }
   filters.forEach(button=>button.addEventListener('click',()=>{
     activeFilter=button.dataset.filter;
     filters.forEach(item=>{const selected=item===button;item.classList.toggle('active',selected);item.setAttribute('aria-pressed',String(selected))});
@@ -187,6 +227,7 @@
       if(!response.ok)throw new Error(`Log service unavailable (${response.status})`);
       const payload=await response.json();
       events=Array.isArray(payload.events)?payload.events:[];
+      renderSummary(payload.market_summary);
       render();
       dot.className='dot ok';
       state.textContent=`Updated ${new Date().toLocaleTimeString()}`;
