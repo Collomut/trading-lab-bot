@@ -1,0 +1,560 @@
+{
+  "mode": "offline_read_only_shadow_research_no_orders",
+  "interval": "1h",
+  "baseline": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "candidate_cohort": [
+    "BNBUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "LINKUSDT"
+  ],
+  "deployed_entry_gate": "ADX >= 20; existing EMA50, ATR, volume, 2-of-3 consensus, confidence gates",
+  "risk_limits_held_constant": {
+    "risk_per_trade_pct": 1.0,
+    "position_notional_cap_pct": 10.0,
+    "max_concurrent_positions": 3,
+    "max_pairwise_correlation": 0.85,
+    "same_stop_target_and_halt_logic": true
+  },
+  "costs_bps_each_side": {
+    "base": {
+      "fee": 10.0,
+      "slippage": 5.0
+    },
+    "stress": {
+      "fee": 20.0,
+      "slippage": 10.0
+    }
+  },
+  "data": {
+    "BTCUSDT": {
+      "bars": 51106,
+      "first_utc": "2021-01-01T00:00:00+00:00",
+      "last_utc": "2026-10-31T23:00:00+00:00",
+      "non_hourly_gaps": 7,
+      "largest_gap_minutes": 300,
+      "missing_archives": 0,
+      "archive_errors": []
+    },
+    "ETHUSDT": {
+      "bars": 51106,
+      "first_utc": "2021-01-01T00:00:00+00:00",
+      "last_utc": "2026-10-31T23:00:00+00:00",
+      "non_hourly_gaps": 7,
+      "largest_gap_minutes": 300,
+      "missing_archives": 0,
+      "archive_errors": []
+    },
+    "SOLUSDT": {
+      "bars": 51106,
+      "first_utc": "2021-01-01T00:00:00+00:00",
+      "last_utc": "2026-10-31T23:00:00+00:00",
+      "non_hourly_gaps": 7,
+      "largest_gap_minutes": 300,
+      "missing_archives": 0,
+      "archive_errors": []
+    },
+    "BNBUSDT": {
+      "bars": 51106,
+      "first_utc": "2021-01-01T00:00:00+00:00",
+      "last_utc": "2026-10-31T23:00:00+00:00",
+      "non_hourly_gaps": 7,
+      "largest_gap_minutes": 300,
+      "missing_archives": 0,
+      "archive_errors": []
+    },
+    "XRPUSDT": {
+      "bars": 51106,
+      "first_utc": "2021-01-01T00:00:00+00:00",
+      "last_utc": "2026-10-31T23:00:00+00:00",
+      "non_hourly_gaps": 7,
+      "largest_gap_minutes": 300,
+      "missing_archives": 0,
+      "archive_errors": []
+    },
+    "ADAUSDT": {
+      "bars": 51106,
+      "first_utc": "2021-01-01T00:00:00+00:00",
+      "last_utc": "2026-10-31T23:00:00+00:00",
+      "non_hourly_gaps": 7,
+      "largest_gap_minutes": 300,
+      "missing_archives": 0,
+      "archive_errors": []
+    },
+    "DOGEUSDT": {
+      "bars": 51106,
+      "first_utc": "2021-01-01T00:00:00+00:00",
+      "last_utc": "2026-10-31T23:00:00+00:00",
+      "non_hourly_gaps": 7,
+      "largest_gap_minutes": 300,
+      "missing_archives": 0,
+      "archive_errors": []
+    },
+    "LINKUSDT": {
+      "bars": 51106,
+      "first_utc": "2021-01-01T00:00:00+00:00",
+      "last_utc": "2026-10-31T23:00:00+00:00",
+      "non_hourly_gaps": 7,
+      "largest_gap_minutes": 300,
+      "missing_archives": 0,
+      "archive_errors": []
+    }
+  },
+  "signal_parity_vs_actual_strategy": {
+    "BTCUSDT": {
+      "samples": 200,
+      "mismatches": []
+    },
+    "ETHUSDT": {
+      "samples": 200,
+      "mismatches": []
+    },
+    "SOLUSDT": {
+      "samples": 200,
+      "mismatches": []
+    },
+    "BNBUSDT": {
+      "samples": 200,
+      "mismatches": []
+    },
+    "XRPUSDT": {
+      "samples": 200,
+      "mismatches": []
+    },
+    "ADAUSDT": {
+      "samples": 200,
+      "mismatches": []
+    },
+    "DOGEUSDT": {
+      "samples": 200,
+      "mismatches": []
+    },
+    "LINKUSDT": {
+      "samples": 200,
+      "mismatches": []
+    }
+  },
+  "variants": {
+    "current_universe": {
+      "symbols": [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT"
+      ],
+      "funnel": {
+        "BTCUSDT": {
+          "consensus_buy_candidates": 716,
+          "eligible_buy_signals": 149,
+          "sell_consensus": 557,
+          "blocked_regime": 368,
+          "blocked_trend": 199
+        },
+        "ETHUSDT": {
+          "consensus_buy_candidates": 690,
+          "eligible_buy_signals": 161,
+          "sell_consensus": 537,
+          "blocked_regime": 326,
+          "blocked_trend": 203
+        },
+        "SOLUSDT": {
+          "consensus_buy_candidates": 649,
+          "eligible_buy_signals": 103,
+          "sell_consensus": 454,
+          "blocked_regime": 323,
+          "blocked_trend": 223
+        }
+      },
+      "scenarios": {
+        "base": {
+          "without_permanent_halts_diagnostic": {
+            "variant": "current_universe",
+            "closed_trades": 287,
+            "wins": 118,
+            "losses": 169,
+            "win_rate_pct": 41.11,
+            "net_pnl_usdt": -380.8,
+            "avg_trade_pnl_usdt": -1.33,
+            "profit_factor": 0.839,
+            "mean_trade_return_pct": -0.139,
+            "portfolio_return_pct": -3.808,
+            "max_drawdown_pct": 6.08,
+            "ending_equity_usdt": 9619.2,
+            "period_end_equity_points": 51106,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "segments_without_permanent_halts": {
+            "2021_2023": {
+              "variant": "current_universe",
+              "closed_trades": 143,
+              "wins": 59,
+              "losses": 84,
+              "win_rate_pct": 41.26,
+              "net_pnl_usdt": -215.28,
+              "avg_trade_pnl_usdt": -1.51,
+              "profit_factor": 0.824,
+              "mean_trade_return_pct": -0.154,
+              "portfolio_return_pct": -3.808,
+              "max_drawdown_pct": 4.555,
+              "ending_equity_usdt": 9619.2,
+              "period_end_equity_points": 25522,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            },
+            "2024_2025": {
+              "variant": "current_universe",
+              "closed_trades": 107,
+              "wins": 47,
+              "losses": 60,
+              "win_rate_pct": 43.93,
+              "net_pnl_usdt": -137.41,
+              "avg_trade_pnl_usdt": -1.28,
+              "profit_factor": 0.843,
+              "mean_trade_return_pct": -0.141,
+              "portfolio_return_pct": -3.808,
+              "max_drawdown_pct": 3.621,
+              "ending_equity_usdt": 9619.2,
+              "period_end_equity_points": 17544,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            },
+            "2026_through_october": {
+              "variant": "current_universe",
+              "closed_trades": 36,
+              "wins": 11,
+              "losses": 25,
+              "win_rate_pct": 30.56,
+              "net_pnl_usdt": -55.57,
+              "avg_trade_pnl_usdt": -1.54,
+              "profit_factor": 0.792,
+              "mean_trade_return_pct": -0.153,
+              "portfolio_return_pct": -3.808,
+              "max_drawdown_pct": 3.808,
+              "ending_equity_usdt": 9619.2,
+              "period_end_equity_points": 7296,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            }
+          }
+        },
+        "stress": {
+          "without_permanent_halts_diagnostic": {
+            "variant": "current_universe",
+            "closed_trades": 287,
+            "wins": 103,
+            "losses": 184,
+            "win_rate_pct": 35.89,
+            "net_pnl_usdt": -1172.44,
+            "avg_trade_pnl_usdt": -4.09,
+            "profit_factor": 0.576,
+            "mean_trade_return_pct": -0.442,
+            "portfolio_return_pct": -11.724,
+            "max_drawdown_pct": 13.06,
+            "ending_equity_usdt": 8827.56,
+            "period_end_equity_points": 51106,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "segments_without_permanent_halts": {
+            "2021_2023": {
+              "variant": "current_universe",
+              "closed_trades": 142,
+              "wins": 51,
+              "losses": 91,
+              "win_rate_pct": 35.92,
+              "net_pnl_usdt": -576.43,
+              "avg_trade_pnl_usdt": -4.06,
+              "profit_factor": 0.595,
+              "mean_trade_return_pct": -0.424,
+              "portfolio_return_pct": -11.724,
+              "max_drawdown_pct": 7.196,
+              "ending_equity_usdt": 8827.56,
+              "period_end_equity_points": 25522,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            },
+            "2024_2025": {
+              "variant": "current_universe",
+              "closed_trades": 107,
+              "wins": 42,
+              "losses": 65,
+              "win_rate_pct": 39.25,
+              "net_pnl_usdt": -398.51,
+              "avg_trade_pnl_usdt": -3.72,
+              "profit_factor": 0.596,
+              "mean_trade_return_pct": -0.417,
+              "portfolio_return_pct": -11.724,
+              "max_drawdown_pct": 9.571,
+              "ending_equity_usdt": 8827.56,
+              "period_end_equity_points": 17544,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            },
+            "2026_through_october": {
+              "variant": "current_universe",
+              "closed_trades": 37,
+              "wins": 9,
+              "losses": 28,
+              "win_rate_pct": 24.32,
+              "net_pnl_usdt": -222.42,
+              "avg_trade_pnl_usdt": -6.01,
+              "profit_factor": 0.374,
+              "mean_trade_return_pct": -0.667,
+              "portfolio_return_pct": -11.724,
+              "max_drawdown_pct": 11.724,
+              "ending_equity_usdt": 8827.56,
+              "period_end_equity_points": 7296,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            }
+          }
+        }
+      }
+    },
+    "expanded_shadow_universe": {
+      "symbols": [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT",
+        "XRPUSDT",
+        "ADAUSDT",
+        "DOGEUSDT",
+        "LINKUSDT"
+      ],
+      "funnel": {
+        "BTCUSDT": {
+          "consensus_buy_candidates": 716,
+          "eligible_buy_signals": 149,
+          "sell_consensus": 557,
+          "blocked_regime": 368,
+          "blocked_trend": 199
+        },
+        "ETHUSDT": {
+          "consensus_buy_candidates": 690,
+          "eligible_buy_signals": 161,
+          "sell_consensus": 537,
+          "blocked_regime": 326,
+          "blocked_trend": 203
+        },
+        "SOLUSDT": {
+          "consensus_buy_candidates": 649,
+          "eligible_buy_signals": 103,
+          "sell_consensus": 454,
+          "blocked_regime": 323,
+          "blocked_trend": 223
+        },
+        "BNBUSDT": {
+          "consensus_buy_candidates": 645,
+          "eligible_buy_signals": 115,
+          "sell_consensus": 526,
+          "blocked_regime": 332,
+          "blocked_trend": 197
+        },
+        "XRPUSDT": {
+          "consensus_buy_candidates": 705,
+          "eligible_buy_signals": 113,
+          "sell_consensus": 516,
+          "blocked_regime": 374,
+          "blocked_trend": 218
+        },
+        "ADAUSDT": {
+          "consensus_buy_candidates": 690,
+          "eligible_buy_signals": 100,
+          "sell_consensus": 460,
+          "blocked_regime": 349,
+          "blocked_trend": 240
+        },
+        "DOGEUSDT": {
+          "consensus_buy_candidates": 667,
+          "eligible_buy_signals": 116,
+          "sell_consensus": 477,
+          "blocked_regime": 338,
+          "blocked_trend": 213
+        },
+        "LINKUSDT": {
+          "consensus_buy_candidates": 742,
+          "eligible_buy_signals": 121,
+          "sell_consensus": 469,
+          "blocked_regime": 374,
+          "blocked_trend": 247
+        }
+      },
+      "scenarios": {
+        "base": {
+          "without_permanent_halts_diagnostic": {
+            "variant": "expanded_shadow_universe",
+            "closed_trades": 666,
+            "wins": 254,
+            "losses": 412,
+            "win_rate_pct": 38.14,
+            "net_pnl_usdt": -1693.01,
+            "avg_trade_pnl_usdt": -2.54,
+            "profit_factor": 0.706,
+            "mean_trade_return_pct": -0.283,
+            "portfolio_return_pct": -16.93,
+            "max_drawdown_pct": 18.866,
+            "ending_equity_usdt": 8306.99,
+            "period_end_equity_points": 51106,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "segments_without_permanent_halts": {
+            "2021_2023": {
+              "variant": "expanded_shadow_universe",
+              "closed_trades": 359,
+              "wins": 133,
+              "losses": 226,
+              "win_rate_pct": 37.05,
+              "net_pnl_usdt": -1096.64,
+              "avg_trade_pnl_usdt": -3.05,
+              "profit_factor": 0.674,
+              "mean_trade_return_pct": -0.329,
+              "portfolio_return_pct": -16.93,
+              "max_drawdown_pct": 12.576,
+              "ending_equity_usdt": 8306.99,
+              "period_end_equity_points": 25522,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            },
+            "2024_2025": {
+              "variant": "expanded_shadow_universe",
+              "closed_trades": 223,
+              "wins": 94,
+              "losses": 129,
+              "win_rate_pct": 42.15,
+              "net_pnl_usdt": -485.79,
+              "avg_trade_pnl_usdt": -2.18,
+              "profit_factor": 0.726,
+              "mean_trade_return_pct": -0.246,
+              "portfolio_return_pct": -16.93,
+              "max_drawdown_pct": 15.372,
+              "ending_equity_usdt": 8306.99,
+              "period_end_equity_points": 17544,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            },
+            "2026_through_october": {
+              "variant": "expanded_shadow_universe",
+              "closed_trades": 77,
+              "wins": 22,
+              "losses": 55,
+              "win_rate_pct": 28.57,
+              "net_pnl_usdt": -190.26,
+              "avg_trade_pnl_usdt": -2.47,
+              "profit_factor": 0.668,
+              "mean_trade_return_pct": -0.311,
+              "portfolio_return_pct": -16.93,
+              "max_drawdown_pct": 16.93,
+              "ending_equity_usdt": 8306.99,
+              "period_end_equity_points": 7296,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            }
+          }
+        },
+        "stress": {
+          "without_permanent_halts_diagnostic": {
+            "variant": "expanded_shadow_universe",
+            "closed_trades": 664,
+            "wins": 220,
+            "losses": 444,
+            "win_rate_pct": 33.13,
+            "net_pnl_usdt": -3077.59,
+            "avg_trade_pnl_usdt": -4.63,
+            "profit_factor": 0.51,
+            "mean_trade_return_pct": -0.567,
+            "portfolio_return_pct": -30.776,
+            "max_drawdown_pct": 31.645,
+            "ending_equity_usdt": 6922.41,
+            "period_end_equity_points": 51106,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "segments_without_permanent_halts": {
+            "2021_2023": {
+              "variant": "expanded_shadow_universe",
+              "closed_trades": 358,
+              "wins": 115,
+              "losses": 243,
+              "win_rate_pct": 32.12,
+              "net_pnl_usdt": -1922.69,
+              "avg_trade_pnl_usdt": -5.37,
+              "profit_factor": 0.496,
+              "mean_trade_return_pct": -0.608,
+              "portfolio_return_pct": -30.776,
+              "max_drawdown_pct": 19.883,
+              "ending_equity_usdt": 6922.41,
+              "period_end_equity_points": 25522,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            },
+            "2024_2025": {
+              "variant": "expanded_shadow_universe",
+              "closed_trades": 222,
+              "wins": 81,
+              "losses": 141,
+              "win_rate_pct": 36.49,
+              "net_pnl_usdt": -863.27,
+              "avg_trade_pnl_usdt": -3.89,
+              "profit_factor": 0.526,
+              "mean_trade_return_pct": -0.508,
+              "portfolio_return_pct": -30.776,
+              "max_drawdown_pct": 27.458,
+              "ending_equity_usdt": 6922.41,
+              "period_end_equity_points": 17544,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            },
+            "2026_through_october": {
+              "variant": "expanded_shadow_universe",
+              "closed_trades": 77,
+              "wins": 19,
+              "losses": 58,
+              "win_rate_pct": 24.68,
+              "net_pnl_usdt": -353.57,
+              "avg_trade_pnl_usdt": -4.59,
+              "profit_factor": 0.421,
+              "mean_trade_return_pct": -0.676,
+              "portfolio_return_pct": -30.776,
+              "max_drawdown_pct": 30.776,
+              "ending_equity_usdt": 6922.41,
+              "period_end_equity_points": 7296,
+              "halts_by_end": false,
+              "halt_reason": "",
+              "halt_timestamp_ms": null
+            }
+          }
+        }
+      }
+    }
+  },
+  "limitations": [
+    "This is historical simulation, not a forward shadow run or a claim of profitability.",
+    "Symbols were selected using present-day liquidity and must be treated as a survivorship-biased cohort.",
+    "Historical OHLCV cannot reconstruct historical spread, depth, latency, outages, or exact fills.",
+    "The same rule periods and historical data have been used in earlier project research; results are not pristine holdout evidence.",
+    "The simulator's correlation and hourly stop/trailing behavior are approximations.",
+    "Additional symbols do not raise the 3-position limit or per-trade risk budget in this comparison."
+  ]
+}

@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent / "data"
-SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
 
 
 def months(start_year: int, start_month: int, end_year: int, end_month: int):
@@ -69,9 +69,16 @@ def main():
     parser.add_argument("--start-month", type=int, default=1)
     parser.add_argument("--end-year", type=int, default=2026)
     parser.add_argument("--end-month", type=int, default=10)
+    parser.add_argument(
+        "--symbols", nargs="+", default=DEFAULT_SYMBOLS,
+        help="Binance Spot symbols (default: BTCUSDT ETHUSDT SOLUSDT)",
+    )
     args = parser.parse_args()
+    symbols = tuple(dict.fromkeys(symbol.upper() for symbol in args.symbols))
+    if any(not symbol.isalnum() for symbol in symbols):
+        parser.error("symbols must contain only letters and digits")
     items = [(symbol, args.interval, year, month)
-             for symbol in SYMBOLS
+             for symbol in symbols
              for year, month in months(args.start_year, args.start_month,
                                        args.end_year, args.end_month)]
     # Keep outbound requests low: aggressive parallel connections can trigger
@@ -82,9 +89,9 @@ def main():
     manifest = {"source": "Binance official Spot Public Data monthly klines",
                 "interval": args.interval,
                 "requested_range": f"{args.start_year:04d}-{args.start_month:02d} through {args.end_year:04d}-{args.end_month:02d}",
-                "requested_symbols": SYMBOLS, "archives": []}
+                "requested_symbols": symbols, "archives": []}
     OUT.mkdir(exist_ok=True)
-    for symbol in SYMBOLS:
+    for symbol in symbols:
         symbol_results = [result for result in results if result["symbol"] == symbol]
         by_timestamp = {row[0]: row for result in symbol_results for row in result["rows"]}
         rows = [by_timestamp[timestamp] for timestamp in sorted(by_timestamp)]
