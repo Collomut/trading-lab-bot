@@ -247,14 +247,19 @@ class TradingBot:
 
         if not ohlcv or len(ohlcv) < 30:
             available = len(ohlcv) if ohlcv else 0
-            if self._analysis_error_states.get(symbol) != "insufficient_candles":
+            gap_issues = getattr(self.exchange, "_candle_sequence_issues", {})
+            gap_details = gap_issues.get(symbol, {}) if isinstance(gap_issues, dict) else {}
+            issue = "candle_sequence_gap" if gap_details else "insufficient_candles"
+            issue_state = f"{issue}:{gap_details.get('expected_timestamp')}:{gap_details.get('actual_timestamp')}"
+            if self._analysis_error_states.get(symbol) != issue_state:
                 try:
                     self.risk_manager.store.append_event("market_data_issue", {
-                        "symbol": symbol, "issue": "insufficient_candles", "available_candles": available,
+                        "symbol": symbol, "issue": issue, "available_candles": available,
+                        **gap_details,
                     })
                 except Exception:
                     logger.exception("Could not record insufficient market data for %s", symbol)
-            self._analysis_error_states[symbol] = "insufficient_candles"
+            self._analysis_error_states[symbol] = issue_state
             logger.warning(f"Insufficient data for {symbol} ({available} candles)")
             return
         self._analysis_error_states.pop(symbol, None)
@@ -263,6 +268,30 @@ class TradingBot:
         if self._last_analyzed_candle.get(symbol) == candle_timestamp:
             logger.debug("Skipping duplicate closed candle for %s at %s", symbol, candle_timestamp)
             return
+
+        # Capture observable execution conditions for each completed-candle
+        # decision, including HOLDs. This is diagnostic only and never gates an
+        # entry; the actual pre-trade spread/depth check still runs at order time.
+        top_bid = top_ask = measured_spread_bps = None
+        spread_sample_status = "unavailable"
+        try:
+            ticker = self.exchange.get_ticker(symbol)
+            if isinstance(ticker, dict):
+                bid, ask = ticker.get("bid"), ticker.get("ask")
+                if bid is not None and ask is not None:
+                    bid, ask = float(bid), float(ask)
+                    if math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask:
+                        mid = (bid + ask) / 2.0
+                        top_bid, top_ask = bid, ask
+                        measured_spread_bps = round((ask - bid) / mid * 10000.0, 2)
+                        spread_sample_status = "ok"
+                    else:
+                        spread_sample_status = "invalid_book"
+        except (TypeError, ValueError, OverflowError):
+            spread_sample_status = "invalid_book"
+        except Exception as ticker_exc:
+            # Do not let optional telemetry interfere with strategy analysis.
+            logger.debug("Could not sample order-book spread for %s (%s)", symbol, type(ticker_exc).__name__)
 
         # Convert to DataFrame and run strategy once per completed candle.
         df = ohlcv_to_dataframe(ohlcv)
@@ -314,6 +343,10 @@ class TradingBot:
                 "signal": signal.signal.value,
                 "reason": str(signal.reason)[:500],
                 "confidence": round(float(signal.confidence), 4),
+                "measured_spread_bps": measured_spread_bps,
+                "top_bid": top_bid,
+                "top_ask": top_ask,
+                "spread_sample_status": spread_sample_status,
                 "votes": vote_details,
                 "indicators": indicator_details,
                 "shadow": shadow,

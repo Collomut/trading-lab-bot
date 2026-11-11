@@ -88,10 +88,25 @@ class TestShadowLogSafety(unittest.TestCase):
                 "reason": "breakout", "private": "must not pass",
                 "indicators": {"adx": 25, "close": 100, "secret": "must not pass"},
             },
+            "measured_spread_bps": 12.5, "top_bid": 100.0, "top_ask": 100.25,
+            "spread_sample_status": "ok", "private": "must not pass",
         })
         self.assertEqual(safe["shadow"]["signal"], "BUY")
         self.assertEqual(safe["shadow"]["indicators"], {"adx": 25, "close": 100})
+        self.assertEqual(safe["measured_spread_bps"], 12.5)
+        self.assertEqual(safe["spread_sample_status"], "ok")
         self.assertNotIn("private", safe["shadow"])
+        self.assertNotIn("private", safe)
+
+        gap_safe = WebDashboard._safe_log_details("market_data_issue", {
+            "symbol": "BTC/USDT", "issue": "candle_sequence_gap",
+            "expected_timestamp": 1_700_000_000_000,
+            "actual_timestamp": 1_700_007_200_000,
+            "step_ms": 7_200_000, "missing_intervals": 1,
+            "api_key": "must not pass",
+        })
+        self.assertEqual(gap_safe["missing_intervals"], 1)
+        self.assertNotIn("api_key", gap_safe)
 
 
 # ==============================================================================
@@ -943,8 +958,28 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         continuous = [[now - 180_000, 1, 2, 1, 2, 3], [now - 120_000, 2, 3, 2, 3, 4]]
         gap = [continuous[0], [now - 60_000, 3, 4, 3, 4, 5]]
         self.assertEqual(len(validate_candle_sequence(continuous, 60, now_ms=now)), 2)
-        self.assertEqual(validate_candle_sequence(gap, 60, now_ms=now), [])
+        with self.assertLogs("bot.exchange", level="WARNING") as captured:
+            self.assertEqual(validate_candle_sequence(gap, 60, now_ms=now), [])
+        self.assertIn("expected timestamp", captured.output[0])
+        self.assertIn("found", captured.output[0])
+        self.assertIn("intervals", captured.output[0])
         self.assertEqual(validate_candle_sequence(continuous, 60, now_ms=now + 600_000), [])
+
+    def test_exchange_preserves_gap_metadata_for_audit_event(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector._candle_sequence_issues = {}
+        connector.exchange = Mock()
+        connector.exchange.parse_timeframe.return_value = 60
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        start = (now_ms // 60_000) * 60_000 - 180_000
+        connector.exchange.fetch_ohlcv.return_value = [
+            [start, 100, 101, 99, 100, 10],
+            [start + 120_000, 100, 101, 99, 100, 10],
+        ]
+
+        self.assertEqual(connector.fetch_closed_ohlcv("BTC/USDT", "1m", 10), [])
+        self.assertEqual(connector._candle_sequence_issues["BTC/USDT"]["missing_intervals"], 1)
 
     def test_closed_candle_return_correlation_is_aligned_by_timestamp(self):
         candles_a, candles_b = [], []
@@ -1177,6 +1212,26 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
 class TestBotEngineOrderLifecycle(unittest.TestCase):
     """Verifies complete order execution, fee deduction, stop loss synchronization, recovery, and alerts."""
 
+    def test_candle_gap_is_saved_as_an_auditable_market_data_issue(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(strategy=SimpleNamespace(timeframe="1h", lookback_candles=150))
+        bot.exchange = Mock()
+        bot.exchange.fetch_closed_ohlcv.return_value = []
+        bot.exchange._candle_sequence_issues = {"BTC/USDT": {
+            "expected_timestamp": 1_700_000_000_000,
+            "actual_timestamp": 1_700_007_200_000,
+            "step_ms": 7_200_000,
+            "missing_intervals": 1,
+        }}
+        bot.risk_manager = SimpleNamespace(store=Mock())
+        bot._analysis_error_states = {}
+
+        bot.analyze_market("BTC/USDT")
+
+        event = bot.risk_manager.store.append_event.call_args.args[1]
+        self.assertEqual(event["issue"], "candle_sequence_gap")
+        self.assertEqual(event["missing_intervals"], 1)
+
     def test_shadow_candidate_signal_is_logged_but_never_routes_to_order_handlers(self):
         bot = object.__new__(TradingBot)
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 3_600_000
@@ -1184,6 +1239,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         bot.config = SimpleNamespace(strategy=SimpleNamespace(timeframe="1h", lookback_candles=150))
         bot.exchange = Mock()
         bot.exchange.fetch_closed_ohlcv.return_value = candles
+        bot.exchange.get_ticker.return_value = {"bid": 100.0, "ask": 100.2}
         bot.strategy = Mock()
         bot.strategy.analyze.return_value = TradeSignal(Signal.HOLD, "BTC/USDT", 0.0, "Active strategy holds", {})
         bot.risk_manager = SimpleNamespace(store=Mock())
@@ -1204,6 +1260,8 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         event = bot.risk_manager.store.append_event.call_args.args[1]
         self.assertEqual(event["signal"], "HOLD")
         self.assertEqual(event["shadow"]["signal"], "BUY")
+        self.assertEqual(event["spread_sample_status"], "ok")
+        self.assertEqual(event["measured_spread_bps"], round((0.2 / 100.1) * 10000, 2))
 
     def test_shadow_candidate_requires_history_and_uses_completed_candles(self):
         self.assertEqual(evaluate_shadow_candidate([])["status"], "insufficient_data")
@@ -1926,6 +1984,33 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
 
 class TestBacktestingAndRealism(unittest.TestCase):
     """Verifies backtesting execution realism, lookahead prevention, and exploratory warnings."""
+
+    def test_research_squeeze_simulator_uses_capped_initial_stop_and_close_based_trail(self):
+        from research.backtest_strategy import simulate
+
+        frame = pd.DataFrame({
+            "timestamp_ms": [1_700_000_000_000 + i * 3_600_000 for i in range(3)],
+            "open": [100.0, 100.0, 100.0],
+            "high": [101.0, 104.0, 101.0],
+            "low": [99.0, 99.0, 98.0],
+            "close": [100.0, 104.0, 99.0],
+            "atr": [2.0, 2.0, 2.0],
+            "swing_low_reference": [94.0, 94.0, 94.0],
+            "signal": ["BUY", "HOLD", "HOLD"],
+        })
+        sim = simulate(
+            {"BTCUSDT": frame}, 0.0, 0.0, enforce_risk_halts=False,
+            initial_stop_model="swing_low_atr_capped",
+            trailing_atr_multiple=2.5,
+            trailing_activation_atr_multiple=1.5,
+            trailing_uses_close=True,
+            gap_exit_atr_multiple=3.5,
+        )
+        self.assertEqual(len(sim["trades"]), 1)
+        self.assertEqual(sim["trades"][0]["reason"], "stop")
+        # The signal's swing low is more than 4% away, so the first stop is
+        # capped; the completed t=1 close then ratchets it to 104 - 2.5*2=99.
+        self.assertAlmostEqual(sim["trades"][0]["exit"], 99.0, places=6)
 
     def test_backtest_exploratory_warning_and_next_bar_logic(self):
         cfg = BotConfig()

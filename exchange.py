@@ -150,17 +150,27 @@ def filter_closed_ohlcv(candles: list, timeframe_seconds: float, now_ms: int | N
     return list(deduplicated.values())
 
 
-def validate_candle_sequence(candles: list, timeframe_seconds: float, now_ms: int | None = None) -> list:
+def validate_candle_sequence(candles: list, timeframe_seconds: float, now_ms: int | None = None,
+                             symbol: str | None = None) -> list:
     """Reject gaps or stale latest bars rather than calculating signals on incomplete history."""
     if not candles or not math.isfinite(timeframe_seconds) or timeframe_seconds <= 0:
         return []
     ordered = sorted(candles, key=lambda row: row[0])
     duration_ms = int(timeframe_seconds * 1000)
-    if duration_ms <= 0 or any(
-        ordered[index][0] - ordered[index - 1][0] != duration_ms
-        for index in range(1, len(ordered))
-    ):
+    if duration_ms <= 0:
         return []
+    for index in range(1, len(ordered)):
+        expected_ts = ordered[index - 1][0] + duration_ms
+        actual_ts = ordered[index][0]
+        if actual_ts != expected_ts:
+            delta_ms = actual_ts - ordered[index - 1][0]
+            logger.warning(
+                "Candle sequence gap for %s: expected timestamp %s, found %s "
+                "(step %s ms; %.2f intervals)",
+                symbol or "unknown symbol", expected_ts, actual_ts, delta_ms,
+                delta_ms / duration_ms,
+            )
+            return []
     now = int(time.time() * 1000) if now_ms is None else int(now_ms)
     latest_close = ordered[-1][0] + duration_ms
     if now - latest_close > duration_ms * 2 or latest_close > now + 2000:
@@ -190,6 +200,7 @@ class ExchangeConnector:
         self._sim_positions = {}
         self._sim_orders = {}
         self._sim_stops = {}
+        self._candle_sequence_issues = {}
         self.is_fallback_simulated = False
         self.fallback_reason = ""
 
@@ -602,6 +613,7 @@ class ExchangeConnector:
 
     def fetch_closed_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
         """Fetch and filter candles so strategy signals use closed bars only."""
+        self._candle_sequence_issues.pop(symbol, None)
         candles = self.fetch_ohlcv(symbol, timeframe, limit)
         if not candles:
             return []
@@ -612,8 +624,22 @@ class ExchangeConnector:
             logger.error("Cannot determine candle duration for %s: %s", timeframe, exc)
             return []
         closed = filter_closed_ohlcv(candles, seconds)
-        sequence = validate_candle_sequence(closed, seconds)
-        if not sequence:
+        duration_ms = int(seconds * 1000)
+        ordered = sorted(closed, key=lambda row: row[0])
+        for index in range(1, len(ordered)):
+            expected_ts = int(ordered[index - 1][0]) + duration_ms
+            actual_ts = int(ordered[index][0])
+            if actual_ts != expected_ts:
+                delta_ms = actual_ts - int(ordered[index - 1][0])
+                self._candle_sequence_issues[symbol] = {
+                    "expected_timestamp": expected_ts,
+                    "actual_timestamp": actual_ts,
+                    "step_ms": delta_ms,
+                    "missing_intervals": max(0, (delta_ms // duration_ms) - 1) if duration_ms > 0 else None,
+                }
+                break
+        sequence = validate_candle_sequence(closed, seconds, symbol=symbol)
+        if not sequence and symbol not in self._candle_sequence_issues:
             logger.warning("Closed candle data for %s is stale, discontinuous, or invalid", symbol)
         return sequence
 

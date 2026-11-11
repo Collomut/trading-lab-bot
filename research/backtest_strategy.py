@@ -247,7 +247,16 @@ def correlation_ok(candidate: str, positions: dict, frames: dict, i: int,
 
 def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: bool = True,
              start_timestamp_ms: int | None = None, end_timestamp_ms: int | None = None,
-             blueprint_stop_model: bool = False, correlation_lookback_bars: int = 100):
+             blueprint_stop_model: bool = False, correlation_lookback_bars: int = 100,
+             stop_min_pct: float = 0.01, stop_max_pct: float = 0.03,
+             take_profit_atr_multiple: float | None = None,
+             trailing_atr_multiple: float | None = None,
+             breakeven_trigger_pct: float = 0.015,
+             sizing_multiplier_col: str | None = None,
+             initial_stop_model: str | None = None,
+             trailing_activation_atr_multiple: float | None = None,
+             trailing_uses_close: bool = False,
+             gap_exit_atr_multiple: float | None = None):
     # Use common timestamps across all selected Binance symbols and intervals.
     common = set(frames[next(iter(frames))].timestamp_ms)
     for f in frames.values():
@@ -305,7 +314,9 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
             p = positions[sym]
             if bar.open <= p["stop"]:
                 close_position(sym, float(bar.open), ts, "stop_gap")
-            elif bar.open >= p["target"]:
+            elif gap_exit_atr_multiple is not None and p.get("entry_atr", 0) > 0 and bar.open >= p["entry"] + gap_exit_atr_multiple * p["entry_atr"]:
+                close_position(sym, float(bar.open), ts, "momentum_gap_exit")
+            elif p["target"] is not None and bar.open >= p["target"]:
                 close_position(sym, float(bar.open), ts, "target_gap")
         prev_ts = timestamps[i-1] if i > 0 else None
         # Strategy exits are known only after the previous candle closes; fill at this bar's open.
@@ -325,18 +336,32 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
                     continue
                 fill = float(events[sym].loc[ts].open) * (1 + slip)
                 atr = float(prev_signal.atr) if math.isfinite(float(prev_signal.atr)) else 0.0
-                if blueprint_stop_model and "swing_low_reference" in prev_signal.index:
+                if initial_stop_model == "swing_low_atr_capped":
+                    swing_low = float(prev_signal.swing_low_reference)
+                    if not math.isfinite(swing_low) or atr <= 0:
+                        continue
+                    raw_stop = min(swing_low, fill - 2.0 * atr)
+                    stop = max(raw_stop, fill * 0.96)  # hard cap: 4% stop distance
+                    if not math.isfinite(stop) or stop <= 0 or stop >= fill:
+                        continue
+                    stop_dist = fill - stop
+                    target = None
+                elif blueprint_stop_model and "swing_low_reference" in prev_signal.index:
                     stop = max(float(prev_signal.swing_low_reference), fill * 0.985)
                     if not math.isfinite(stop) or stop <= 0 or stop >= fill:
                         continue
                     stop_dist = fill - stop
                     target = fill + 2.0 * stop_dist
                 else:
-                    stop_dist = max(fill*0.01, min(fill*0.03, 1.5*atr)) if atr > 0 else fill*0.02
+                    stop_dist = max(fill*stop_min_pct, min(fill*stop_max_pct, 1.5*atr)) if atr > 0 else fill*0.02
                     stop = fill-stop_dist
-                    target = fill*1.03
-                risk_qty = (cash*MAX_RISK_PER_TRADE_PCT/100)/stop_dist
-                max_qty = (cash*POSITION_SIZE_PCT/100)/fill
+                    target = (fill + take_profit_atr_multiple*atr
+                              if take_profit_atr_multiple is not None and atr > 0 else fill*1.03)
+                size_multiplier = float(prev_signal.get(sizing_multiplier_col, 1.0)) if sizing_multiplier_col else 1.0
+                if not math.isfinite(size_multiplier) or size_multiplier <= 0:
+                    continue
+                risk_qty = (cash*MAX_RISK_PER_TRADE_PCT/100*size_multiplier)/stop_dist
+                max_qty = (cash*POSITION_SIZE_PCT/100*size_multiplier)/fill
                 qty = min(risk_qty, max_qty)
                 notional = qty*fill
                 entry_fee = notional*fee
@@ -344,7 +369,8 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
                     continue
                 cash -= notional+entry_fee
                 positions[sym] = {"entry": fill, "qty": qty, "stop": stop, "target": target,
-                                  "highest": fill, "break_even": False, "entry_fee": entry_fee, "entry_time": ts}
+                                  "highest": fill, "break_even": False, "entry_fee": entry_fee, "entry_time": ts,
+                                  "entry_atr": atr, "highest_close": fill, "custom_trail_active": False}
         # Check intrabar risk exits after open-time strategy orders. If both target and
         # stop were touched inside one hourly candle, assume the stop happened first.
         for sym in list(positions):
@@ -352,16 +378,34 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
             p = positions[sym]
             if bar.low <= p["stop"]:
                 close_position(sym, p["stop"], ts, "stop")
-            elif bar.high >= p["target"]:
+            elif p["target"] is not None and bar.high >= p["target"]:
                 close_position(sym, p["target"], ts, "take_profit")
             else:
                 # Approximate the live +1.5% break-even and 1.5% trailing logic.
                 # Newly tightened stops apply from the next bar because OHLCV cannot
                 # establish the order of the high and low within this bar.
                 p["highest"] = max(p["highest"], float(bar.high))
-                if p["break_even"]:
-                    p["stop"] = max(p["stop"], p["highest"] * 0.985)
-                elif bar.high >= p["entry"] * 1.015:
+                if trailing_activation_atr_multiple is not None:
+                    current_atr = float(bar.atr) if "atr" in bar.index else 0.0
+                    if trailing_uses_close:
+                        p["highest_close"] = max(p["highest_close"], float(bar.close))
+                        if p["entry_atr"] > 0 and float(bar.close) > p["entry"] + trailing_activation_atr_multiple * p["entry_atr"]:
+                            p["custom_trail_active"] = True
+                        trail_reference = p["highest_close"]
+                    else:
+                        if p["entry_atr"] > 0 and float(bar.high) > p["entry"] + trailing_activation_atr_multiple * p["entry_atr"]:
+                            p["custom_trail_active"] = True
+                        trail_reference = p["highest"]
+                    if p["custom_trail_active"] and math.isfinite(current_atr) and current_atr > 0:
+                        p["stop"] = max(p["stop"], trail_reference - trailing_atr_multiple * current_atr)
+                elif p["break_even"]:
+                    if trailing_atr_multiple is not None:
+                        current_atr = float(bar.atr) if "atr" in bar.index else 0.0
+                        if math.isfinite(current_atr) and current_atr > 0:
+                            p["stop"] = max(p["stop"], p["highest"] - trailing_atr_multiple * current_atr)
+                    else:
+                        p["stop"] = max(p["stop"], p["highest"] * 0.985)
+                elif bar.high >= p["entry"] * (1.0 + breakeven_trigger_pct):
                     p["break_even"] = True
                     p["stop"] = max(p["stop"], p["entry"])
         # Hourly approximation of equity monitoring circuit-breakers.

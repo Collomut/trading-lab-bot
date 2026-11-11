@@ -20,3 +20,5 @@ Historical simulations do not establish future profitability. They use hourly OH
 `FREQUENCY_RESEARCH.md` compares the current rules on 1-hour and 15-minute data and tests a higher-timeframe-filtered 15-minute candidate. None passed the frequency-versus-risk screen. Reproduce the study with `python research/backtest_frequency.py` after downloading the ignored research data using `python research/download_interval_data.py --interval 15m`.
 
 `LOSS_REDUCTION_REVIEW.md` records the follow-up Testnet-only change to the default minimum ADX entry gate (18 → 20), its historical results, remaining limitations, and a November trade-count estimate. Reproduce the comparison with `python research/backtest_loss_reduction.py` and `python research/estimate_month_end.py`.
+
+`SQUEEZE_CANDIDATE_REVIEW.md` records an independent replay of the supplied Keltner squeeze breakout specification. It failed cost-adjusted validation and remains research-only. Reproduce it with `python research/backtest_squeeze.py`; it uses the local, git-ignored Binance hourly archive.

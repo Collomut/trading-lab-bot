@@ -629,6 +629,10 @@ class WebDashboard:
                 "signal": str(details.get("signal", "HOLD"))[:12],
                 "reason": str(details.get("reason", ""))[:500],
                 "confidence": details.get("confidence"),
+                "measured_spread_bps": details.get("measured_spread_bps"),
+                "top_bid": details.get("top_bid"),
+                "top_ask": details.get("top_ask"),
+                "spread_sample_status": str(details.get("spread_sample_status", "unknown"))[:32],
                 "votes": safe_votes,
                 "indicators": safe_indicators,
                 "shadow": {
@@ -646,12 +650,17 @@ class WebDashboard:
                 if details.get(key) is not None
             }
         if event_type in {"analysis_error", "market_data_issue"}:
-            return {
+            safe = {
                 "symbol": str(details.get("symbol", ""))[:32],
                 "issue": str(details.get("issue", ""))[:80],
                 "error_type": str(details.get("error_type", ""))[:80],
                 "available_candles": details.get("available_candles"),
             }
+            for key in ("expected_timestamp", "actual_timestamp", "step_ms", "missing_intervals"):
+                value = details.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    safe[key] = value
+            return safe
         if event_type == "risk_halt":
             return {"reason": str(details.get("reason", "Trading halted"))[:500]}
         if event_type == "risk_equity_basis_migrated":

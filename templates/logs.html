@@ -178,6 +178,8 @@
       if(d.indicators?.market_regime)meta.push(`Market ${String(d.indicators.market_regime).replaceAll('_',' ')}`);
       if(d.indicators?.adx!=null)meta.push(`ADX ${d.indicators.adx}`);
       if(d.indicators?.atr_pct!=null)meta.push(`ATR ${d.indicators.atr_pct}%`);
+      if(d.spread_sample_status==='ok'&&d.measured_spread_bps!=null)meta.push(`Spread ${d.measured_spread_bps} bps`);
+      else if(d.spread_sample_status&&d.spread_sample_status!=='unknown')meta.push(`Spread ${String(d.spread_sample_status).replaceAll('_',' ')}`);
       if(meta.length)appendText(card,'p','log-reason',meta.join(' · '));
     }else if(e.type==='order_status'){
       const summary=[d.state,d.amount?('Amount '+d.amount):null,d.filled?('Filled '+d.filled):null,d.average?('Average '+d.average):null].filter(Boolean).join(' · ');
@@ -194,6 +196,11 @@
         d.status||d.mode||'');
       if(message)appendText(card,'p','log-reason',message);
       if(d.available_candles!=null)appendText(card,'p','log-reason','Available candles: '+d.available_candles);
+      if(d.expected_timestamp!=null&&d.actual_timestamp!=null){
+        const gap=[`Expected ${new Date(d.expected_timestamp).toLocaleString()}`,`found ${new Date(d.actual_timestamp).toLocaleString()}`];
+        if(d.missing_intervals!=null)gap.push(`${d.missing_intervals} missing interval(s)`);
+        appendText(card,'p','log-reason',gap.join(' · '));
+      }
     }
     return card;
   }

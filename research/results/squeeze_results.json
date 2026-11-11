@@ -1,0 +1,204 @@
+{
+  "method": {
+    "strategy": "Keltner squeeze breakout as specified in AI_AGENT_STRATEGY_HANDOVER3.md",
+    "candidate_id": "keltner_squeeze_breakout_v1",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT"
+    ],
+    "timeframe": "1h",
+    "signal_timing": "completed candle close; entry at next candle open",
+    "base_cost_bps_per_side": {
+      "fee": 10.0,
+      "slippage": 5.0
+    },
+    "stress_cost_bps_per_side": {
+      "fee": 20.0,
+      "slippage": 10.0
+    },
+    "sizing": "shared simulator: 1% equity risk, 10% notional cap, max 3 positions, correlation guard",
+    "risk_exits": "initial stop at farther of prior 5-bar low or entry minus 2 ATR, capped at 4%; trail arms after a completed close > 1.5 entry ATR profit, then follows highest close minus 2.5 current ATR; EMA50 close exit; gap exit at 3.5 entry ATR",
+    "intrabar_assumption": "existing shared simulator: stop-first if stop touched; newly tightened trailing stop applies next bar",
+    "risk_halts": "disabled for strategy-family comparison; never use this as deployed risk behavior",
+    "holdout_warning": "2026 was already examined in prior project research. Candidate rules were provided before this run, but market-period selection is not pristine and this is not independent proof of edge.",
+    "known_limitations": [
+      "OHLCV cannot reconstruct actual historical spread, depth, queue position, or exact fills.",
+      "The three-asset universe is fixed and survivorship-biased.",
+      "Shared portfolio simulator approximates risk monitoring at hourly close.",
+      "Keltner/ATR warmup and gap guard require contiguous candles; rejected windows are not imputed."
+    ],
+    "splits": {
+      "train_2021_02_to_2023": {
+        "start_utc": "2021-02-01T00:00:00+00:00",
+        "end_utc_exclusive": "2024-01-01T00:00:00+00:00"
+      },
+      "validation_2024_to_2025": {
+        "start_utc": "2024-01-01T00:00:00+00:00",
+        "end_utc_exclusive": "2026-01-01T00:00:00+00:00"
+      },
+      "holdout_2026_01_to_10": {
+        "start_utc": "2026-01-01T00:00:00+00:00",
+        "end_utc_exclusive": "2026-11-01T00:00:00+00:00"
+      }
+    },
+    "per_symbol_signal_counts": {
+      "BTCUSDT": {
+        "buy_bars": 738,
+        "sell_bars": 24415,
+        "valid_contiguous_bars": 49942
+      },
+      "ETHUSDT": {
+        "buy_bars": 737,
+        "sell_bars": 24468,
+        "valid_contiguous_bars": 49942
+      },
+      "SOLUSDT": {
+        "buy_bars": 713,
+        "sell_bars": 25244,
+        "valid_contiguous_bars": 49942
+      }
+    }
+  },
+  "results": {
+    "train_2021_02_to_2023": {
+      "base": {
+        "variant": "squeeze_base_train_2021_02_to_2023",
+        "closed_trades": 352,
+        "wins": 137,
+        "losses": 215,
+        "win_rate_pct": 38.92,
+        "net_pnl_usdt": 56.35,
+        "avg_trade_pnl_usdt": 0.16,
+        "profit_factor": 1.012,
+        "mean_trade_return_pct": 0.039,
+        "portfolio_return_pct": 0.563,
+        "max_drawdown_pct": 6.736,
+        "ending_equity_usdt": 10056.35,
+        "period_end_equity_points": 25522,
+        "halts_by_end": false,
+        "halt_reason": "",
+        "halt_timestamp_ms": null,
+        "trades_per_month": 10.07,
+        "halted": false
+      },
+      "stress": {
+        "variant": "squeeze_stress_train_2021_02_to_2023",
+        "closed_trades": 351,
+        "wins": 125,
+        "losses": 226,
+        "win_rate_pct": 35.61,
+        "net_pnl_usdt": -969.36,
+        "avg_trade_pnl_usdt": -2.76,
+        "profit_factor": 0.81,
+        "mean_trade_return_pct": -0.278,
+        "portfolio_return_pct": -9.694,
+        "max_drawdown_pct": 12.689,
+        "ending_equity_usdt": 9030.64,
+        "period_end_equity_points": 25522,
+        "halts_by_end": false,
+        "halt_reason": "",
+        "halt_timestamp_ms": null,
+        "trades_per_month": 10.04,
+        "halted": false
+      }
+    },
+    "validation_2024_to_2025": {
+      "base": {
+        "variant": "squeeze_base_validation_2024_to_2025",
+        "closed_trades": 281,
+        "wins": 105,
+        "losses": 176,
+        "win_rate_pct": 37.37,
+        "net_pnl_usdt": -459.09,
+        "avg_trade_pnl_usdt": -1.63,
+        "profit_factor": 0.848,
+        "mean_trade_return_pct": -0.163,
+        "portfolio_return_pct": -4.591,
+        "max_drawdown_pct": 8.286,
+        "ending_equity_usdt": 9540.91,
+        "period_end_equity_points": 17544,
+        "halts_by_end": false,
+        "halt_reason": "",
+        "halt_timestamp_ms": null,
+        "trades_per_month": 11.7,
+        "halted": false
+      },
+      "stress": {
+        "variant": "squeeze_stress_validation_2024_to_2025",
+        "closed_trades": 280,
+        "wins": 95,
+        "losses": 185,
+        "win_rate_pct": 33.93,
+        "net_pnl_usdt": -1191.28,
+        "avg_trade_pnl_usdt": -4.25,
+        "profit_factor": 0.651,
+        "mean_trade_return_pct": -0.457,
+        "portfolio_return_pct": -11.913,
+        "max_drawdown_pct": 13.307,
+        "ending_equity_usdt": 8808.72,
+        "period_end_equity_points": 17544,
+        "halts_by_end": false,
+        "halt_reason": "",
+        "halt_timestamp_ms": null,
+        "trades_per_month": 11.66,
+        "halted": false
+      }
+    },
+    "holdout_2026_01_to_10": {
+      "base": {
+        "variant": "squeeze_base_holdout_2026_01_to_10",
+        "closed_trades": 85,
+        "wins": 29,
+        "losses": 56,
+        "win_rate_pct": 34.12,
+        "net_pnl_usdt": -234.75,
+        "avg_trade_pnl_usdt": -2.76,
+        "profit_factor": 0.705,
+        "mean_trade_return_pct": -0.296,
+        "portfolio_return_pct": -2.347,
+        "max_drawdown_pct": 3.135,
+        "ending_equity_usdt": 9765.25,
+        "period_end_equity_points": 7296,
+        "halts_by_end": false,
+        "halt_reason": "",
+        "halt_timestamp_ms": null,
+        "trades_per_month": 8.51,
+        "halted": false
+      },
+      "stress": {
+        "variant": "squeeze_stress_holdout_2026_01_to_10",
+        "closed_trades": 85,
+        "wins": 28,
+        "losses": 57,
+        "win_rate_pct": 32.94,
+        "net_pnl_usdt": -462.67,
+        "avg_trade_pnl_usdt": -5.44,
+        "profit_factor": 0.511,
+        "mean_trade_return_pct": -0.58,
+        "portfolio_return_pct": -4.627,
+        "max_drawdown_pct": 5.284,
+        "ending_equity_usdt": 9537.33,
+        "period_end_equity_points": 7296,
+        "halts_by_end": false,
+        "halt_reason": "",
+        "halt_timestamp_ms": null,
+        "trades_per_month": 8.51,
+        "halted": false
+      }
+    }
+  },
+  "acceptance_gates": {
+    "validation_base_pf_ge_1_35": false,
+    "validation_stress_pf_ge_1_10": false,
+    "validation_max_dd_le_12_pct": false,
+    "validation_frequency_6_to_18_month": true,
+    "holdout_positive_base_pnl": false,
+    "holdout_stress_positive_pnl": false,
+    "holdout_base_pf_ge_1_35": false,
+    "holdout_stress_pf_ge_1_10": false,
+    "holdout_max_dd_le_12_pct": true,
+    "holdout_frequency_6_to_18_month": true
+  },
+  "candidate_passes_all_gates": false
+}
