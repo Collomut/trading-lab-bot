@@ -1078,6 +1078,41 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         self.assertEqual(candles[-1][0], 1999 * 3_600_000)
         self.assertEqual(connector.exchange.fetch_ohlcv.call_count, 2)
 
+    def test_testnet_candles_use_public_data_client_not_authenticated_testnet_client(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector.exchange = Mock()
+        connector.market_data_exchange = Mock()
+        connector.market_data_exchange.fetch_ohlcv.return_value = [[1, 100, 101, 99, 100, 10]]
+
+        candles = connector.fetch_ohlcv("BTC/USDT", "1h", 1)
+
+        self.assertEqual(candles, [[1, 100, 101, 99, 100, 10]])
+        connector.market_data_exchange.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", limit=1)
+        connector.exchange.fetch_ohlcv.assert_not_called()
+
+    def test_testnet_public_market_client_has_no_private_credentials(self):
+        config = ExchangeConfig(
+            name="binance", api_key="testnet-key", api_secret="testnet-secret",
+            paper_trading=True, paper_environment="testnet",
+        )
+        connector = object.__new__(ExchangeConnector)
+        connector.config = config
+        public_client = Mock()
+        public_client.urls = {"api": {"public": "https://api.binance.com/api/v3"}}
+        with patch("exchange.ccxt.binance", return_value=public_client) as constructor:
+            result = connector._create_public_market_data_exchange()
+
+        self.assertIs(result, public_client)
+        constructor.assert_called_once()
+        options = constructor.call_args.args[0]
+        self.assertNotIn("apiKey", options)
+        self.assertNotIn("secret", options)
+        self.assertEqual(
+            public_client.urls["api"]["public"],
+            "https://data-api.binance.vision/api/v3",
+        )
+
     def test_long_strategy_request_returns_required_completed_candle_count(self):
         connector = object.__new__(ExchangeConnector)
         connector._lock_obj = threading.RLock()
@@ -1677,6 +1712,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             bot.exchange = Mock()
             bot.exchange.get_usdt_balance.return_value = 10000.0
             bot.exchange.get_current_price.return_value = 100.0
+            bot.exchange.get_public_market_data_price.return_value = 99.0
             bot.exchange.amount_to_precision.return_value = "10"
             bot.exchange.get_market_limits.return_value = {
                 "min_amount": 0.1, "min_cost": 10.0, "active": True,
@@ -1707,6 +1743,9 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 Signal.BUY, "BTC/USDT", 0.85, "Test EMA72 entry",
                 {"atr": 2.0, "swing_low_5": 97.0},
             )
+            bot._handle_buy_signal(signal, decision_key="divergent-candle")
+            bot._submit_market_order.assert_not_called()
+            bot.exchange.get_public_market_data_price.return_value = 100.2
             bot._handle_buy_signal(signal, decision_key="test-candle")
 
             position = bot.risk_manager.open_positions["BTC/USDT"]

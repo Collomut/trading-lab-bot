@@ -911,6 +911,18 @@ class TradingBot:
 
         atr = signal.indicators.get("atr", 0.0)
         ema72_candidate = getattr(self.config.strategy, "name", "combined") == "macro_donchian_ema72"
+        if ema72_candidate:
+            public_price = self.exchange.get_public_market_data_price(symbol)
+            if public_price is None or public_price <= 0:
+                logger.warning("Entry blocked for %s: public market price is unavailable for Testnet parity check", symbol)
+                return
+            divergence_pct = abs(current_price - public_price) / public_price * 100.0
+            if divergence_pct > self.config.max_testnet_price_divergence_pct:
+                logger.info(
+                    "Entry blocked for %s: Spot Testnet and public Spot prices differ by %.3f%% (limit %.3f%%)",
+                    symbol, divergence_pct, self.config.max_testnet_price_divergence_pct,
+                )
+                return
         swing_low = None
         if ema72_candidate:
             try:

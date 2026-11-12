@@ -191,6 +191,7 @@ class ExchangeConnector:
         self.config = config
         self._lock_obj = threading.RLock()
         self.exchange = self._create_exchange()
+        self.market_data_exchange = self._create_public_market_data_exchange()
         self._daily_pnl = 0.0
         self._trades_today = 0
         try:
@@ -203,6 +204,29 @@ class ExchangeConnector:
         self._candle_sequence_issues = {}
         self.is_fallback_simulated = False
         self.fallback_reason = ""
+
+    def _create_public_market_data_exchange(self):
+        """Use Binance's unauthenticated public data API for candles in Testnet mode.
+
+        Spot Testnet may not retain enough history to warm up long indicators.
+        This client has no credentials and is never used for balances or orders.
+        """
+        if not (self.config.paper_trading and self.config.paper_environment == "testnet"):
+            return None
+        if self.config.name.strip().lower() != "binance":
+            return None
+        public_exchange = getattr(ccxt, self.config.name)({
+            "enableRateLimit": True,
+            "options": {"defaultType": "spot"},
+        })
+        public_urls = public_exchange.urls.get("api", {})
+        if isinstance(public_urls, dict) and "public" in public_urls:
+            public_urls["public"] = "https://data-api.binance.vision/api/v3"
+        logger.info(
+            "Testnet mode: candles use Binance's unauthenticated public Spot data API; "
+            "account and order requests remain on Spot Testnet"
+        )
+        return public_exchange
 
     def _is_simulated(self) -> bool:
         cfg = getattr(self, "config", None)
@@ -608,14 +632,15 @@ class ExchangeConnector:
             return []
         with self._exchange_lock:
             try:
+                data_exchange = getattr(self, "market_data_exchange", None) or self.exchange
                 if limit <= 1000:
-                    ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                    ohlcv = data_exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
                 else:
-                    step_ms = int(float(self.exchange.parse_timeframe(timeframe)) * 1000)
+                    step_ms = int(float(data_exchange.parse_timeframe(timeframe)) * 1000)
                     if step_ms <= 0:
                         return []
                     page_size = 1000
-                    latest = self.exchange.fetch_ohlcv(symbol, timeframe, limit=page_size) or []
+                    latest = data_exchange.fetch_ohlcv(symbol, timeframe, limit=page_size) or []
                     candles_by_time = {int(row[0]): row for row in latest if isinstance(row, (list, tuple)) and len(row) >= 6}
                     if not candles_by_time:
                         return []
@@ -625,7 +650,7 @@ class ExchangeConnector:
                         if len(candles_by_time) >= limit:
                             break
                         since = first_timestamp - page_size * step_ms
-                        older = self.exchange.fetch_ohlcv(
+                        older = data_exchange.fetch_ohlcv(
                             symbol, timeframe, since=since, limit=page_size
                         ) or []
                         new_rows = [
@@ -655,6 +680,29 @@ class ExchangeConnector:
             except (TypeError, ValueError, IndexError, OverflowError) as e:
                 logger.error("Invalid OHLCV pagination response for %s (%s)", symbol, type(e).__name__)
                 return []
+
+    def get_public_market_data_price(self, symbol: str) -> float | None:
+        """Read a fresh public Binance Spot price for Testnet price-parity checks."""
+        market_data_exchange = getattr(self, "market_data_exchange", None)
+        if market_data_exchange is None:
+            return None
+        try:
+            ticker = market_data_exchange.fetch_ticker(symbol)
+            if not isinstance(ticker, dict) or ticker.get("last") is None:
+                return None
+            price = float(ticker["last"])
+            timestamp = ticker.get("timestamp")
+            if timestamp is None and ticker.get("datetime"):
+                timestamp = market_data_exchange.parse8601(ticker["datetime"])
+            if timestamp is None:
+                return None
+            age_ms = int(time.time() * 1000) - int(timestamp)
+            if age_ms < -5000 or age_ms > 120_000 or not math.isfinite(price) or price <= 0:
+                return None
+            return price
+        except (ccxt.BaseError, AttributeError, TypeError, ValueError, OverflowError) as exc:
+            logger.warning("Public Binance price unavailable for %s (%s)", symbol, type(exc).__name__)
+            return None
 
     def fetch_closed_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
         """Fetch and filter candles so strategy signals use closed bars only."""

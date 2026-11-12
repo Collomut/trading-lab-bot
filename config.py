@@ -93,6 +93,7 @@ class BotConfig:
     max_spread_bps: float = float(os.getenv("MAX_SPREAD_BPS", "20"))
     max_slippage_bps: float = float(os.getenv("MAX_SLIPPAGE_BPS", "30"))
     max_pairwise_correlation: float = float(os.getenv("MAX_PAIRWISE_CORRELATION", "0.85"))
+    max_testnet_price_divergence_pct: float = float(os.getenv("MAX_TESTNET_PRICE_DIVERGENCE_PCT", "0.5"))
 
     def validate(self):
         """Validate configuration values."""
@@ -172,6 +173,9 @@ class BotConfig:
             errors.append("MAX_SLIPPAGE_BPS must be finite and between 0 and 100")
         if not math.isfinite(self.max_pairwise_correlation) or not 0.5 <= self.max_pairwise_correlation < 1:
             errors.append("MAX_PAIRWISE_CORRELATION must be finite and between 0.5 and 1")
+        if (not math.isfinite(self.max_testnet_price_divergence_pct)
+                or not 0 < self.max_testnet_price_divergence_pct <= 2):
+            errors.append("MAX_TESTNET_PRICE_DIVERGENCE_PCT must be finite and greater than 0 and no more than 2")
         if not math.isfinite(self.risk.take_profit_pct) or self.risk.take_profit_pct <= 0:
             errors.append("TAKE_PROFIT_PCT must be a finite value greater than 0")
 
@@ -203,6 +207,8 @@ class BotConfig:
                 errors.append("macro_donchian_ema72 requires TIMEFRAME=1h")
             if self.strategy.lookback_candles < 2501:
                 errors.append("macro_donchian_ema72 requires LOOKBACK_CANDLES >= 2501 for a stable EMA480 warmup")
+            if self.max_testnet_price_divergence_pct > 0.5:
+                errors.append("macro_donchian_ema72 caps MAX_TESTNET_PRICE_DIVERGENCE_PCT at 0.5%")
             if self.risk.max_risk_per_trade > 1.0:
                 errors.append("macro_donchian_ema72 caps MAX_RISK_PER_TRADE at 1%")
             if self.risk.position_size_pct > 10.0:
