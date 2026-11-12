@@ -2,6 +2,8 @@
 const pct=v=>`${Number(v||0).toLocaleString()}%`;
 function renderMarketChecks(d){
  const box=document.getElementById('regimes');
+ const activeStrategy=String(d.strategy_name||'').toLowerCase();
+ const activeDonchian=activeStrategy==='macro_donchian_ema72';
  const signals=d.latest_signals&&typeof d.latest_signals==='object'?d.latest_signals:{};
  const entries=Object.entries(signals);
  box.replaceChildren();
@@ -16,7 +18,9 @@ function renderMarketChecks(d){
   const buyCandidate=indicators.buy_candidate===true;
   const gates=indicators.entry_gates&&typeof indicators.entry_gates==='object'?Object.entries(indicators.entry_gates):[];
   const blockers=gates.filter(([,gate])=>gate?.enabled&&gate?.passed===false&&gate?.relevant_to_current_buy===true).map(([name])=>name);
-  const isDonchian=indicators.strategy==='macro_donchian_ema72';
+  // Use the configured strategy as the source of truth. A HOLD/error result can
+  // legitimately have empty indicators, which previously hid the EMA72 view.
+  const isDonchian=activeDonchian||indicators.strategy==='macro_donchian_ema72';
   const gateSummary=isDonchian
    ? item?.signal==='BUY'?'Breakout entry conditions pass':item?.signal==='SELL'?'EMA72 exit condition passed':'No breakout entry; exits are checked only for open positions'
    : buyCandidate?(blockers.length?`BUY setup blocked by ${blockers.join(', ')}`:'BUY setup passes strategy gates'):'No BUY consensus · gate status is informational';
@@ -72,7 +76,7 @@ function renderMarketChecks(d){
    details.append(list);box.append(details)
   }else{
    const unavailable=document.createElement('div');unavailable.className='vote-agreement';
-   const label=document.createElement('span');label.className='vote-chip is-wait';label.textContent='Signal agreement unavailable';unavailable.append(label);box.append(unavailable)
+   const label=document.createElement('span');label.className='vote-chip is-wait';label.textContent=`${d.strategy_name||'Strategy'} · indicator details unavailable`;unavailable.append(label);box.append(unavailable)
   }
  }
 }
