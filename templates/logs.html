@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Activity · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m4">
-  <script src="/assets/app.js" defer></script>
+  <link rel="stylesheet" href="/assets/app.css?v=m5">
+  <script src="/assets/app.js?v=m5" defer></script>
 </head>
 <body>
 <nav><div class="nav-inner">
@@ -23,16 +23,16 @@
 <main class="container">
   <header class="page-head">
     <div><div class="eyebrow">Bot activity</div><h1>Decision &amp; safety log</h1></div>
-    <div class="status"><span id="log-dot" class="dot"></span><span id="log-state">Loading activity…</span></div>
+    <div class="status"><span id="log-dot" class="dot"></span><span id="log-state" data-skeleton aria-busy="true">Loading activity…</span></div>
   </header>
-  <p class="intro">See what the bot checked, how EMA, RSI, and MACD voted, and when an order or safety event occurred. The log refreshes automatically.</p>
+  <p class="intro">Review market checks, orders, and safety events. The log refreshes automatically.</p>
   <section class="card log-summary-card" aria-labelledby="log-summary-title">
-    <div class="log-summary-head"><div><div class="eyebrow">Rolling 24 hours</div><h2 id="log-summary-title">Why no trade?</h2></div><span id="log-summary-window" class="summary-window">Loading…</span></div>
+    <div class="log-summary-head"><div><div class="eyebrow">Rolling 24 hours</div><h2 id="log-summary-title">Why no trade?</h2></div><span id="log-summary-window" class="summary-window" data-skeleton aria-busy="true">Loading…</span></div>
     <div class="log-summary-grid">
-      <div class="log-summary-stat"><span>Market checks</span><strong id="summary-checks">—</strong></div>
-      <div class="log-summary-stat"><span>BUY signals</span><strong id="summary-buys">—</strong></div>
-      <div class="log-summary-stat"><span>SELL signals</span><strong id="summary-sells">—</strong></div>
-      <div class="log-summary-stat"><span>BUY setups blocked</span><strong id="summary-blocked">—</strong></div>
+      <div class="log-summary-stat"><span>Market checks</span><strong id="summary-checks" data-skeleton aria-busy="true">—</strong></div>
+      <div class="log-summary-stat"><span>BUY signals</span><strong id="summary-buys" data-skeleton aria-busy="true">—</strong></div>
+      <div class="log-summary-stat"><span>SELL signals</span><strong id="summary-sells" data-skeleton aria-busy="true">—</strong></div>
+      <div class="log-summary-stat"><span>BUY setups blocked</span><strong id="summary-blocked" data-skeleton aria-busy="true">—</strong></div>
     </div>
     <p id="log-summary-note" class="log-summary-note" aria-live="polite">Loading the latest strategy decisions…</p>
     <p class="log-summary-foot">Signals are strategy decisions, not executed trades. This summary does not change the bot's rules.</p>
@@ -46,7 +46,7 @@
     </div>
     <div id="log-status" class="log-status" aria-live="polite"></div>
     <div id="log-feed" class="log-feed" aria-live="polite">
-      <div class="log-empty">Loading saved activity…</div>
+      <div class="log-empty" data-skeleton aria-busy="true">Loading saved activity…</div>
     </div>
   </section>
   <footer>Market checks are recorded once per completed candle. A HOLD means the strategy did not produce a trade direction; it does not mean the market-data service is offline.</footer>
