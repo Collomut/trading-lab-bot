@@ -1,10 +1,16 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m5"><script src="/assets/app.js?v=m5" defer></script></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m6"><script src="/assets/app.js?v=m6" defer></script></head><body>
 <nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link active" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav>
 <main class="container"><header class="page-head"><div><div class="eyebrow">Paper-trading dashboard</div><h1>Overview</h1></div><div class="status"><span id="dot" class="dot"></span><span id="connection" data-skeleton aria-busy="true">Connecting…</span></div></header>
 <div class="notice compact"><strong>Practice mode</strong><span id="mode" data-skeleton aria-busy="true">Loading…</span><span class="muted-inline">· App-monitored exits can fail during outages.</span></div>
 <section class="card trading-controls-card"><div class="trading-controls-header"><strong>Trading controls</strong><div class="help">Resume requires a fresh successful account check. Safety-halt recovery also requires your review and no open bot positions or unresolved orders. Daily and drawdown limits stay in force.</div></div><div class="trading-controls-actions"><button id="entry-control" type="button" class="button">Pause entries</button><button id="emergency-stop" type="button" class="button secondary">Emergency stop</button><button id="run-cycle" type="button" class="button secondary">Run check now</button><button id="test-alert" type="button" class="button secondary">Test alerts</button><button id="testnet-smoke" type="button" class="button secondary" hidden style="display:none">One-time Testnet smoke trade · up to $10</button></div><span id="control-status" class="help" aria-live="polite"></span></section>
 <div id="account-alert" class="notice compact" role="status" hidden style="display:none"><strong>Account check</strong><span id="account-message"></span></div>
 <div class="overview-metrics"><section class="card metric-card"><div class="metric-label">Available USDT</div><div class="metric" id="cash-balance" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Tracked account value</div><div class="metric" id="net-worth" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Estimated P&amp;L (Net)</div><div class="metric" id="pnl" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Open positions</div><div class="metric" id="open-count" data-skeleton aria-busy="true">—</div></section></div>
+
+<section class="market-pulse card" aria-labelledby="market-pulse-title">
+  <div class="pulse-heading"><div><div class="eyebrow">Live strategy view</div><h2 id="market-pulse-title">Market pulse</h2><p class="help">See what the bot sees. Signals use the latest completed candle; this is not a forecast.</p></div><div class="pulse-updated"><span class="pulse-live-dot" aria-hidden="true"></span><span id="pulse-updated">Waiting for market data</span></div></div>
+  <div id="pulse-summary" class="pulse-summary" aria-live="polite">Connecting to the latest strategy checks…</div>
+  <div id="market-pulse-grid" class="market-pulse-grid"><div class="pulse-loading"><span class="pulse-loader" aria-hidden="true"></span><span>Loading market checks</span></div></div>
+</section>
 
 <section class="card chart-card">
   <div class="chart-heading">
@@ -893,11 +899,116 @@ function initChartInteractivity() {
 // ==============================================================================
 // Status & Trading Controls
 // ==============================================================================
+function renderMarketPulse(d) {
+  const grid = $('market-pulse-grid');
+  const summary = $('pulse-summary');
+  const updated = $('pulse-updated');
+  const signals = d.latest_signals && typeof d.latest_signals === 'object' ? d.latest_signals : {};
+  const entries = Object.entries(signals);
+  const isDonchian = String(d.strategy_name || '').toLowerCase() === 'macro_donchian_ema72';
+  grid.replaceChildren();
+
+  if (!entries.length) {
+    summary.textContent = 'No completed strategy checks yet. The dashboard will update when market data arrives.';
+    const empty = document.createElement('div');
+    empty.className = 'pulse-empty';
+    empty.textContent = 'Market checks are not available';
+    grid.append(empty);
+    updated.textContent = 'Waiting for market data';
+    return;
+  }
+
+  let readyCount = 0;
+  let newest = 0;
+  for (const [symbol, item] of entries) {
+    const indicators = item?.indicators && typeof item.indicators === 'object' ? item.indicators : {};
+    const signal = String(item?.signal || 'HOLD').toUpperCase();
+    const close = Number(indicators.close);
+    const ema = Number(indicators.ema480);
+    const breakout = Number(indicators.donchian_high168);
+    const valid = [close, ema, breakout].every(value => Number.isFinite(value) && value > 0);
+    const entryReady = valid && signal === 'BUY' && close > ema && close > breakout && indicators.entry_ready === true;
+    if (entryReady || (!isDonchian && signal === 'BUY')) readyCount++;
+    const stamp = Date.parse(item?.timestamp || '');
+    if (Number.isFinite(stamp)) newest = Math.max(newest, stamp);
+
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `pulse-card ${signal === 'BUY' ? 'pulse-buy' : signal === 'SELL' ? 'pulse-sell' : 'pulse-hold'}`;
+    card.setAttribute('aria-label', `${symbol} market check: ${signal}. Select to view its chart.`);
+    card.dataset.symbol = symbol;
+
+    const top = document.createElement('div');
+    top.className = 'pulse-card-top';
+    const pair = document.createElement('strong');
+    pair.textContent = symbol;
+    const badge = document.createElement('span');
+    badge.className = `pulse-signal pulse-${signal.toLowerCase()}`;
+    badge.textContent = signal;
+    top.append(pair, badge);
+    card.append(top);
+
+    const price = document.createElement('div');
+    price.className = 'pulse-price';
+    price.textContent = valid ? formatPrice(close) : d.prices?.[symbol] != null ? formatPrice(d.prices[symbol]) : 'Price unavailable';
+    card.append(price);
+
+    if (isDonchian && valid) {
+      const required = Math.max(ema, breakout);
+      const gapPct = Math.max(0, (required / close - 1) * 100);
+      const gates = document.createElement('div');
+      gates.className = 'pulse-gates';
+      for (const [label, level] of [['168-hour high', breakout], ['Long-term trend', ema]]) {
+        const row = document.createElement('div');
+        row.className = 'pulse-gate';
+        const name = document.createElement('span');
+        name.textContent = label;
+        const value = document.createElement('strong');
+        const passed = close > level;
+        const delta = Math.abs((level / close - 1) * 100);
+        value.className = passed ? 'gate-pass' : 'gate-wait';
+        value.textContent = passed ? 'Passed' : `${delta.toFixed(1)}% below`;
+        row.append(name, value);
+        gates.append(row);
+      }
+      card.append(gates);
+      const foot = document.createElement('div');
+      foot.className = `pulse-entry ${entryReady ? 'entry-ready' : ''}`;
+      const bothPriceFiltersPass = close > ema && close > breakout;
+      foot.textContent = entryReady ? 'BUY signal · entry conditions met'
+        : bothPriceFiltersPass ? 'Price filters clear · no new BUY signal'
+        : `${gapPct.toFixed(1)}% below the higher required price level`;
+      card.append(foot);
+    } else {
+      const reason = document.createElement('div');
+      reason.className = 'pulse-reason';
+      reason.textContent = item?.reason || 'Waiting for the next valid strategy signal';
+      card.append(reason);
+    }
+
+    card.addEventListener('click', () => {
+      const select = $('symbol');
+      if ([...select.options].some(option => option.value === symbol)) {
+        select.value = symbol;
+        loadChart();
+        $('chart-title').textContent = symbol;
+      }
+    });
+    grid.append(card);
+  }
+
+  summary.textContent = isDonchian
+    ? `${readyCount} of ${entries.length} entry setups currently meet both breakout and long-term trend rules.`
+    : `${readyCount} of ${entries.length} markets currently show a BUY signal from the active strategy.`;
+  updated.textContent = newest ? `Checks updated ${new Date(newest).toLocaleTimeString()}` : `Completed ${d.timeframe || 'market'} checks`;
+}
+
 async function refreshStatus() {
   try {
     const r = await fetch('/api/status', { cache: 'no-store' });
     if (!r.ok) throw Error(`Status unavailable (${r.status})`);
     const d = await r.json();
+    renderMarketPulse(d);
 
     $('cash-balance').textContent = d.account_available ? money(d.cash_balance) : 'Unavailable';
     $('net-worth').textContent = money(d.net_worth);

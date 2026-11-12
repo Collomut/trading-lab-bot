@@ -37,8 +37,8 @@ LOGIN_HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Operator Login · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m5">
-  <script src="/assets/app.js?v=m5" defer></script>
+  <link rel="stylesheet" href="/assets/app.css?v=m6">
+  <script src="/assets/app.js?v=m6" defer></script>
 </head>
 <body>
 <nav>
