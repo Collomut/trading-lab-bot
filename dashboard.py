@@ -37,8 +37,8 @@ LOGIN_HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Operator Login · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m6">
-  <script src="/assets/app.js?v=m6" defer></script>
+  <link rel="stylesheet" href="/assets/app.css?v=m7">
+  <script src="/assets/app.js?v=m7" defer></script>
 </head>
 <body>
 <nav>
@@ -624,15 +624,6 @@ class WebDashboard:
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):
                     safe_indicators[key] = value
-            shadow = details.get("shadow", {})
-            shadow = shadow if isinstance(shadow, dict) else {}
-            shadow_indicators = shadow.get("indicators", {})
-            shadow_indicators = shadow_indicators if isinstance(shadow_indicators, dict) else {}
-            safe_shadow_indicators = {
-                key: shadow_indicators[key]
-                for key in ("open", "high", "low", "close", "volume", "breakout_level", "exit_level", "adx", "atr_pct", "volume_ratio", "ema100_rising")
-                if isinstance(shadow_indicators.get(key), (int, float, bool))
-            }
             return {
                 "symbol": str(details.get("symbol", ""))[:32],
                 "timeframe": str(details.get("timeframe", ""))[:12],
@@ -646,13 +637,6 @@ class WebDashboard:
                 "spread_sample_status": str(details.get("spread_sample_status", "unknown"))[:32],
                 "votes": safe_votes,
                 "indicators": safe_indicators,
-                "shadow": {
-                    "candidate_id": str(shadow.get("candidate_id", ""))[:48],
-                    "signal": str(shadow.get("signal", "HOLD"))[:12],
-                    "status": str(shadow.get("status", "unknown"))[:48],
-                    "reason": str(shadow.get("reason", ""))[:240],
-                    "indicators": safe_shadow_indicators,
-                },
             }
         if event_type == "order_status":
             return {

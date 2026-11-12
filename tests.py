@@ -81,7 +81,7 @@ class TestShadowLogSafety(unittest.TestCase):
         self.assertGreaterEqual(result["indicators"]["adx"], 20)
         self.assertGreaterEqual(result["indicators"]["volume_ratio"], 1.2)
 
-    def test_shadow_market_log_is_allowlisted_and_safe(self):
+    def test_research_shadow_data_is_omitted_from_user_facing_market_logs(self):
         safe = WebDashboard._safe_log_details("market_check", {
             "symbol": "BTC/USDT", "signal": "HOLD", "shadow": {
                 "candidate_id": "volume_breakout_24h_ema100_v1", "signal": "BUY", "status": "ok",
@@ -91,11 +91,9 @@ class TestShadowLogSafety(unittest.TestCase):
             "measured_spread_bps": 12.5, "top_bid": 100.0, "top_ask": 100.25,
             "spread_sample_status": "ok", "private": "must not pass",
         })
-        self.assertEqual(safe["shadow"]["signal"], "BUY")
-        self.assertEqual(safe["shadow"]["indicators"], {"adx": 25, "close": 100})
+        self.assertNotIn("shadow", safe)
         self.assertEqual(safe["measured_spread_bps"], 12.5)
         self.assertEqual(safe["spread_sample_status"], "ok")
-        self.assertNotIn("private", safe["shadow"])
         self.assertNotIn("private", safe)
 
         gap_safe = WebDashboard._safe_log_details("market_data_issue", {
