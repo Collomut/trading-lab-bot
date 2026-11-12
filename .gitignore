@@ -1,5 +1,7 @@
 # Environment & secrets
 .env
+.env.*
+!.env.example
 *.env
 
 # Python
@@ -7,6 +9,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
 dist/
 build/
 .eggs/
@@ -19,6 +24,9 @@ logs/
 *.log
 data/
 *.jsonl
+*.db
+*.sqlite
+*.sqlite3
 
 # IDE
 .vscode/

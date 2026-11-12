@@ -2299,6 +2299,14 @@ class TestBacktestingAndRealism(unittest.TestCase):
             self.assertIn("BACKTEST RESULTS", out)
             self.assertIn("Do NOT use these simulated results as evidence of live edge", out)
 
+    def test_generic_backtest_rejects_active_candidate(self):
+        cfg = BotConfig()
+        cfg.strategy.name = "macro_donchian_ema72"
+        with patch("exchange.ExchangeConnector.fetch_ohlcv") as fetch_ohlcv:
+            with self.assertRaisesRegex(SystemExit, "does not model macro_donchian_ema72"):
+                run_backtest(cfg)
+        fetch_ohlcv.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

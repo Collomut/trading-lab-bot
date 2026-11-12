@@ -2,6 +2,22 @@
 
 **Decision: live trading is blocked.** The build rejects live exchange initialization in `ExchangeConnector._create_exchange`; setting `PAPER_TRADING=false` does not enable live orders. This is intentional. “PASS” below means a safeguard exists in this build, not that the strategy is profitable or production-ready.
 
+## Follow-up audit — 2026-11-12
+
+The active Railway deployment was inspected: it was live with one replica, the configured Testnet candidate, a $10,000 virtual balance, and no tracked positions. Its runtime logs showed normal worker cycles and no order activity in the sampled window. Health and a running worker do not validate the strategy's edge or authorize live trading.
+
+The repository had conflicting startup paths. Railway's detected Procfile started the dashboard directly, bypassing the documented SQLite-to-Supabase migration preflight; the Dockerfile also omitted it, and the checked-in Railway config named the obsolete Nixpacks builder. These paths now run the migration guard before the dashboard, use `exec` for clean process signaling, and identify Railpack consistently. The Dockerfile no longer installs unused `curl`. Requirements for direct dependencies are pinned to the versions in the current successful Railway build.
+
+The generic CLI backtest fetched only 500 candles and did not simulate the active EMA72/Donchian candidate. It now exits with a clear message instead of presenting irrelevant candidate results. A Python 3.11 CI workflow was added to compile the source and run the complete deterministic test suite on pushes and pull requests.
+
+Supabase security review found the `public.rls_auto_enable()` security-definer function executable by API roles. Execution is now revoked from `PUBLIC`, `anon`, `authenticated`, and `service_role`; the database event trigger remains enabled. The current security advisor reports only informational RLS-without-policy notices for `bot_private` tables. Those tables remain outside API access because the API roles lack schema usage grants; the bot uses its server-side database connection.
+
+Compilation, deployment-config parsing, 11 configuration tests, and 4 backtest/research tests passed locally. The full suite was not completed on this workstation: it only has Python 3.14, lacks the required `psycopg` package, and the initial run was interrupted after import/runtime failures. The new Python 3.11 CI run must pass before treating the repository suite as clean.
+
+**Deployment follow-up:** The repository contains legacy `railway.json` configuration, and Railway's published documentation says this format stops being read on 2026-12-01. The live service snapshot did not show a saved start command, so the runtime was relying on its detected startup file. The legacy file is corrected for the remaining transition window. Moving the service into Railway Infrastructure as Code requires the Railway CLI's migration, plan, and apply flow; this session's connected Railway tools do not expose that flow. Do not delete `railway.json` or add a competing `.railway/railway.ts` until the live plan confirms it preserves the existing service and volume.
+
+The Git review found the deployed branch contains the current code while `main` is nine commits behind; `main` is an ancestor and can be fast-forwarded without rewriting history. The separate coin-universe research branch tested BNB, XRP, ADA, DOGE, and LINK under an older combined strategy and reported more trades but materially worse net P&L and drawdown; those results do not support adding coins to the active EMA72/Donchian profile. A separate untracked Donchian research package reports negative stress-cost results and is not a viable production candidate. Neither research branch was merged into the active strategy.
+
 ## Follow-up audit — 2026-11-11
 
 The strategy's code fallbacks previously differed from `.env.example`: with variables omitted, the code selected 15-minute candles, 100 lookback candles, and only BTC/ETH, while the documented operating profile was 1-hour candles, 150 candles, BTC/ETH/SOL, and ADX 20. The code fallbacks and example are now aligned, and a regression test covers that default profile. This prevents an incomplete environment from silently selecting a different strategy profile. Explicit environment variables still take precedence.

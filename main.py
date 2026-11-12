@@ -132,6 +132,13 @@ def run_backtest(config: BotConfig):
     Historical replay simulation incorporating next-bar execution and fees.
     This replay is an exploratory research tool and does not prove live profitability.
     """
+    if config.strategy.name == "macro_donchian_ema72":
+        raise SystemExit(
+            "The generic CLI replay does not model macro_donchian_ema72. "
+            "Use the dedicated research replay with its required historical dataset; "
+            "do not interpret the generic replay as a candidate backtest."
+        )
+
     from exchange import ExchangeConnector
     from strategies import get_strategy, ohlcv_to_dataframe, Signal
     from risk_manager import RiskManager
