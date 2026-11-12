@@ -22,9 +22,9 @@ python main.py --once
 - Keep one replica and mount a Volume at `/app/data` with `DATA_DIR=/app/data`.
 - Set a long random `DASHBOARD_TOKEN`; keep exchange keys and `DATABASE_URL` in Railway variables.
 - Use matching Testnet keys and keep `PAPER_TRADING=true`. Live orders are blocked in this build.
-- Startup runs the guarded SQLite-to-Postgres migration check before starting the dashboard or trading worker; a migration error prevents startup.
+- Startup runs `start.py`, which completes the guarded SQLite-to-Postgres migration check before replacing itself with the dashboard/worker; a migration error prevents startup.
 - Account or order reconciliation failures halt trading. Process-monitored exits also depend on the worker and network staying online.
-- Railway uses the repository's Railpack configuration. The Procfile, Railway config, and Dockerfile share the same startup command.
+- Railway uses the repository's Railpack configuration. The Procfile, Railway config, and Dockerfile share the same Python startup entrypoint.
 - The GitHub Actions workflow compiles the Python sources and runs the deterministic test suite on every push and pull request.
 
 ## Operating boundaries

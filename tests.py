@@ -981,6 +981,66 @@ class TestStateStoreAndPersistence(unittest.TestCase):
             self.assertEqual(store.unresolved_orders(), [])
             self.assertIsNone(store.read_state("baseline_asset_balances"))
 
+    def test_completed_postgres_import_does_not_require_legacy_sqlite_file(self):
+        import postgres_state_store as postgres_store
+
+        imported_counts = {"state": 3, "positions": 0, "trades": 2}
+
+        class Cursor:
+            def __init__(self, row):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query):
+                if "to_regclass" in query:
+                    return Cursor({"table_name": "bot_private.storage_migrations"})
+                return Cursor({"counts_json": imported_counts})
+
+        class Pool:
+            def connection(self):
+                return Connection()
+
+            def close(self):
+                pass
+
+        with TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            missing_source = Path(temp_dir) / "removed_legacy.sqlite3"
+            with patch.object(postgres_store, "_conninfo_from_url", return_value={"port": "5432"}), \
+                    patch.object(postgres_store, "make_conninfo", return_value="test-dsn"), \
+                    patch.object(postgres_store, "ConnectionPool", return_value=Pool()):
+                result = postgres_store.PostgresStateStore.migrate_from_sqlite(
+                    "postgresql://test", missing_source, Path(temp_dir) / "trades.jsonl"
+                )
+
+        self.assertEqual(result["status"], "already_imported")
+        self.assertEqual(result["counts"], imported_counts)
+        self.assertIn("not required", result["backup"])
+
+    def test_startup_does_not_launch_dashboard_when_migration_fails(self):
+        import start
+
+        with patch("start.migrate_storage", return_value=1), patch("start.os.execv") as execv:
+            self.assertEqual(start.main(), 1)
+        execv.assert_not_called()
+
+    def test_startup_replaces_itself_with_dashboard_after_migration(self):
+        import start
+
+        with patch("start.migrate_storage", return_value=0), patch("start.os.execv") as execv:
+            self.assertEqual(start.main(), 0)
+        executable, arguments = execv.call_args.args
+        self.assertEqual(executable, sys.executable)
+        self.assertEqual(Path(arguments[1]).name, "dashboard.py")
+
 
 # ==============================================================================
 # 5. Exchange Connector & Security Suite

@@ -149,8 +149,6 @@ class PostgresStateStore:
     def migrate_from_sqlite(cls, database_url: str, sqlite_path: str | Path, trades_path: str | Path):
         """Back up and import the stopped SQLite store plus JSONL trade history atomically."""
         source = Path(sqlite_path)
-        if not source.is_file():
-            raise FileNotFoundError("SQLite source database is missing; import was not attempted")
         # Repeated deploys must not create backups or re-import once cutover succeeded.
         conninfo = _conninfo_from_url(database_url)
         if str(conninfo.get("port", "5432")) == "6543":
@@ -174,9 +172,11 @@ class PostgresStateStore:
                 )
             if marker:
                 return {"status": "already_imported", "counts": marker["counts_json"],
-                        "backup": "original SQLite and first-import backup retained"}
+                        "backup": "not required; a verified import marker already exists"}
         finally:
             check_pool.close()
+        if not source.is_file():
+            raise FileNotFoundError("SQLite source database is missing; import was not attempted")
         # A stable online backup remains on the Railway volume for rollback/audit.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = source.with_name(f"{source.stem}_pre_supabase_{stamp}{source.suffix}")

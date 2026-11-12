@@ -4,7 +4,7 @@
     "builder": "RAILPACK"
   },
   "deploy": {
-    "startCommand": "python migrate_sqlite_to_postgres.py && exec python dashboard.py",
+    "startCommand": "python start.py",
     "overlapSeconds": 0,
     "healthcheckPath": "/health/liveness",
     "healthcheckTimeout": 100,

@@ -13,4 +13,4 @@ COPY . .
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "python migrate_sqlite_to_postgres.py && exec python dashboard.py"]
+CMD ["python", "start.py"]
