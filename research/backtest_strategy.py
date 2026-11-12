@@ -256,7 +256,9 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
              initial_stop_model: str | None = None,
              trailing_activation_atr_multiple: float | None = None,
              trailing_uses_close: bool = False,
-             gap_exit_atr_multiple: float | None = None):
+             gap_exit_atr_multiple: float | None = None,
+             enable_breakeven_trailing: bool = True,
+             max_consecutive_losses: int | None = None):
     # Use common timestamps across all selected Binance symbols and intervals.
     common = set(frames[next(iter(frames))].timestamp_ms)
     for f in frames.values():
@@ -291,7 +293,8 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
                        "pnl_pct_on_notional": pnl / (p["entry"]*p["qty"])*100,
                        "reason": reason, "fee": p["entry_fee"]+exit_fee})
         consecutive_losses = consecutive_losses + 1 if pnl < 0 else 0
-        if enforce_risk_halts and consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
+        loss_limit = MAX_CONSECUTIVE_LOSSES if max_consecutive_losses is None else max_consecutive_losses
+        if enforce_risk_halts and consecutive_losses >= loss_limit:
             halted = True
             halt_reason = "three consecutive losing trades"
             halt_time = ts
@@ -346,6 +349,16 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
                         continue
                     stop_dist = fill - stop
                     target = None
+                elif initial_stop_model == "swing_low_floor_4pct":
+                    swing_low = float(prev_signal.swing_low_reference)
+                    if not math.isfinite(swing_low):
+                        continue
+                    stop = max(swing_low, fill * 0.96)
+                    if not math.isfinite(stop) or stop <= 0 or stop >= fill:
+                        continue
+                    stop_dist = fill - stop
+                    target = (fill + take_profit_atr_multiple * atr
+                              if take_profit_atr_multiple is not None and atr > 0 else None)
                 elif blueprint_stop_model and "swing_low_reference" in prev_signal.index:
                     stop = max(float(prev_signal.swing_low_reference), fill * 0.985)
                     if not math.isfinite(stop) or stop <= 0 or stop >= fill:
@@ -398,14 +411,14 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
                         trail_reference = p["highest"]
                     if p["custom_trail_active"] and math.isfinite(current_atr) and current_atr > 0:
                         p["stop"] = max(p["stop"], trail_reference - trailing_atr_multiple * current_atr)
-                elif p["break_even"]:
+                elif enable_breakeven_trailing and p["break_even"]:
                     if trailing_atr_multiple is not None:
                         current_atr = float(bar.atr) if "atr" in bar.index else 0.0
                         if math.isfinite(current_atr) and current_atr > 0:
                             p["stop"] = max(p["stop"], p["highest"] - trailing_atr_multiple * current_atr)
                     else:
                         p["stop"] = max(p["stop"], p["highest"] * 0.985)
-                elif bar.high >= p["entry"] * (1.0 + breakeven_trigger_pct):
+                elif enable_breakeven_trailing and bar.high >= p["entry"] * (1.0 + breakeven_trigger_pct):
                     p["break_even"] = True
                     p["stop"] = max(p["stop"], p["entry"])
         # Hourly approximation of equity monitoring circuit-breakers.

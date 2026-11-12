@@ -170,6 +170,21 @@ class TestConfigurationAndValidation(unittest.TestCase):
         self.assertTrue(any("STRATEGY must be one of" in e for e in errors))
         self.assertTrue(any("TIMEFRAME is unsupported" in e for e in errors))
 
+    def test_ema72_donchian_profile_is_testnet_only_and_requires_full_lookback(self):
+        cfg = BotConfig()
+        cfg.dashboard_token = "test-token"
+        cfg.strategy.name = "macro_donchian_ema72"
+        cfg.strategy.timeframe = "1h"
+        cfg.strategy.lookback_candles = 2501
+        structural_errors = [e for e in cfg.validate() if "API_KEY" not in e and "API_SECRET" not in e]
+        self.assertEqual(structural_errors, [])
+
+        cfg.strategy.lookback_candles = 2500
+        self.assertTrue(any("LOOKBACK_CANDLES >= 2501" in e for e in cfg.validate()))
+        cfg.strategy.lookback_candles = 2501
+        cfg.exchange.paper_trading = False
+        self.assertTrue(any("restricted to Binance Spot Testnet" in e for e in cfg.validate()))
+
     def test_trading_pairs_validation(self):
         cfg = BotConfig()
         cfg.strategy.trading_pairs = ["BTC/USDT", "BTC/USDT"]
@@ -461,8 +476,49 @@ class TestTechnicalIndicatorsAndStrategies(unittest.TestCase):
     def test_get_strategy_factory(self):
         strat = get_strategy("combined")
         self.assertIsInstance(strat, CombinedStrategy)
+        candidate = get_strategy("macro_donchian_ema72")
+        self.assertEqual(candidate.__class__.__name__, "MacroDonchianEma72Strategy")
         with self.assertRaises(ValueError):
             get_strategy("unknown_strat")
+
+    def test_ema72_donchian_uses_completed_breakout_and_position_aware_exit(self):
+        from strategies import MacroDonchianEma72Strategy
+
+        index = pd.date_range("2025-01-01", periods=2500, freq="1h")
+        close = np.full(2500, 100.0)
+        high = np.full(2500, 101.0)
+        low = np.full(2500, 99.0)
+        close[-1], high[-1], low[-1] = 102.0, 103.0, 101.0
+        frame = pd.DataFrame({"open": close, "high": high, "low": low, "close": close, "volume": 10.0}, index=index)
+        strategy = MacroDonchianEma72Strategy()
+
+        entry = strategy.analyze(frame, "BTC/USDT")
+        self.assertEqual(entry.signal, Signal.BUY)
+        self.assertGreater(entry.indicators["close"], entry.indicators["donchian_high168"])
+        self.assertGreater(entry.indicators["close"], entry.indicators["ema480"])
+        self.assertIn("swing_low_5", entry.indicators)
+
+        held = strategy.analyze(frame, "BTC/USDT", in_position=True)
+        self.assertEqual(held.signal, Signal.HOLD)
+
+        frame.iloc[-1, frame.columns.get_loc("close")] = 99.0
+        frame.iloc[-1, frame.columns.get_loc("high")] = 100.0
+        frame.iloc[-1, frame.columns.get_loc("low")] = 98.0
+        exit_signal = strategy.analyze(frame, "BTC/USDT", in_position=True)
+        self.assertEqual(exit_signal.signal, Signal.SELL)
+        self.assertLess(exit_signal.indicators["close"], exit_signal.indicators["ema72"])
+
+    def test_ema72_donchian_holds_on_short_or_gapped_warmup(self):
+        from strategies import MacroDonchianEma72Strategy
+
+        index = pd.date_range("2025-01-01", periods=2500, freq="1h")
+        values = np.full(2500, 100.0)
+        frame = pd.DataFrame({"open": values, "high": values + 1, "low": values - 1,
+                              "close": values, "volume": 10.0}, index=index)
+        strategy = MacroDonchianEma72Strategy()
+        self.assertEqual(strategy.analyze(frame.iloc[:-1], "BTC/USDT").signal, Signal.HOLD)
+        frame.index = frame.index[:2450].append(frame.index[2450:] + pd.Timedelta(hours=1))
+        self.assertEqual(strategy.analyze(frame, "BTC/USDT").signal, Signal.HOLD)
 
 
 # ==============================================================================
@@ -541,6 +597,29 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             rm.check_positions(lambda s: 101.8)
             self.assertTrue(rm.open_positions["BTC/USDT"].break_even_activated)
             self.assertGreaterEqual(rm.open_positions["BTC/USDT"].stop_loss_price, 100.0)
+
+    def test_ema72_position_uses_strategy_target_without_legacy_trailing(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(stop_loss_pct=2.0, take_profit_pct=3.0), persistence_dir=persistence_dir)
+            position = rm.open_position(
+                "BTC/USDT", 100.0, 1.0,
+                stop_loss_override=96.0,
+                take_profit_override=1010.0,
+                exit_policy="ema72_signal",
+            )
+            self.assertEqual(position.stop_loss_price, 96.0)
+            self.assertEqual(position.take_profit_price, 1010.0)
+            self.assertFalse(position.should_take_profit(200.0))
+            self.assertTrue(position.should_take_profit(1010.0))
+
+            self.assertEqual(rm.check_positions(lambda _: 110.0), [])
+            restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            persisted = restored.open_positions["BTC/USDT"]
+            self.assertEqual(persisted.exit_policy, "ema72_signal")
+            self.assertEqual(persisted.take_profit_price, 1010.0)
+            self.assertEqual(persisted.stop_loss_price, 96.0)
+            self.assertFalse(persisted.break_even_activated)
+            self.assertEqual(restored.check_positions(lambda _: 95.0), [("BTC/USDT", "STOP-LOSS triggered")])
 
     def test_break_even_protection_one_way_ratchet(self):
         with TemporaryDirectory() as tmpdir:
@@ -981,6 +1060,41 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         self.assertEqual(connector.fetch_closed_ohlcv("BTC/USDT", "1m", 10), [])
         self.assertEqual(connector._candle_sequence_issues["BTC/USDT"]["missing_intervals"], 1)
 
+    def test_long_ohlcv_history_is_paged_and_returned_in_timestamp_order(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector.exchange = Mock()
+        connector.exchange.parse_timeframe.return_value = 3600
+
+        def page(_symbol, _timeframe, since=None, limit=None):
+            self.assertEqual(limit, 1000)
+            timestamps = range(1000, 2000) if since is None else range(0, 1000)
+            return [[ts * 3_600_000, 1, 2, 1, 2, 3] for ts in timestamps]
+
+        connector.exchange.fetch_ohlcv.side_effect = page
+        candles = connector.fetch_ohlcv("BTC/USDT", "1h", 1500)
+        self.assertEqual(len(candles), 1500)
+        self.assertEqual(candles[0][0], 500 * 3_600_000)
+        self.assertEqual(candles[-1][0], 1999 * 3_600_000)
+        self.assertEqual(connector.exchange.fetch_ohlcv.call_count, 2)
+
+    def test_long_strategy_request_returns_required_completed_candle_count(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector._candle_sequence_issues = {}
+        connector.exchange = Mock()
+        connector.exchange.parse_timeframe.return_value = 3600
+        now = int(datetime.now(timezone.utc).timestamp() * 1000)
+        latest_open = now // 3_600_000 * 3_600_000
+        start = latest_open - 2500 * 3_600_000
+        connector.exchange.fetch_ohlcv.return_value = [
+            [start + i * 3_600_000, 100, 101, 99, 100, 10]
+            for i in range(2501)
+        ]
+        closed = connector.fetch_closed_ohlcv("BTC/USDT", "1h", 2501)
+        self.assertEqual(len(closed), 2500)
+        self.assertLess(closed[-1][0], latest_open)
+
     def test_closed_candle_return_correlation_is_aligned_by_timestamp(self):
         candles_a, candles_b = [], []
         for i in range(40):
@@ -1263,6 +1377,35 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         self.assertEqual(event["spread_sample_status"], "ok")
         self.assertEqual(event["measured_spread_bps"], round((0.2 / 100.1) * 10000, 2))
 
+    def test_ema72_signal_analysis_routes_exit_only_when_position_is_tracked(self):
+        bot = object.__new__(TradingBot)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 3_600_000
+        candles = [[now_ms - (2499 - i) * 3_600_000, 100, 101, 99, 100, 10] for i in range(2500)]
+        bot.config = SimpleNamespace(strategy=SimpleNamespace(
+            name="macro_donchian_ema72", timeframe="1h", lookback_candles=2501,
+        ))
+        bot.exchange = Mock()
+        bot.exchange.fetch_closed_ohlcv.return_value = candles
+        bot.exchange.get_ticker.return_value = {"bid": 99.9, "ask": 100.1}
+        bot.strategy = Mock()
+        bot.strategy.analyze.return_value = TradeSignal(
+            Signal.SELL, "BTC/USDT", 0.85, "EMA72 exit", {"strategy": "macro_donchian_ema72"}
+        )
+        bot.risk_manager = SimpleNamespace(open_positions={"BTC/USDT": object()}, store=Mock())
+        bot._last_analyzed_candle = {}
+        bot._analysis_error_states = {}
+        bot.last_signals = {}
+        bot._handle_buy_signal = Mock()
+        bot._handle_sell_signal = Mock()
+
+        with patch("bot_engine.evaluate_shadow_candidate", return_value={"signal": "HOLD", "status": "test"}):
+            bot.analyze_market("BTC/USDT")
+
+        bot.strategy.analyze.assert_called_once()
+        self.assertTrue(bot.strategy.analyze.call_args.kwargs["in_position"])
+        bot._handle_sell_signal.assert_called_once()
+        bot._handle_buy_signal.assert_not_called()
+
     def test_shadow_candidate_requires_history_and_uses_completed_candles(self):
         self.assertEqual(evaluate_shadow_candidate([])["status"], "insufficient_data")
 
@@ -1521,6 +1664,60 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             call_args = bot.exchange.place_native_stop_loss.call_args[0]
             self.assertEqual(call_args[0], "BTC/USDT")
             self.assertEqual(call_args[1], 0.01)
+
+    def test_ema72_testnet_buy_uses_swing_stop_and_strategy_exit_target(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.strategy.name = "macro_donchian_ema72"
+            cfg.strategy.timeframe = "1h"
+            cfg.strategy.lookback_candles = 2501
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_usdt_balance.return_value = 10000.0
+            bot.exchange.get_current_price.return_value = 100.0
+            bot.exchange.amount_to_precision.return_value = "10"
+            bot.exchange.get_market_limits.return_value = {
+                "min_amount": 0.1, "min_cost": 10.0, "active": True,
+            }
+            bot.exchange.get_order_book.return_value = {
+                "bids": [[99.9, 100.0]], "asks": [[100.0, 100.0]],
+            }
+            bot._has_correlated_open_position = lambda _symbol: (False, "")
+            buy_order = {
+                "id": "ema72-buy-1", "status": "closed", "filled": "10",
+                "average": "100", "fees": [{"currency": "USDT", "cost": "1"}],
+            }
+            bot._submit_market_order = Mock(return_value=(buy_order, "ema72-client-1"))
+            bot._fee_quote_cost = Mock(return_value=1.0)
+            bot._place_and_persist_native_stop = Mock(return_value=True)
+            bot.send_notification = Mock()
+            bot._log_trade = Mock()
+            bot.risk_manager.store.create_order_intent(
+                "ema72-client-1", "BTC/USDT", "buy", "10", {"test": True}
+            )
+            bot.risk_manager.store.update_order("ema72-client-1", "SUBMITTED")
+            bot.risk_manager.store.update_order(
+                "ema72-client-1", "FILLED", exchange_order_id="ema72-buy-1",
+                filled="10", average="100",
+            )
+
+            signal = TradeSignal(
+                Signal.BUY, "BTC/USDT", 0.85, "Test EMA72 entry",
+                {"atr": 2.0, "swing_low_5": 97.0},
+            )
+            bot._handle_buy_signal(signal, decision_key="test-candle")
+
+            position = bot.risk_manager.open_positions["BTC/USDT"]
+            self.assertEqual(position.stop_loss_price, 97.0)
+            self.assertEqual(position.take_profit_price, 300.0)
+            self.assertEqual(position.exit_policy, "ema72_signal")
+            self.assertTrue(bot._place_and_persist_native_stop.called)
+            self.assertEqual(bot._place_and_persist_native_stop.call_args.kwargs["fallback_sl"], 97.0)
+            self.assertEqual(bot.risk_manager.check_positions(lambda _symbol: 105.0), [])
+            self.assertEqual(position.stop_loss_price, 97.0)
+            self.assertFalse(position.break_even_activated)
 
     def test_f03_missing_fee_data_still_protects_and_records_position(self):
         """F-03: Missing fee/fill array must not abandon acquired coins unprotected."""
@@ -2011,6 +2208,29 @@ class TestBacktestingAndRealism(unittest.TestCase):
         # The signal's swing low is more than 4% away, so the first stop is
         # capped; the completed t=1 close then ratchets it to 104 - 2.5*2=99.
         self.assertAlmostEqual(sim["trades"][0]["exit"], 99.0, places=6)
+
+    def test_research_macro_donchian_stop_and_channel_exit_do_not_apply_legacy_trailing(self):
+        from research.backtest_strategy import simulate
+
+        frame = pd.DataFrame({
+            "timestamp_ms": [1_700_000_000_000 + i * 3_600_000 for i in range(3)],
+            "open": [100.0, 100.0, 100.0],
+            "high": [101.0, 110.0, 101.0],
+            "low": [99.0, 99.0, 97.0],
+            "close": [100.0, 109.0, 100.0],
+            "atr": [2.0, 2.0, 2.0],
+            "swing_low_reference": [90.0, 90.0, 90.0],
+            "signal": ["BUY", "SELL", "HOLD"],
+        })
+        sim = simulate(
+            {"BTCUSDT": frame}, 0.0, 0.0, enforce_risk_halts=False,
+            initial_stop_model="swing_low_floor_4pct",
+            take_profit_atr_multiple=100.0,
+            enable_breakeven_trailing=False,
+        )
+        self.assertEqual(len(sim["trades"]), 1)
+        self.assertEqual(sim["trades"][0]["reason"], "sell_consensus")
+        self.assertAlmostEqual(sim["trades"][0]["exit"], 100.0, places=6)
 
     def test_backtest_exploratory_warning_and_next_bar_logic(self):
         cfg = BotConfig()

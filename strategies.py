@@ -12,6 +12,7 @@ Upgraded features:
 """
 
 import logging
+import math
 from enum import Enum
 from dataclasses import dataclass
 
@@ -335,6 +336,89 @@ class MACD_Strategy:
         )
 
 
+class MacroDonchianEma72Strategy:
+    """Research candidate: 7-day breakout above EMA480, exit below EMA72.
+
+    Signals use completed hourly candles. The execution/risk layer supplies the
+    prior-five-bar swing stop with a 4% maximum distance and a distant 100xATR
+    target used by the independent replay as a finite approximation of no cap.
+    """
+
+    ENTRY_LOOKBACK = 168
+    MACRO_EMA_PERIOD = 480
+    EXIT_EMA_PERIOD = 72
+    MIN_CANDLES = 2500
+    INTERVAL = pd.Timedelta(hours=1)
+
+    def analyze(self, df: pd.DataFrame, symbol: str, *, in_position: bool = False) -> TradeSignal:
+        empty = TradeSignal(Signal.HOLD, symbol, 0.0, "Waiting for 2,500 contiguous hourly candles", {})
+        required = {"high", "low", "close"}
+        if df is None or len(df) < self.MIN_CANDLES or not required.issubset(df.columns):
+            return empty
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "Hourly candle timestamps are unavailable", {})
+        window = df.iloc[-self.MIN_CANDLES:]
+        if window.index.has_duplicates or not window.index.is_monotonic_increasing:
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "Candle timestamps are invalid", {})
+        if not window.index.to_series().diff().iloc[1:].eq(self.INTERVAL).all():
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "A gap exists in the 2,500-candle strategy warmup", {})
+
+        try:
+            close = pd.to_numeric(window["close"], errors="raise")
+            high = pd.to_numeric(window["high"], errors="raise")
+            low = pd.to_numeric(window["low"], errors="raise")
+            values = np.concatenate((close.to_numpy(), high.to_numpy(), low.to_numpy()))
+            if not np.isfinite(values).all() or (close <= 0).any() or (high <= 0).any() or (low <= 0).any():
+                raise ValueError("non-finite or non-positive candle values")
+            if (high < low).any() or (close > high).any() or (close < low).any():
+                raise ValueError("inconsistent OHLC values")
+            macro_ema = EMAIndicator(close=close, window=self.MACRO_EMA_PERIOD).ema_indicator()
+            exit_ema = EMAIndicator(close=close, window=self.EXIT_EMA_PERIOD).ema_indicator()
+            atr = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
+            prior_high = high.shift(1).rolling(self.ENTRY_LOOKBACK, min_periods=self.ENTRY_LOOKBACK).max()
+            swing_low = low.shift(1).rolling(5, min_periods=5).min()
+            current_close = float(close.iloc[-1])
+            macro_value = float(macro_ema.iloc[-1])
+            exit_value = float(exit_ema.iloc[-1])
+            high_value = float(prior_high.iloc[-1])
+            swing_value = float(swing_low.iloc[-1])
+            atr_value = float(atr.iloc[-1])
+            if not all(math.isfinite(v) and v > 0 for v in (
+                current_close, macro_value, exit_value, high_value, swing_value, atr_value
+            )):
+                raise ValueError("indicator warmup is incomplete")
+        except (TypeError, ValueError, OverflowError) as exc:
+            return TradeSignal(Signal.HOLD, symbol, 0.0, f"Invalid strategy data ({type(exc).__name__})", {})
+
+        indicators = {
+            "close": current_close,
+            "ema480": macro_value,
+            "ema72": exit_value,
+            "donchian_high168": high_value,
+            "swing_low_5": swing_value,
+            "atr": atr_value,
+            "strategy": "macro_donchian_ema72",
+            "entry_ready": bool(current_close > high_value and current_close > macro_value),
+            "exit_ready": bool(current_close < exit_value),
+        }
+        if in_position:
+            if current_close < exit_value:
+                return TradeSignal(
+                    Signal.SELL, symbol, 0.85,
+                    f"Completed 1h close below EMA72 ({current_close:.8g} < {exit_value:.8g})",
+                    indicators,
+                )
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "Position open; waiting for a completed close below EMA72", indicators)
+
+        if current_close > high_value and current_close > macro_value:
+            return TradeSignal(
+                Signal.BUY, symbol, 0.85,
+                f"Completed 1h close broke the prior 168-bar high above EMA480",
+                indicators,
+            )
+        return TradeSignal(Signal.HOLD, symbol, 0.0, "No 168-bar breakout above EMA480", indicators)
+
+
 class CombinedStrategy:
     """
     Combined rules-based strategy:
@@ -563,6 +647,7 @@ def get_strategy(
         "rsi_mean_reversion": RSI_Mean_Reversion_Strategy,
         "macd": MACD_Strategy,
         "combined": CombinedStrategy,
+        "macro_donchian_ema72": MacroDonchianEma72Strategy,
     }
     if name not in strategies:
         raise ValueError(

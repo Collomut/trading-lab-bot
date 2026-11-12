@@ -32,13 +32,14 @@ class Position:
     amount: float
     entry_time: str  # ISO 8601 string for easy JSON serialization
     stop_loss_price: float
-    take_profit_price: float
+    take_profit_price: float | None
     order_id: str = ""
     stop_order_id: str = ""
     stop_client_order_id: str = ""
     entry_fee_quote: float = 0.0
     highest_price: float = 0.0  # For trailing stop
     break_even_activated: bool = False
+    exit_policy: str = "risk_managed"
 
     @property
     def cost_basis(self) -> float:
@@ -64,7 +65,7 @@ class Position:
 
     def should_take_profit(self, current_price: float) -> bool:
         """Check if take-profit should trigger."""
-        return current_price >= self.take_profit_price
+        return self.take_profit_price is not None and current_price >= self.take_profit_price
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -250,13 +251,20 @@ class RiskManager:
                     position = Position.from_dict(pos_data)
                     numeric_values = (
                         position.entry_price, position.amount, position.stop_loss_price,
-                        position.take_profit_price, position.highest_price,
+                        position.highest_price,
+                    )
+                    valid_target = (
+                        position.take_profit_price is None and position.exit_policy == "ema72_signal"
+                    ) or (
+                        position.take_profit_price is not None
+                        and math.isfinite(float(position.take_profit_price))
+                        and position.take_profit_price > position.entry_price
                     )
                     if (position.symbol != sym or position.side != "long" or
                             not all(math.isfinite(float(value)) for value in numeric_values) or
                             position.entry_price <= 0 or position.amount <= 0 or
                             position.stop_loss_price <= 0 or
-                            position.take_profit_price <= position.entry_price):
+                            not valid_target or position.exit_policy not in {"risk_managed", "ema72_signal"}):
                         raise ValueError(f"invalid persisted position for {sym}")
                     self.open_positions[sym] = position
                 if self.open_positions:
@@ -527,20 +535,39 @@ class RiskManager:
         order_id: str = "",
         atr: float = 0.0,
         entry_fee_quote: float = 0.0,
+        stop_loss_override: float | None = None,
+        take_profit_override: float | None = None,
+        exit_policy: str = "risk_managed",
     ) -> Position:
         """Record and persist a new open position."""
+        if exit_policy not in {"risk_managed", "ema72_signal"}:
+            raise ValueError("Unsupported position exit policy")
+        selected_stop = self.calculate_stop_loss(entry_price, atr) if stop_loss_override is None else float(stop_loss_override)
+        selected_target = (
+            float(take_profit_override)
+            if take_profit_override is not None
+            else None if exit_policy == "ema72_signal"
+            else self.calculate_take_profit(entry_price)
+        )
+        if (not math.isfinite(float(entry_price)) or entry_price <= 0 or
+                not math.isfinite(float(amount)) or amount <= 0 or
+                not math.isfinite(selected_stop) or selected_stop <= 0 or selected_stop >= entry_price or
+                (selected_target is not None and
+                 (not math.isfinite(selected_target) or selected_target <= entry_price))):
+            raise ValueError("Invalid entry position prices or quantity")
         position = Position(
             symbol=symbol,
             side="long",
             entry_price=entry_price,
             amount=amount,
             entry_time=datetime.now(timezone.utc).isoformat(),
-            stop_loss_price=self.calculate_stop_loss(entry_price, atr),
-            take_profit_price=self.calculate_take_profit(entry_price),
+            stop_loss_price=selected_stop,
+            take_profit_price=selected_target,
             order_id=order_id,
             entry_fee_quote=max(0.0, float(entry_fee_quote)),
             highest_price=entry_price,
             break_even_activated=False,
+            exit_policy=exit_policy,
         )
         self.open_positions[symbol] = position
         if not self._save_positions():
@@ -551,7 +578,7 @@ class RiskManager:
             f"Entry: ${entry_price:,.2f} | "
             f"Amount: {amount:.6f} | "
             f"SL: ${position.stop_loss_price:,.2f} | "
-            f"TP: ${position.take_profit_price:,.2f}"
+            f"TP/exit: {'EMA72 signal' if position.take_profit_price is None else f'${position.take_profit_price:,.2f}'}"
         )
         return position
 
@@ -666,6 +693,15 @@ class RiskManager:
                 position.highest_price = current_price
 
             gain_pct = ((current_price - position.entry_price) / position.entry_price) * 100
+
+            # Signal-managed trend positions keep their strategy stop and use
+            # completed-candle exits; do not add an untested break-even/trail.
+            if position.exit_policy == "ema72_signal":
+                if position.should_stop_loss(current_price):
+                    to_close.append((symbol, "STOP-LOSS triggered"))
+                elif position.should_take_profit(current_price):
+                    to_close.append((symbol, "TAKE-PROFIT triggered"))
+                continue
 
             # 1. Break-Even Protection: Once up 1.5%, move stop to entry price
             if gain_pct >= 1.5 and not position.break_even_activated:

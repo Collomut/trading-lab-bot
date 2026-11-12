@@ -51,6 +51,13 @@ class TradingBot:
             max_atr_pct=config.strategy.max_atr_pct,
         )
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
+        if (config.strategy.name == "macro_donchian_ema72" and any(
+                position.exit_policy != "ema72_signal"
+                for position in self.risk_manager.open_positions.values()
+        )):
+            self.risk_manager.halt(
+                "Existing position uses a different exit policy; reconcile and close it before starting the EMA72 Testnet trial"
+            )
         self.is_running = False
         self._cycle_count = 0
         self._cycle_lock = threading.Lock()
@@ -295,7 +302,12 @@ class TradingBot:
 
         # Convert to DataFrame and run strategy once per completed candle.
         df = ohlcv_to_dataframe(ohlcv)
-        signal = self.strategy.analyze(df, symbol)
+        if getattr(self.config.strategy, "name", "combined") == "macro_donchian_ema72":
+            signal = self.strategy.analyze(
+                df, symbol, in_position=symbol in self.risk_manager.open_positions
+            )
+        else:
+            signal = self.strategy.analyze(df, symbol)
         self._last_analyzed_candle[symbol] = candle_timestamp
         self.last_signals[symbol] = {
             "signal": signal.signal.value,
@@ -332,7 +344,11 @@ class TradingBot:
                             "reason": str(vote.get("reason", ""))[:240],
                         }
             indicator_details = {}
-            for key in ("market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend", "consensus_required", "entry_gates"):
+            for key in (
+                "market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend",
+                "consensus_required", "entry_gates", "close", "ema480", "ema72",
+                "donchian_high168", "swing_low_5", "entry_ready", "exit_ready", "strategy",
+            ):
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):
                     indicator_details[key] = value
@@ -894,7 +910,21 @@ class TradingBot:
             return
 
         atr = signal.indicators.get("atr", 0.0)
-        stop_loss_price = self.risk_manager.calculate_stop_loss(current_price, atr=atr)
+        ema72_candidate = getattr(self.config.strategy, "name", "combined") == "macro_donchian_ema72"
+        swing_low = None
+        if ema72_candidate:
+            try:
+                swing_low = float(signal.indicators["swing_low_5"])
+                if not math.isfinite(swing_low) or swing_low <= 0:
+                    raise ValueError("invalid prior swing low")
+                stop_loss_price = max(swing_low, current_price * 0.96)
+                if not 0 < stop_loss_price < current_price:
+                    raise ValueError("strategy stop is not below the current price")
+            except (KeyError, TypeError, ValueError, OverflowError):
+                logger.warning("Entry blocked for %s because the strategy stop is unavailable or invalid", symbol)
+                return
+        else:
+            stop_loss_price = self.risk_manager.calculate_stop_loss(current_price, atr=atr)
         amount = self.risk_manager.calculate_position_size(
             usdt_balance, current_price, stop_loss_price
         )
@@ -1006,6 +1036,27 @@ class TradingBot:
                 fee_ambiguous = True
                 entry_fee_quote = 0.0
 
+            strategy_stop_adjusted_after_fill = False
+            actual_stop_loss = stop_loss_price
+            actual_take_profit = None
+            if ema72_candidate:
+                proposed_stop = max(float(swing_low), fill_price * 0.96)
+                if not math.isfinite(proposed_stop) or proposed_stop <= 0:
+                    self.risk_manager.halt(f"Candidate stop became invalid after fill for {symbol}; manual reconciliation required")
+                    return
+                if proposed_stop >= fill_price:
+                    # A fast gap can invalidate the swing reference after a
+                    # market buy. Protect the acquired testnet inventory with
+                    # a 4% fallback, then halt for explicit review.
+                    actual_stop_loss = fill_price * 0.96
+                    strategy_stop_adjusted_after_fill = True
+                else:
+                    actual_stop_loss = proposed_stop
+                actual_take_profit = fill_price + 100.0 * float(atr)
+                if not math.isfinite(actual_take_profit) or actual_take_profit <= fill_price:
+                    self.risk_manager.halt(f"Candidate target became invalid after fill for {symbol}; manual reconciliation required")
+                    return
+
             try:
                 self.risk_manager.open_position(
                     symbol=symbol,
@@ -1014,6 +1065,9 @@ class TradingBot:
                     order_id=order.get("id", ""),
                     atr=atr,
                     entry_fee_quote=entry_fee_quote,
+                    stop_loss_override=actual_stop_loss if ema72_candidate else None,
+                    take_profit_override=actual_take_profit if ema72_candidate else None,
+                    exit_policy="ema72_signal" if ema72_candidate else "risk_managed",
                 )
             except Exception as exc:
                 logger.error("Failed to open local position: %s", exc)
@@ -1032,7 +1086,7 @@ class TradingBot:
             # F-02: Even if local persistence failed or risk_manager is halted,
             # we MUST still place the native stop loss on the exchange for the acquired coins!
             stop_placed = self._place_and_persist_native_stop(
-                symbol, order.get("id", ""), fallback_sl=stop_loss_price, fallback_amount=fill_amount
+                symbol, order.get("id", ""), fallback_sl=actual_stop_loss, fallback_amount=fill_amount
             )
 
             if self.risk_manager._is_halted or not stop_placed:
@@ -1058,6 +1112,20 @@ class TradingBot:
                 self.risk_manager.halt(f"Buy fee details were incomplete for {symbol}; position protected with stop, operator reconciliation required")
                 return
 
+            if strategy_stop_adjusted_after_fill:
+                self.risk_manager.store.append_event("strategy_stop_adjusted_after_fill", {
+                    "symbol": symbol,
+                    "strategy": "macro_donchian_ema72",
+                    "fill_price": fill_price,
+                    "fallback_stop_price": actual_stop_loss,
+                    "swing_low_reference": swing_low,
+                    "protective_stop_placed": True,
+                })
+                self.risk_manager.halt(
+                    f"Market fill invalidated the candidate swing stop for {symbol}; 4% fallback protected position, operator review required"
+                )
+                return
+
             self.risk_manager.store.mark_order_applied(client_order_id)
             if partial_terminal_fill:
                 self.risk_manager.halt(f"Partial entry fill for {symbol} was protected; manual review required")
@@ -1067,9 +1135,14 @@ class TradingBot:
                     "protected_amount": str(net_filled),
                 })
 
-            pos = self.risk_manager.positions.get(symbol)
+            pos = self.risk_manager.open_positions.get(symbol)
             sl_text = f"${pos.stop_loss_price:,.2f}" if pos else "N/A"
-            tp_text = f"${pos.take_profit_price:,.2f}" if pos else "N/A"
+            tp_text = (
+                f"${pos.take_profit_price:,.2f} (100×ATR backstop)" if pos and pos.exit_policy == "ema72_signal" and pos.take_profit_price is not None
+                else "EMA72 completed-candle exit" if pos and pos.exit_policy == "ema72_signal"
+                else f"${pos.take_profit_price:,.2f}" if pos and pos.take_profit_price is not None
+                else "N/A"
+            )
 
             msg = (
                 f"🟢 *BOT BUY EXECUTED*\n"
@@ -1205,6 +1278,8 @@ class TradingBot:
         """Check all open positions for Trailing SL, Breakeven, and TP triggers."""
         # 1. Sync any tightened break-even or trailing stops to Binance exchange (F-05)
         for sym, pos in list(self.risk_manager.open_positions.items()):
+            if pos.exit_policy == "ema72_signal":
+                continue
             cur_p = self.exchange.get_current_price(sym)
             if cur_p is not None and cur_p > 0:
                 gain_pct = ((cur_p - pos.entry_price) / pos.entry_price) * 100
@@ -1334,16 +1409,18 @@ class TradingBot:
             for symbol, pos in positions.items():
                 current = self.exchange.get_current_price(symbol)
                 if current is None or current <= 0:
-                    print(f"    ⚠️ {symbol}: price unavailable | SL: ${pos.stop_loss_price:,.2f} | TP: ${pos.take_profit_price:,.2f}")
+                    target = "EMA72 close exit" if pos.exit_policy == "ema72_signal" else f"${pos.take_profit_price:,.2f}"
+                    print(f"    ⚠️ {symbol}: price unavailable | SL: ${pos.stop_loss_price:,.2f} | TP/exit: {target}")
                     continue
                 pnl = pos.unrealized_pnl(current)
                 pnl_pct = pos.unrealized_pnl_pct(current)
                 emoji = "📈" if pnl >= 0 else "📉"
                 be_tag = " [BREAK-EVEN]" if pos.break_even_activated else ""
+                target = "EMA72 close exit" if pos.exit_policy == "ema72_signal" else f"${pos.take_profit_price:,.2f}"
                 print(
                     f"    {emoji} {symbol}: ${pos.entry_price:,.2f} → "
                     f"${current:,.2f} | P&L: ${pnl:+,.2f} ({pnl_pct:+.2f}%){be_tag} | "
-                    f"SL: ${pos.stop_loss_price:,.2f} | TP: ${pos.take_profit_price:,.2f}"
+                    f"SL: ${pos.stop_loss_price:,.2f} | TP/exit: {target}"
                 )
 
         print(f"{'─' * 60}")

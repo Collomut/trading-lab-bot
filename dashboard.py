@@ -435,7 +435,10 @@ class WebDashboard:
                 pos_dict["unrealized_pnl"] = None
                 pos_dict["unrealized_pnl_pct"] = None
                 pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
-                pos_dict["target_gain_dollars"] = round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
+                pos_dict["target_gain_dollars"] = (
+                    round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
+                    if pos.take_profit_price is not None else None
+                )
                 positions[sym] = pos_dict
             else:
                 pos_pnl = (cur_p - pos.entry_price) * pos.amount
@@ -447,7 +450,10 @@ class WebDashboard:
                 pos_dict["unrealized_pnl"] = round(pos_pnl, 2)
                 pos_dict["unrealized_pnl_pct"] = round(pos_pnl_pct, 2)
                 pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
-                pos_dict["target_gain_dollars"] = round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
+                pos_dict["target_gain_dollars"] = (
+                    round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
+                    if pos.take_profit_price is not None else None
+                )
                 positions[sym] = pos_dict
 
         # 4. Total portfolio net worth = Cash + Open Position Values
@@ -535,6 +541,11 @@ class WebDashboard:
             "daily_loss_limit_pct": self.config.risk.max_daily_loss_pct,
             "stop_loss_pct": self.config.risk.stop_loss_pct,
             "take_profit_pct": self.config.risk.take_profit_pct,
+            "take_profit_managed_by_strategy": self.config.strategy.name == "macro_donchian_ema72",
+            "strategy_exit_description": (
+                "Completed 1-hour close below EMA72; 100×ATR target is a distant backstop"
+                if self.config.strategy.name == "macro_donchian_ema72" else "Fixed take-profit"
+            ),
             "regime_filter_enabled": self.config.strategy.regime_filter_enabled,
             "min_trend_adx": self.config.strategy.min_trend_adx,
             "max_atr_pct": self.config.strategy.max_atr_pct,

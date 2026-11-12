@@ -598,17 +598,62 @@ class ExchangeConnector:
 
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
         """
-        Fetch OHLCV (candlestick) data for a trading pair.
+        Fetch OHLCV data, paging backward when more than Binance's 1,000-row
+        per-request limit is needed for a long indicator warmup.
 
         Returns list of [timestamp, open, high, low, close, volume]
         """
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0 or limit > 5000:
+            logger.error("Rejected invalid OHLCV limit for %s", symbol)
+            return []
         with self._exchange_lock:
             try:
-                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-                logger.debug(f"Fetched {len(ohlcv)} candles for {symbol} ({timeframe})")
+                if limit <= 1000:
+                    ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                else:
+                    step_ms = int(float(self.exchange.parse_timeframe(timeframe)) * 1000)
+                    if step_ms <= 0:
+                        return []
+                    page_size = 1000
+                    latest = self.exchange.fetch_ohlcv(symbol, timeframe, limit=page_size) or []
+                    candles_by_time = {int(row[0]): row for row in latest if isinstance(row, (list, tuple)) and len(row) >= 6}
+                    if not candles_by_time:
+                        return []
+                    first_timestamp = min(candles_by_time)
+                    pages_needed = (limit + page_size - 1) // page_size + 1
+                    for _ in range(pages_needed - 1):
+                        if len(candles_by_time) >= limit:
+                            break
+                        since = first_timestamp - page_size * step_ms
+                        older = self.exchange.fetch_ohlcv(
+                            symbol, timeframe, since=since, limit=page_size
+                        ) or []
+                        new_rows = [
+                            row for row in older
+                            if isinstance(row, (list, tuple)) and len(row) >= 6
+                            and int(row[0]) < first_timestamp
+                        ]
+                        if not new_rows:
+                            break
+                        for row in new_rows:
+                            candles_by_time[int(row[0])] = row
+                        new_first = min(int(row[0]) for row in new_rows)
+                        if new_first >= first_timestamp:
+                            break
+                        first_timestamp = new_first
+                    ohlcv = [candles_by_time[timestamp] for timestamp in sorted(candles_by_time)[-limit:]]
+                    if len(ohlcv) < limit:
+                        logger.warning(
+                            "Only %s of %s requested candles are available for %s (%s)",
+                            len(ohlcv), limit, symbol, timeframe,
+                        )
+                logger.debug("Fetched %s candles for %s (%s)", len(ohlcv), symbol, timeframe)
                 return ohlcv
             except ccxt.BaseError as e:
                 logger.error("Failed to fetch OHLCV for %s (%s)", symbol, type(e).__name__)
+                return []
+            except (TypeError, ValueError, IndexError, OverflowError) as e:
+                logger.error("Invalid OHLCV pagination response for %s (%s)", symbol, type(e).__name__)
                 return []
 
     def fetch_closed_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
