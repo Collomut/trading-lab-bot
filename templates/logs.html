@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Activity · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m7">
-  <script src="/assets/app.js?v=m7" defer></script>
+  <link rel="stylesheet" href="/assets/app.css?v=m8">
+  <script src="/assets/app.js?v=m8" defer></script>
 </head>
 <body>
 <nav><div class="nav-inner">
@@ -128,6 +128,40 @@
 
     if(e.type==='market_check'){
       if(d.reason)appendText(card,'p','log-reason',d.reason);
+      const indicators=d.indicators||{};
+      if(indicators.strategy==='macro_donchian_ema72'){
+        const close=Number(indicators.close),ema=Number(indicators.ema480),high=Number(indicators.donchian_high168);
+        if([close,ema,high].every(value=>Number.isFinite(value)&&value>0)){
+          const panel=document.createElement('section');panel.className='decision-levels';
+          const entryReady=String(d.signal||'').toUpperCase()==='BUY'&&indicators.entry_ready===true;
+          appendText(panel,'strong','decision-levels-title','Entry price checks');
+          appendText(panel,'p','decision-levels-help','A BUY needs a completed candle close above both levels.');
+          const cells=document.createElement('div');cells.className='decision-level-grid';
+          const formatPrice=value=>value>=1000?value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):value.toLocaleString(undefined,{maximumFractionDigits:4});
+          const closeCell=document.createElement('div');closeCell.className='decision-level-cell';
+          appendText(closeCell,'span','decision-level-label','Last candle close');
+          appendText(closeCell,'strong','decision-level-value',formatPrice(close));
+          appendText(closeCell,'span','decision-level-status','Completed candle reference');
+          cells.append(closeCell);
+          for(const [label,level] of [['168-hour high',high],['EMA480 trend level',ema]]){
+            const cell=document.createElement('div');cell.className='decision-level-cell';
+            appendText(cell,'span','decision-level-label',label);
+            appendText(cell,'strong','decision-level-value',formatPrice(level));
+            const gap=level/close-1;
+            const status=gap>0?`${(gap*100).toFixed(2)}% below level`:gap<0?`${((close/level-1)*100).toFixed(2)}% above level`:'At level · strict close above required';
+            appendText(cell,'span',`decision-level-status ${gap<=0?'level-pass':'level-wait'}`,status);
+            cells.append(cell);
+          }
+          panel.append(cells);
+          const required=Math.max(ema,high);
+          const distancePct=Math.max(0,(required/close-1)*100);
+          appendText(panel,'div',`decision-level-summary ${entryReady?'summary-ready':''}`,
+            entryReady?`${String(d.signal||'').toUpperCase()} signal · both price checks passed`
+              :distancePct>0?`${distancePct.toFixed(2)}% rise to the higher level; the close must clear both filters`
+              :'Both price levels are clear, but this check did not produce a BUY signal');
+          card.append(panel);
+        }
+      }
       const votes=d.votes||{};
       const voteLines=document.createElement('div');voteLines.className='log-votes';
       for(const [name,vote] of Object.entries(votes)){
@@ -140,7 +174,7 @@
       }
       if(Object.keys(votes).length)card.append(voteLines);
       if(votes.rsi?.reason)appendText(card,'p','log-reason',`RSI detail: ${votes.rsi.reason}`);
-      const gates=d.indicators?.entry_gates;
+      const gates=indicators.entry_gates;
       if(gates&&typeof gates==='object'){
         const gateLine=document.createElement('div');gateLine.className='log-gates';
         for(const [name,gate] of Object.entries(gates)){
@@ -156,9 +190,9 @@
       }
       const meta=[];
       if(d.timeframe)meta.push(`Timeframe ${d.timeframe}`);
-      if(d.indicators?.market_regime)meta.push(`Market ${String(d.indicators.market_regime).replaceAll('_',' ')}`);
-      if(d.indicators?.adx!=null)meta.push(`ADX ${d.indicators.adx}`);
-      if(d.indicators?.atr_pct!=null)meta.push(`ATR ${d.indicators.atr_pct}%`);
+      if(indicators.market_regime)meta.push(`Market ${String(indicators.market_regime).replaceAll('_',' ')}`);
+      if(indicators.adx!=null)meta.push(`ADX ${indicators.adx}`);
+      if(indicators.atr_pct!=null)meta.push(`ATR ${indicators.atr_pct}%`);
       if(d.spread_sample_status==='ok'&&d.measured_spread_bps!=null)meta.push(`Spread ${d.measured_spread_bps} bps`);
       else if(d.spread_sample_status&&d.spread_sample_status!=='unknown')meta.push(`Spread ${String(d.spread_sample_status).replaceAll('_',' ')}`);
       if(meta.length)appendText(card,'p','log-reason',meta.join(' · '));

@@ -37,8 +37,8 @@ LOGIN_HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Operator Login · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m7">
-  <script src="/assets/app.js?v=m7" defer></script>
+  <link rel="stylesheet" href="/assets/app.css?v=m8">
+  <script src="/assets/app.js?v=m8" defer></script>
 </head>
 <body>
 <nav>
@@ -620,10 +620,16 @@ class WebDashboard:
                             "reason": str(vote.get("reason", ""))[:240],
                         }
             safe_indicators = {}
-            for key in ("market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend", "consensus_required", "entry_gates"):
+            for key in (
+                "market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend",
+                "consensus_required", "entry_gates", "close", "ema480", "ema72",
+                "donchian_high168", "entry_ready", "exit_ready",
+            ):
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):
                     safe_indicators[key] = value
+            if indicators.get("strategy") is not None:
+                safe_indicators["strategy"] = str(indicators["strategy"])[:48]
             return {
                 "symbol": str(details.get("symbol", ""))[:32],
                 "timeframe": str(details.get("timeframe", ""))[:12],

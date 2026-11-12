@@ -88,6 +88,11 @@ class TestShadowLogSafety(unittest.TestCase):
                 "reason": "breakout", "private": "must not pass",
                 "indicators": {"adx": 25, "close": 100, "secret": "must not pass"},
             },
+            "indicators": {
+                "strategy": "macro_donchian_ema72", "close": 100.0, "ema480": 110.0,
+                "ema72": 103.0, "donchian_high168": 108.0, "entry_ready": False,
+                "secret": "must not pass",
+            },
             "measured_spread_bps": 12.5, "top_bid": 100.0, "top_ask": 100.25,
             "spread_sample_status": "ok", "private": "must not pass",
         })
@@ -95,6 +100,10 @@ class TestShadowLogSafety(unittest.TestCase):
         self.assertEqual(safe["measured_spread_bps"], 12.5)
         self.assertEqual(safe["spread_sample_status"], "ok")
         self.assertNotIn("private", safe)
+        self.assertEqual(safe["indicators"]["strategy"], "macro_donchian_ema72")
+        self.assertEqual(safe["indicators"]["ema480"], 110.0)
+        self.assertEqual(safe["indicators"]["donchian_high168"], 108.0)
+        self.assertNotIn("secret", safe["indicators"])
 
         gap_safe = WebDashboard._safe_log_details("market_data_issue", {
             "symbol": "BTC/USDT", "issue": "candle_sequence_gap",
