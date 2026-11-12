@@ -27,7 +27,25 @@ function renderMarketChecks(d){
   const gateNote=document.createElement('p');gateNote.className='help';gateNote.textContent=gateSummary;box.append(gateNote);
   const reason=document.createElement('p');reason.className='help';reason.textContent=item?.reason||'Decision reason unavailable';box.append(reason);
   const votes=indicators.strategy_votes;
-  if(votes&&typeof votes==='object'){
+  if(isDonchian){
+   const agreement=document.createElement('div');agreement.className='vote-agreement';
+   const valid=[indicators.close,indicators.ema480,indicators.ema72,indicators.donchian_high168].every(v=>Number.isFinite(Number(v))&&Number(v)>0);
+   const result=document.createElement('strong');result.className=`vote-chip vote-result ${valid?(indicators.entry_ready?'is-buy':'is-wait'):'is-wait'}`;
+   result.textContent=valid?`EMA72 strategy · ${indicators.entry_ready?'ENTRY READY':'WAITING FOR ENTRY'}`:'EMA72 strategy · WARMUP / DATA CHECK';agreement.append(result);
+   const chips=document.createElement('div');chips.className='vote-chips';chips.setAttribute('aria-label','Donchian breakout and EMA strategy rules');
+   if(valid){
+    const rules=[
+     ['168-bar breakout',Number(indicators.close)>Number(indicators.donchian_high168),'PASS','WAIT'],
+     ['EMA480 trend',Number(indicators.close)>Number(indicators.ema480),'PASS','BLOCK'],
+     ['EMA72 exit',Boolean(indicators.exit_ready),'TRIGGERED','CLEAR'],
+    ];
+    for(const [name,passed,yes,no] of rules){const chip=document.createElement('span');chip.className=`vote-chip ${name==='EMA72 exit'&&passed?'is-sell':passed?'is-buy':'is-wait'}`;chip.textContent=`${name} · ${passed?yes:no}`;chips.append(chip)}
+   }else{
+    const chip=document.createElement('span');chip.className='vote-chip is-wait';chip.textContent=item?.reason||'Waiting for valid strategy data';chips.append(chip)
+   }
+   agreement.append(chips);box.append(agreement);
+   const note=document.createElement('p');note.className='help';note.textContent='This strategy uses breakout and EMA rules, not EMA/RSI/MACD voting. EMA72 is an exit rule for open positions.';box.append(note)
+  }else if(votes&&typeof votes==='object'){
    const voteEntries=Object.entries(votes);
    const counts={BUY:0,SELL:0,HOLD:0};
    for(const [,vote] of voteEntries){const signal=String(vote?.signal||'HOLD').toUpperCase();if(Object.hasOwn(counts,signal))counts[signal]++}

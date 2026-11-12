@@ -2134,6 +2134,16 @@ class TestDashboardAuthMiddleware(unittest.TestCase):
 class TestTemplatesWordingAndMobileUx(unittest.TestCase):
     """Verifies plain-English wording, absence of misleading claims, glossary clarity, and mobile UI responsiveness."""
 
+    def test_ema72_strategy_shows_rule_status_instead_of_voting_unavailable(self):
+        strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
+        self.assertIn("if(isDonchian){", strategy_page)
+        self.assertIn("Donchian breakout and EMA strategy rules", strategy_page)
+        self.assertIn("EMA72 strategy · WARMUP / DATA CHECK", strategy_page)
+        self.assertIn(
+            "This strategy uses breakout and EMA rules, not EMA/RSI/MACD voting.",
+            strategy_page,
+        )
+
     def test_wording_safety_no_misleading_profit_claims(self):
         banned_phrases = [
             "guaranteed profit",
