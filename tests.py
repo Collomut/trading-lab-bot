@@ -2512,6 +2512,7 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
             "Account value / net worth",
             "Profit and loss (P&amp;L)",
             "Realized and unrealized P&amp;L",
+            "Profit factor",
             "Stop-loss",
             "Take-profit",
             "Fees and slippage",
