@@ -29,6 +29,7 @@ from exchange import AccountAccessError, ExchangeConnector
 from strategies import get_strategy, ohlcv_to_dataframe, Signal
 from risk_manager import RiskManager
 from shadow_strategy import CANDIDATE_ID, evaluate_shadow_candidate
+from regime_router import evaluate_regime_router
 
 logger = logging.getLogger("bot.engine")
 
@@ -317,6 +318,25 @@ class TradingBot:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+        # Read-only regime routing research. The observer has no order access,
+        # and its output never replaces the configured strategy or its exits.
+        router_observation = {"status": "unavailable", "regime": "uncertain",
+                              "route": "no_validated_strategy", "entry_authorized": False,
+                              "reason": "The hourly regime observer is unavailable for this configuration."}
+        if self.config.strategy.timeframe == "1h":
+            try:
+                router_observation = evaluate_regime_router(
+                    ohlcv, getattr(self.config.strategy, "name", "combined")
+                )
+            except Exception as exc:
+                # Research telemetry must never change trading decisions.
+                router_observation = {
+                    "status": "error", "regime": "uncertain",
+                    "route": "no_validated_strategy", "entry_authorized": False,
+                    "reason": f"observer_error_{type(exc).__name__}"[:64],
+                }
+        self.last_signals[symbol]["regime_router"] = router_observation
+
         # Research-only observer. It reads the closed raw candles separately
         # and is never routed to the active strategy or the order handlers.
         shadow = {"candidate_id": CANDIDATE_ID, "signal": "HOLD", "status": "unavailable"}
@@ -366,6 +386,7 @@ class TradingBot:
                 "votes": vote_details,
                 "indicators": indicator_details,
                 "shadow": shadow,
+                "regime_router": router_observation,
             })
         except Exception:
             logger.exception("Could not persist market decision for %s", symbol)

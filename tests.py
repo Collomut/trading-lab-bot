@@ -66,6 +66,7 @@ from strategies import (
     ohlcv_to_dataframe,
 )
 from shadow_strategy import evaluate_shadow_candidate
+from regime_router import evaluate_regime_router
 
 
 class TestShadowLogSafety(unittest.TestCase):
@@ -114,6 +115,54 @@ class TestShadowLogSafety(unittest.TestCase):
         })
         self.assertEqual(gap_safe["missing_intervals"], 1)
         self.assertNotIn("api_key", gap_safe)
+
+
+class TestShadowRegimeRouter(unittest.TestCase):
+    @staticmethod
+    def candles(kind="trend"):
+        candles = []
+        for index in range(2501):
+            if kind == "trend":
+                close = 100 * (1.001 ** index)
+                spread = close * 0.002
+            elif kind == "volatile":
+                close = 100.0
+                spread = 5.0
+            else:
+                close = 100.0
+                spread = 0.2
+            candles.append([
+                1_700_000_000_000 + index * 3_600_000,
+                close, close + spread, close - spread, close, 100.0,
+            ])
+        return candles
+
+    def test_router_is_shadow_only_and_requires_persistent_uptrend(self):
+        result = evaluate_regime_router(self.candles(), "macro_donchian_ema72")
+        self.assertEqual(result["regime"], "uptrend")
+        self.assertEqual(result["route"], "observe_existing_strategy_only")
+        self.assertFalse(result["entry_authorized"])
+        self.assertEqual(result["raw_regimes"], ["uptrend"] * 3)
+
+    def test_router_fails_closed_for_range_and_high_volatility(self):
+        range_result = evaluate_regime_router(self.candles("range"), "macro_donchian_ema72")
+        volatile_result = evaluate_regime_router(self.candles("volatile"), "macro_donchian_ema72")
+        self.assertEqual(range_result["regime"], "range")
+        self.assertEqual(range_result["route"], "no_validated_strategy")
+        self.assertEqual(volatile_result["regime"], "high_volatility")
+        self.assertEqual(volatile_result["route"], "no_validated_strategy")
+        self.assertFalse(range_result["entry_authorized"])
+        self.assertFalse(volatile_result["entry_authorized"])
+
+    def test_router_rejects_short_and_gapped_history(self):
+        short = evaluate_regime_router(self.candles()[:100], "macro_donchian_ema72")
+        self.assertEqual(short["status"], "unavailable")
+        self.assertEqual(short["regime"], "uncertain")
+        gapped = self.candles()
+        gapped[100][0] += 3_600_000
+        result = evaluate_regime_router(gapped, "macro_donchian_ema72")
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["route"], "no_validated_strategy")
 
 
 # ==============================================================================
@@ -2210,6 +2259,13 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
             "This strategy uses breakout and EMA rules, not EMA/RSI/MACD voting.",
             strategy_page,
         )
+
+    def test_regime_router_panel_is_explicitly_shadow_only(self):
+        strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
+        self.assertIn("Regime router · shadow", strategy_page)
+        self.assertIn("It does not switch strategies, place orders, or change exits.", strategy_page)
+        self.assertIn("three completed hourly candles", strategy_page)
+        self.assertIn("No strategy selected", strategy_page)
 
     def test_wording_safety_no_misleading_profit_claims(self):
         banned_phrases = [
