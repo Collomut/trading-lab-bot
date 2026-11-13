@@ -1,9 +1,9 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strategy · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m8"><script src="/assets/app.js?v=m8" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link active" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Configuration</div><h1>Strategy &amp; risk</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state" data-skeleton aria-busy="true">Loading…</span></div></header><div class="grid two"><section class="card"><h2>Signal</h2><div id="strategy" class="metric-label" data-skeleton aria-busy="true">Loading…</div><p class="help">The active strategy defines the entry signal, exit signal, and protective stop. Backtest results do not predict future returns.</p></section><section class="card"><h2>Risk limits</h2><div id="limits"></div></section></div><section class="card section-card"><h2>Latest market checks</h2><p class="help">Checks use completed candles. Entry and exit rules depend on the selected strategy; protective stops remain active between checks.</p><div id="regimes" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for market data…</div></div></section><section class="card section-card"><h2>Regime router · shadow</h2><p class="help">This observer classifies market conditions for research. It does not switch strategies, place orders, or change exits. A regime must persist for three completed hourly candles.</p><div id="router" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for enough market history…</div></div></section><div class="notice compact"><strong>Limits are estimates.</strong><span>They do not cap losses during gaps, outages, or poor fills.</span></div><footer>Paper mode is for software practice; these rules have not proven a trading edge. <a href="/terms">Open glossary</a></footer></main><script>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strategy · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m8"><script src="/assets/app.js?v=m8" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link active" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Configuration</div><h1>Strategy &amp; risk</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state" data-skeleton aria-busy="true">Loading…</span></div></header><div class="grid two"><section class="card"><h2>Signal</h2><div id="strategy" class="metric-label" data-skeleton aria-busy="true">Loading…</div><p class="help">The active strategy defines the entry signal, exit signal, and protective stop. Backtest results do not predict future returns.</p></section><section class="card"><h2>Risk limits</h2><div id="limits"></div></section></div><section class="card section-card"><h2>Latest market checks</h2><p class="help">Checks use completed candles. Entry and exit rules depend on the selected strategy; protective stops remain active between checks.</p><div id="regimes" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for market data…</div></div></section><section class="card section-card"><h2 id="router-title">Regime router</h2><p id="router-description" class="help">Market conditions are classified from completed hourly candles. Dynamic routing requires three completed hourly candles before enabling an entry route.</p><div id="router" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for enough market history…</div></div></section><div class="notice compact"><strong>Limits are estimates.</strong><span>They do not cap losses during gaps, outages, or poor fills.</span></div><footer>Paper mode is for software practice; these rules have not proven a trading edge. <a href="/terms">Open glossary</a></footer></main><script>
 const pct=v=>`${Number(v||0).toLocaleString()}%`;
 function renderMarketChecks(d){
  const box=document.getElementById('regimes');
  const activeStrategy=String(d.strategy_name||'').toLowerCase();
- const activeDonchian=activeStrategy==='macro_donchian_ema72';
+ const activeDonchian=activeStrategy==='macro_donchian_ema72'||activeStrategy==='dynamic_regime';
  const signals=d.latest_signals&&typeof d.latest_signals==='object'?d.latest_signals:{};
  const entries=Object.entries(signals);
  box.replaceChildren();
@@ -24,8 +24,9 @@ function renderMarketChecks(d){
   const gateSummary=isDonchian
    ? item?.signal==='BUY'?'Breakout entry conditions pass':item?.signal==='SELL'?'EMA72 exit condition passed':'No breakout entry; exits are checked only for open positions'
    : buyCandidate?(blockers.length?`BUY setup blocked by ${blockers.join(', ')}`:'BUY setup passes strategy gates'):'No BUY consensus · gate status is informational';
+  const hasDonchianValues=[indicators.close,indicators.ema480,indicators.ema72,indicators.donchian_high168].every(v=>Number.isFinite(Number(v))&&Number(v)>0);
   value.textContent=isDonchian
-   ? `${item?.signal||'—'} · Close ${Number(indicators.close||0).toLocaleString()} · EMA480 ${Number(indicators.ema480||0).toLocaleString()} · EMA72 ${Number(indicators.ema72||0).toLocaleString()}`
+   ? hasDonchianValues?`${item?.signal||'—'} · Close ${Number(indicators.close).toLocaleString()} · EMA480 ${Number(indicators.ema480).toLocaleString()} · EMA72 ${Number(indicators.ema72).toLocaleString()}`:`${item?.signal||'HOLD'} · ${item?.reason||'Waiting for an eligible market regime'}`
    : `${names[indicators.market_regime]||'Unknown'} · ${adx} · ${atr} · ${item?.signal||'—'}`;
   row.append(label,value);box.append(row);
   const gateNote=document.createElement('p');gateNote.className='help';gateNote.textContent=gateSummary;box.append(gateNote);
@@ -33,7 +34,7 @@ function renderMarketChecks(d){
   const votes=indicators.strategy_votes;
   if(isDonchian){
    const agreement=document.createElement('div');agreement.className='vote-agreement';
-   const valid=[indicators.close,indicators.ema480,indicators.ema72,indicators.donchian_high168].every(v=>Number.isFinite(Number(v))&&Number(v)>0);
+   const valid=hasDonchianValues;
    const result=document.createElement('strong');result.className=`vote-chip vote-result ${valid?(indicators.entry_ready?'is-buy':'is-wait'):'is-wait'}`;
    result.textContent=valid?`EMA72 strategy · ${indicators.entry_ready?'ENTRY READY':'WAITING FOR ENTRY'}`:'EMA72 strategy · WARMUP / DATA CHECK';agreement.append(result);
    const chips=document.createElement('div');chips.className='vote-chips';chips.setAttribute('aria-label','Donchian breakout and EMA strategy rules');
@@ -82,13 +83,17 @@ function renderMarketChecks(d){
 }
 function renderRegimeRouter(d){
  const box=document.getElementById('router'),signals=d.latest_signals&&typeof d.latest_signals==='object'?d.latest_signals:{};
+ const dynamic=String(d.strategy_name||'').toLowerCase()==='dynamic_regime';
+ document.getElementById('router-title').textContent=dynamic?'Dynamic strategy selection · Testnet':'Regime observation';
+ document.getElementById('router-description').textContent=dynamic?'The bot can use the EMA72 trend candidate after a stable uptrend. Other conditions stay flat because the tested alternatives have not passed cost-adjusted review. Open positions keep their original exits.':'Market conditions are classified from completed hourly candles. A regime must persist for three completed hourly candles before it is shown as stable.';
  const entries=Object.entries(signals);box.replaceChildren();
  if(!entries.length){const empty=document.createElement('div');empty.className='limit-row';empty.textContent='Waiting for completed hourly market data.';box.append(empty);return}
  const titles={uptrend:'Uptrend',downtrend:'Downtrend',range:'Range-bound',high_volatility:'High volatility',transition:'Transition / uncertain',uncertain:'Uncertain'};
  for(const [symbol,item] of entries){
   const observed=item?.regime_router||{},row=document.createElement('div');row.className='limit-row';
   const name=document.createElement('span');name.textContent=symbol;
-  const label=document.createElement('strong');label.textContent=`${titles[observed.regime]||'Uncertain'} · ${observed.route==='observe_existing_strategy_only'?'Observe current strategy':'No strategy selected'}`;
+  const routeText=dynamic?(observed.selected_strategy==='macro_donchian_ema72'?'EMA72 trend strategy selected':'No entry strategy · stand aside'):(observed.route==='observe_existing_strategy_only'?'Observe current strategy':'No strategy selected');
+  const label=document.createElement('strong');label.textContent=`${titles[observed.regime]||'Uncertain'} · ${routeText}`;
   row.append(name,label);box.append(row);
   const reason=document.createElement('p');reason.className='help';reason.textContent=observed.reason||'Regime observation unavailable; no strategy change is made.';box.append(reason);
   const metrics=observed.indicators;
@@ -102,8 +107,10 @@ async function refresh(){
   const r=await fetch('/api/status',{cache:'no-store'});
   if(!r.ok)throw Error(`Status unavailable (${r.status})`);
   const d=await r.json();
-  document.getElementById('strategy').textContent=`${d.strategy_name} · ${d.timeframe} · ${d.exchange} · ${d.paper_trading?`Paper · ${d.paper_environment==='demo'?'Binance Demo':'Spot Testnet'}`:'Live mode reported'}`;
-  const entries=[['Risk per trade',pct(d.risk_per_trade_pct)],['Max position',pct(d.position_size_pct)],['Daily stop threshold',pct(d.daily_loss_limit_pct)],['Stop model',d.strategy_name==='MACRO_DONCHIAN_EMA72'?'Prior 5-bar low, capped at 4%':pct(d.stop_loss_pct)],['Target / exit',d.take_profit_managed_by_strategy?d.strategy_exit_description:pct(d.take_profit_pct)],['Entry filter',d.strategy_name==='MACRO_DONCHIAN_EMA72'?'168-bar breakout above EMA480':d.regime_filter_enabled?`ADX ≥ ${d.min_trend_adx} · ATR ≤ ${pct(d.max_atr_pct)}`:'No regime filter'],['Open positions',String(d.max_positions)],['Bot status',d.halted?'Paused':'Running']];
+  const strategyLabel=String(d.strategy_name||'').toLowerCase()==='dynamic_regime'?'Dynamic regime routing':d.strategy_name;
+  document.getElementById('strategy').textContent=`${strategyLabel} · ${d.timeframe} · ${d.exchange} · ${d.paper_trading?`Paper · ${d.paper_environment==='demo'?'Binance Demo':'Spot Testnet'}`:'Live mode reported'}`;
+  const ema72Profile=['MACRO_DONCHIAN_EMA72','DYNAMIC_REGIME'].includes(String(d.strategy_name||'').toUpperCase());
+  const entries=[['Risk per trade',pct(d.risk_per_trade_pct)],['Max position',pct(d.position_size_pct)],['Daily stop threshold',pct(d.daily_loss_limit_pct)],['Stop model',ema72Profile?'Prior 5-bar low, capped at 4%':pct(d.stop_loss_pct)],['Target / exit',d.take_profit_managed_by_strategy?d.strategy_exit_description:pct(d.take_profit_pct)],['Entry filter',ema72Profile?(String(d.strategy_name).toUpperCase()==='DYNAMIC_REGIME'?'Stable uptrend + 168-bar breakout above EMA480':'168-bar breakout above EMA480'):d.regime_filter_enabled?`ADX ≥ ${d.min_trend_adx} · ATR ≤ ${pct(d.max_atr_pct)}`:'No regime filter'],['Open positions',String(d.max_positions)],['Bot status',d.halted?'Paused':'Running']];
   const box=document.getElementById('limits');box.replaceChildren();
   for(const [k,v] of entries){const row=document.createElement('div');row.className='limit-row';const label=document.createElement('span');label.textContent=k;const value=document.createElement('strong');value.textContent=v;row.append(label,value);box.append(row)}
   renderMarketChecks(d);

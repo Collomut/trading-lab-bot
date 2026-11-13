@@ -26,7 +26,7 @@ from pathlib import Path
 
 from config import BotConfig
 from exchange import AccountAccessError, ExchangeConnector
-from strategies import get_strategy, ohlcv_to_dataframe, Signal
+from strategies import get_strategy, ohlcv_to_dataframe, Signal, TradeSignal
 from risk_manager import RiskManager
 from shadow_strategy import CANDIDATE_ID, evaluate_shadow_candidate
 from regime_router import evaluate_regime_router
@@ -52,7 +52,7 @@ class TradingBot:
             max_atr_pct=config.strategy.max_atr_pct,
         )
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
-        if (config.strategy.name == "macro_donchian_ema72" and any(
+        if (config.strategy.name in {"macro_donchian_ema72", "dynamic_regime"} and any(
                 position.exit_policy != "ema72_signal"
                 for position in self.risk_manager.open_positions.values()
         )):
@@ -301,12 +301,38 @@ class TradingBot:
             # Do not let optional telemetry interfere with strategy analysis.
             logger.debug("Could not sample order-book spread for %s (%s)", symbol, type(ticker_exc).__name__)
 
-        # Convert to DataFrame and run strategy once per completed candle.
+        # Classify before selecting a strategy. Dynamic mode only enables the
+        # EMA72 candidate on a stable uptrend; every other regime is fail-closed.
+        strategy_name = str(getattr(self.config.strategy, "name", "combined")).strip().lower()
+        dynamic_mode = strategy_name == "dynamic_regime"
+        router_observation = {"status": "unavailable", "regime": "uncertain",
+                              "route": "no_validated_strategy", "entry_route_enabled": False,
+                              "reason": "The hourly regime router is unavailable; new entries are disabled in dynamic mode."}
+        if self.config.strategy.timeframe == "1h":
+            try:
+                router_observation = evaluate_regime_router(ohlcv, strategy_name)
+            except Exception as exc:
+                logger.warning("Regime routing unavailable for %s (%s)", symbol, type(exc).__name__)
+                router_observation["reason"] = f"router_error_{type(exc).__name__}"[:64]
+
+        # Convert to DataFrame and run the selected strategy once per candle.
         df = ohlcv_to_dataframe(ohlcv)
-        if getattr(self.config.strategy, "name", "combined") == "macro_donchian_ema72":
-            signal = self.strategy.analyze(
-                df, symbol, in_position=symbol in self.risk_manager.open_positions
+        has_position = symbol in getattr(self.risk_manager, "open_positions", {})
+        ema72_profile = strategy_name in {"macro_donchian_ema72", "dynamic_regime"}
+        if dynamic_mode and not has_position and not router_observation.get("entry_route_enabled", False):
+            reason = str(router_observation.get("reason") or "No validated strategy for this regime.")
+            signal = TradeSignal(
+                Signal.HOLD, symbol, 0.0, f"Dynamic router: no entry · {reason}",
+                {
+                    "strategy": "dynamic_regime",
+                    "selected_strategy": None,
+                    "regime": router_observation.get("regime", "uncertain"),
+                },
             )
+        elif ema72_profile:
+            # Existing positions always use the exit policy selected at entry,
+            # even after a regime change. The router only governs flat-symbol entries.
+            signal = self.strategy.analyze(df, symbol, in_position=has_position)
         else:
             signal = self.strategy.analyze(df, symbol)
         self._last_analyzed_candle[symbol] = candle_timestamp
@@ -318,23 +344,6 @@ class TradingBot:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Read-only regime routing research. The observer has no order access,
-        # and its output never replaces the configured strategy or its exits.
-        router_observation = {"status": "unavailable", "regime": "uncertain",
-                              "route": "no_validated_strategy", "entry_authorized": False,
-                              "reason": "The hourly regime observer is unavailable for this configuration."}
-        if self.config.strategy.timeframe == "1h":
-            try:
-                router_observation = evaluate_regime_router(
-                    ohlcv, getattr(self.config.strategy, "name", "combined")
-                )
-            except Exception as exc:
-                # Research telemetry must never change trading decisions.
-                router_observation = {
-                    "status": "error", "regime": "uncertain",
-                    "route": "no_validated_strategy", "entry_authorized": False,
-                    "reason": f"observer_error_{type(exc).__name__}"[:64],
-                }
         self.last_signals[symbol]["regime_router"] = router_observation
 
         # Research-only observer. It reads the closed raw candles separately
@@ -931,7 +940,7 @@ class TradingBot:
             return
 
         atr = signal.indicators.get("atr", 0.0)
-        ema72_candidate = getattr(self.config.strategy, "name", "combined") == "macro_donchian_ema72"
+        ema72_candidate = getattr(self.config.strategy, "name", "combined") in {"macro_donchian_ema72", "dynamic_regime"}
         if ema72_candidate:
             public_price = self.exchange.get_public_market_data_price(symbol)
             if public_price is None or public_price <= 0:

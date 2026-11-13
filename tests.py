@@ -144,6 +144,17 @@ class TestShadowRegimeRouter(unittest.TestCase):
         self.assertFalse(result["entry_authorized"])
         self.assertEqual(result["raw_regimes"], ["uptrend"] * 3)
 
+    def test_dynamic_router_selects_only_the_testnet_trend_candidate(self):
+        uptrend = evaluate_regime_router(self.candles(), "dynamic_regime")
+        self.assertEqual(uptrend["status"], "dynamic_testnet")
+        self.assertEqual(uptrend["selected_strategy"], "macro_donchian_ema72")
+        self.assertTrue(uptrend["entry_route_enabled"])
+
+        sideways = evaluate_regime_router(self.candles("range"), "dynamic_regime")
+        self.assertEqual(sideways["selected_strategy"], None)
+        self.assertFalse(sideways["entry_route_enabled"])
+        self.assertEqual(sideways["route"], "no_validated_strategy")
+
     def test_router_fails_closed_for_range_and_high_volatility(self):
         range_result = evaluate_regime_router(self.candles("range"), "macro_donchian_ema72")
         volatile_result = evaluate_regime_router(self.candles("volatile"), "macro_donchian_ema72")
@@ -230,6 +241,21 @@ class TestConfigurationAndValidation(unittest.TestCase):
         cfg = BotConfig()
         cfg.dashboard_token = "test-token"
         cfg.strategy.name = "macro_donchian_ema72"
+        cfg.strategy.timeframe = "1h"
+        cfg.strategy.lookback_candles = 2501
+        structural_errors = [e for e in cfg.validate() if "API_KEY" not in e and "API_SECRET" not in e]
+        self.assertEqual(structural_errors, [])
+
+        cfg.strategy.lookback_candles = 2500
+        self.assertTrue(any("LOOKBACK_CANDLES >= 2501" in e for e in cfg.validate()))
+        cfg.strategy.lookback_candles = 2501
+        cfg.exchange.paper_trading = False
+        self.assertTrue(any("restricted to Binance Spot Testnet" in e for e in cfg.validate()))
+
+    def test_dynamic_regime_profile_is_testnet_only_and_requires_full_lookback(self):
+        cfg = BotConfig()
+        cfg.dashboard_token = "test-token"
+        cfg.strategy.name = "dynamic_regime"
         cfg.strategy.timeframe = "1h"
         cfg.strategy.lookback_candles = 2501
         structural_errors = [e for e in cfg.validate() if "API_KEY" not in e and "API_SECRET" not in e]
@@ -1477,6 +1503,45 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
 class TestBotEngineOrderLifecycle(unittest.TestCase):
     """Verifies complete order execution, fee deduction, stop loss synchronization, recovery, and alerts."""
 
+    def test_dynamic_profile_executes_candidate_only_after_router_selects_it(self):
+        bot = object.__new__(TradingBot)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 3_600_000
+        candles = []
+        for index in range(2501):
+            close = 100 * (1.001 ** index)
+            candles.append([
+                now_ms - (2500 - index) * 3_600_000,
+                close, close * 1.002, close * 0.998, close, 100.0,
+            ])
+        bot.config = SimpleNamespace(strategy=SimpleNamespace(
+            name="dynamic_regime", timeframe="1h", lookback_candles=2501,
+        ), enable_notifications=False)
+        bot.exchange = Mock()
+        bot.exchange.fetch_closed_ohlcv.return_value = candles
+        bot.exchange.get_ticker.return_value = {"bid": 100.0, "ask": 100.1}
+        bot.strategy = Mock()
+        bot.strategy.analyze.return_value = TradeSignal(
+            Signal.BUY, "BTC/USDT", 0.85, "candidate setup", {"strategy": "macro_donchian_ema72"}
+        )
+        bot.risk_manager = SimpleNamespace(open_positions={}, store=Mock())
+        bot._last_analyzed_candle = {}
+        bot._analysis_error_states = {}
+        bot.last_signals = {}
+        bot._handle_buy_signal = Mock()
+        bot._handle_sell_signal = Mock()
+
+        with patch("bot_engine.evaluate_shadow_candidate", return_value={"signal": "HOLD", "status": "test"}):
+            bot.analyze_market("BTC/USDT")
+
+        bot.strategy.analyze.assert_called_once()
+        self.assertEqual(bot.strategy.analyze.call_args.args[1], "BTC/USDT")
+        self.assertFalse(bot.strategy.analyze.call_args.kwargs["in_position"])
+        bot._handle_buy_signal.assert_called_once()
+        self.assertEqual(
+            bot.last_signals["BTC/USDT"]["regime_router"]["selected_strategy"],
+            "macro_donchian_ema72",
+        )
+
     def test_candle_gap_is_saved_as_an_auditable_market_data_issue(self):
         bot = object.__new__(TradingBot)
         bot.config = SimpleNamespace(strategy=SimpleNamespace(timeframe="1h", lookback_candles=150))
@@ -2260,12 +2325,12 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
             strategy_page,
         )
 
-    def test_regime_router_panel_is_explicitly_shadow_only(self):
+    def test_regime_router_panel_explains_dynamic_routing_and_fallback(self):
         strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
-        self.assertIn("Regime router · shadow", strategy_page)
-        self.assertIn("It does not switch strategies, place orders, or change exits.", strategy_page)
+        self.assertIn("Dynamic strategy selection · Testnet", strategy_page)
+        self.assertIn("Other conditions stay flat because the tested alternatives have not passed cost-adjusted review.", strategy_page)
         self.assertIn("three completed hourly candles", strategy_page)
-        self.assertIn("No strategy selected", strategy_page)
+        self.assertIn("No entry strategy · stand aside", strategy_page)
 
     def test_wording_safety_no_misleading_profit_claims(self):
         banned_phrases = [

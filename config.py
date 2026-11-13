@@ -61,7 +61,7 @@ class StrategyConfig:
     timeframe: str = os.getenv("TIMEFRAME", "1h")
     lookback_candles: int = int(os.getenv(
         "LOOKBACK_CANDLES",
-        "2501" if os.getenv("STRATEGY", "combined").strip().lower() == "macro_donchian_ema72" else "150",
+        "2501" if os.getenv("STRATEGY", "combined").strip().lower() in {"macro_donchian_ema72", "dynamic_regime"} else "150",
     ))
     regime_filter_enabled: bool = field(default_factory=lambda: _env_bool("REGIME_FILTER_ENABLED", True))
     min_trend_adx: float = float(os.getenv("MIN_TREND_ADX", "20"))
@@ -150,7 +150,7 @@ class BotConfig:
             errors.append("STOP_LOSS_PCT > 10% defeats the purpose of a stop-loss")
         if self.risk.position_size_pct > 50.0:
             errors.append("POSITION_SIZE_PCT > 50% is dangerously high")
-        strategy_names = {"combined", "ema_crossover", "rsi_mean_reversion", "macd", "macro_donchian_ema72"}
+        strategy_names = {"combined", "ema_crossover", "rsi_mean_reversion", "macd", "macro_donchian_ema72", "dynamic_regime"}
         if self.strategy.name not in strategy_names:
             errors.append(f"STRATEGY must be one of: {', '.join(sorted(strategy_names))}")
         supported_timeframes = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}
@@ -199,28 +199,28 @@ class BotConfig:
             errors.append("MIN_TREND_ADX must be a finite value between 0 and 100")
         if not math.isfinite(self.strategy.max_atr_pct) or self.strategy.max_atr_pct <= 0:
             errors.append("MAX_ATR_PCT must be a finite value greater than 0")
-        if self.strategy.name == "macro_donchian_ema72":
+        if self.strategy.name in {"macro_donchian_ema72", "dynamic_regime"}:
             if (not self.exchange.paper_trading or self.exchange.paper_environment != "testnet"
                     or self.exchange.name.strip().lower() != "binance"):
-                errors.append("macro_donchian_ema72 is restricted to Binance Spot Testnet")
+                errors.append(f"{self.strategy.name} is restricted to Binance Spot Testnet")
             if self.strategy.timeframe != "1h":
-                errors.append("macro_donchian_ema72 requires TIMEFRAME=1h")
+                errors.append(f"{self.strategy.name} requires TIMEFRAME=1h")
             if self.strategy.lookback_candles < 2501:
-                errors.append("macro_donchian_ema72 requires LOOKBACK_CANDLES >= 2501 for a stable EMA480 warmup")
+                errors.append(f"{self.strategy.name} requires LOOKBACK_CANDLES >= 2501 for a stable EMA480 warmup")
             if self.max_testnet_price_divergence_pct > 0.5:
-                errors.append("macro_donchian_ema72 caps MAX_TESTNET_PRICE_DIVERGENCE_PCT at 0.5%")
+                errors.append(f"{self.strategy.name} caps MAX_TESTNET_PRICE_DIVERGENCE_PCT at 0.5%")
             if self.risk.max_risk_per_trade > 1.0:
-                errors.append("macro_donchian_ema72 caps MAX_RISK_PER_TRADE at 1%")
+                errors.append(f"{self.strategy.name} caps MAX_RISK_PER_TRADE at 1%")
             if self.risk.position_size_pct > 10.0:
-                errors.append("macro_donchian_ema72 caps POSITION_SIZE_PCT at 10%")
+                errors.append(f"{self.strategy.name} caps POSITION_SIZE_PCT at 10%")
             if self.risk.max_open_positions > 3:
-                errors.append("macro_donchian_ema72 caps MAX_OPEN_POSITIONS at 3")
+                errors.append(f"{self.strategy.name} caps MAX_OPEN_POSITIONS at 3")
             if self.risk.max_daily_loss_pct > 3.0:
-                errors.append("macro_donchian_ema72 caps MAX_DAILY_LOSS_PCT at 3%")
+                errors.append(f"{self.strategy.name} caps MAX_DAILY_LOSS_PCT at 3%")
             if self.risk.max_rolling_drawdown_pct > 5.0:
-                errors.append("macro_donchian_ema72 caps MAX_ROLLING_DRAWDOWN_PCT at 5%")
+                errors.append(f"{self.strategy.name} caps MAX_ROLLING_DRAWDOWN_PCT at 5%")
             if self.risk.max_consecutive_losses > 3:
-                errors.append("macro_donchian_ema72 keeps MAX_CONSECUTIVE_LOSSES at 3 or lower")
+                errors.append(f"{self.strategy.name} keeps MAX_CONSECUTIVE_LOSSES at 3 or lower")
         if self.smtp_host and not (1 <= self.smtp_port <= 65535):
             errors.append("SMTP_PORT must be an integer between 1 and 65535")
 

@@ -1,9 +1,10 @@
-"""Read-only market-regime observer for strategy research.
+"""Causal hourly regime classifier and guarded Testnet strategy router.
 
 This module is deliberately unable to place orders. Regime labels are a
-diagnostic hypothesis, not evidence that a strategy has an edge. A proposed
-strategy is exposed only when it is already the configured Testnet strategy;
-otherwise the observer recommends no validated strategy for that regime.
+diagnostic hypothesis, not evidence that a strategy has an edge. Dynamic
+routing currently selects only the EMA72 trend candidate after a stable
+uptrend classification. Other regimes deliberately route to cash because no
+alternative has passed the project's cost-adjusted screen.
 """
 from __future__ import annotations
 
@@ -15,10 +16,11 @@ from ta.trend import ADXIndicator, EMAIndicator
 from ta.volatility import AverageTrueRange
 
 
-ROUTER_ID = "rule_regime_observer_v1"
+ROUTER_ID = "rule_dynamic_regime_router_v1"
 MIN_CANDLES = 2501
 HOUR_MS = 3_600_000
 ACTIVE_CANDIDATE = "macro_donchian_ema72"
+DYNAMIC_PROFILE = "dynamic_regime"
 
 
 def _validate_ohlcv(ohlcv: list) -> tuple[pd.DataFrame | None, str | None]:
@@ -84,19 +86,23 @@ def _classify_closed_bar(close, index: int, adx, atr, ema200) -> tuple[str, dict
 
 
 def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
-    """Return a fail-closed, shadow-only regime and strategy-family observation.
+    """Return a fail-closed regime observation and optional Testnet entry route.
 
     Three consecutive completed hourly bars must classify identically before a
-    regime is considered stable. Nothing returned by this function is an order
-    signal or authorization to trade.
+    regime is considered stable. `entry_route_enabled` only permits evaluation
+    of a candidate strategy; its signal and the independent risk/execution gates
+    are still required before an order can be submitted.
     """
+    dynamic_mode = str(active_strategy).strip().lower() == DYNAMIC_PROFILE
     result = {
         "router_id": ROUTER_ID,
-        "status": "shadow_only",
+        "status": "dynamic_testnet" if dynamic_mode else "shadow_only",
         "regime": "uncertain",
         "raw_regimes": [],
         "candidate_strategy": None,
+        "selected_strategy": None,
         "route": "no_validated_strategy",
+        "entry_route_enabled": False,
         "entry_authorized": False,
         "reason": "No validated strategy is available for this regime.",
     }
@@ -127,9 +133,18 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
 
     regime = raw_regimes[-1]
     result["regime"] = regime
-    if regime == "uptrend" and str(active_strategy).strip().lower() == ACTIVE_CANDIDATE:
+    if regime == "uptrend" and dynamic_mode:
         result.update(
             candidate_strategy=ACTIVE_CANDIDATE,
+            selected_strategy=ACTIVE_CANDIDATE,
+            route=ACTIVE_CANDIDATE,
+            entry_route_enabled=True,
+            reason="Stable uptrend confirmed; EMA72 trend candidate may evaluate an entry. Risk checks still control order placement.",
+        )
+    elif regime == "uptrend" and str(active_strategy).strip().lower() == ACTIVE_CANDIDATE:
+        result.update(
+            candidate_strategy=ACTIVE_CANDIDATE,
+            selected_strategy=ACTIVE_CANDIDATE,
             route="observe_existing_strategy_only",
             reason="The configured Testnet strategy is the only trend candidate; its existing rules still decide signals.",
         )

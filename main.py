@@ -132,10 +132,10 @@ def run_backtest(config: BotConfig):
     Historical replay simulation incorporating next-bar execution and fees.
     This replay is an exploratory research tool and does not prove live profitability.
     """
-    if config.strategy.name == "macro_donchian_ema72":
+    if config.strategy.name in {"macro_donchian_ema72", "dynamic_regime"}:
         raise SystemExit(
-            "The generic CLI replay does not model macro_donchian_ema72. "
-            "Use the dedicated research replay with its required historical dataset; "
+            f"The generic CLI replay does not model {config.strategy.name}. "
+            "Use the dedicated strategy and dynamic-router research replay with its required historical dataset; "
             "do not interpret the generic replay as a candidate backtest."
         )
 

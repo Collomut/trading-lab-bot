@@ -541,8 +541,10 @@ class WebDashboard:
             "daily_loss_limit_pct": self.config.risk.max_daily_loss_pct,
             "stop_loss_pct": self.config.risk.stop_loss_pct,
             "take_profit_pct": self.config.risk.take_profit_pct,
-            "take_profit_managed_by_strategy": self.config.strategy.name == "macro_donchian_ema72",
+            "take_profit_managed_by_strategy": self.config.strategy.name in {"macro_donchian_ema72", "dynamic_regime"},
             "strategy_exit_description": (
+                "Dynamic Testnet route: EMA72 candidate exits on a completed 1-hour close below EMA72; 100×ATR target is a distant backstop"
+                if self.config.strategy.name == "dynamic_regime" else
                 "Completed 1-hour close below EMA72; 100×ATR target is a distant backstop"
                 if self.config.strategy.name == "macro_donchian_ema72" else "Fixed take-profit"
             ),

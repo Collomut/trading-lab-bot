@@ -1,0 +1,497 @@
+{
+  "method": "Paired EMA72/Donchian historical replay; only dynamic entry variant applies the production three-closed-bar uptrend gate; existing-position exits unchanged; same next-open fills, fees, candidate stop/target, risk sizing and portfolio constraints.",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "warmup": "2,500 contiguous hourly bars; regime classification uses causal ADX14, ATR14, EMA200 slope over 24 bars; three identical completed-bar classes required.",
+  "costs_per_side_bps": {
+    "base": {
+      "fee": 10.0,
+      "slippage": 5.0
+    },
+    "stress": {
+      "fee": 20.0,
+      "slippage": 10.0
+    }
+  },
+  "risk_halts": "Existing simulator halts: 3% daily, 5% peak drawdown, 3 consecutive losses; separate no-halt strategy isolation is also reported.",
+  "caveats": "Fixed BTC/ETH/SOL survivor universe; archive previously used in project research, not an untouched holdout. OHLCV cannot reconstruct order-book fills. Results do not prove future edge.",
+  "splits": {
+    "train_2021_02_to_2023": {
+      "base": {
+        "no_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 116,
+            "wins": 41,
+            "losses": 75,
+            "win_rate_pct": 35.34,
+            "net_pnl_usdt": 1108.79,
+            "avg_trade_pnl_usdt": 9.56,
+            "profit_factor": 1.575,
+            "mean_trade_return_pct": 1.059,
+            "portfolio_return_pct": 11.088,
+            "max_drawdown_pct": 6.438,
+            "ending_equity_usdt": 11108.79,
+            "period_end_equity_points": 25522,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 96,
+            "wins": 29,
+            "losses": 67,
+            "win_rate_pct": 30.21,
+            "net_pnl_usdt": 516.34,
+            "avg_trade_pnl_usdt": 5.38,
+            "profit_factor": 1.291,
+            "mean_trade_return_pct": 0.56,
+            "portfolio_return_pct": 5.163,
+            "max_drawdown_pct": 9.061,
+            "ending_equity_usdt": 10516.34,
+            "period_end_equity_points": 25522,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          }
+        },
+        "existing_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 4,
+            "wins": 0,
+            "losses": 4,
+            "win_rate_pct": 0.0,
+            "net_pnl_usdt": -121.72,
+            "avg_trade_pnl_usdt": -30.43,
+            "profit_factor": 0.0,
+            "mean_trade_return_pct": -3.265,
+            "portfolio_return_pct": -1.217,
+            "max_drawdown_pct": 1.303,
+            "ending_equity_usdt": 9878.28,
+            "period_end_equity_points": 25522,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1628748000000
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 5,
+            "wins": 2,
+            "losses": 3,
+            "win_rate_pct": 40.0,
+            "net_pnl_usdt": 54.78,
+            "avg_trade_pnl_usdt": 10.96,
+            "profit_factor": 1.867,
+            "mean_trade_return_pct": 1.241,
+            "portfolio_return_pct": 0.548,
+            "max_drawdown_pct": 1.244,
+            "ending_equity_usdt": 10054.78,
+            "period_end_equity_points": 25522,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1644310800000
+          }
+        }
+      },
+      "stress": {
+        "no_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 116,
+            "wins": 39,
+            "losses": 77,
+            "win_rate_pct": 33.62,
+            "net_pnl_usdt": 760.68,
+            "avg_trade_pnl_usdt": 6.56,
+            "profit_factor": 1.362,
+            "mean_trade_return_pct": 0.766,
+            "portfolio_return_pct": 7.607,
+            "max_drawdown_pct": 7.529,
+            "ending_equity_usdt": 10760.68,
+            "period_end_equity_points": 25522,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 96,
+            "wins": 28,
+            "losses": 68,
+            "win_rate_pct": 29.17,
+            "net_pnl_usdt": 243.68,
+            "avg_trade_pnl_usdt": 2.54,
+            "profit_factor": 1.126,
+            "mean_trade_return_pct": 0.27,
+            "portfolio_return_pct": 2.437,
+            "max_drawdown_pct": 10.195,
+            "ending_equity_usdt": 10243.68,
+            "period_end_equity_points": 25522,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          }
+        },
+        "existing_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 4,
+            "wins": 0,
+            "losses": 4,
+            "win_rate_pct": 0.0,
+            "net_pnl_usdt": -132.37,
+            "avg_trade_pnl_usdt": -33.09,
+            "profit_factor": 0.0,
+            "mean_trade_return_pct": -3.546,
+            "portfolio_return_pct": -1.324,
+            "max_drawdown_pct": 1.395,
+            "ending_equity_usdt": 9867.63,
+            "period_end_equity_points": 25522,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1628748000000
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 5,
+            "wins": 2,
+            "losses": 3,
+            "win_rate_pct": 40.0,
+            "net_pnl_usdt": 40.54,
+            "avg_trade_pnl_usdt": 8.11,
+            "profit_factor": 1.568,
+            "mean_trade_return_pct": 0.938,
+            "portfolio_return_pct": 0.405,
+            "max_drawdown_pct": 1.271,
+            "ending_equity_usdt": 10040.54,
+            "period_end_equity_points": 25522,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1644310800000
+          }
+        }
+      }
+    },
+    "validation_2024_to_2025": {
+      "base": {
+        "no_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 171,
+            "wins": 71,
+            "losses": 100,
+            "win_rate_pct": 41.52,
+            "net_pnl_usdt": 1541.84,
+            "avg_trade_pnl_usdt": 9.02,
+            "profit_factor": 1.649,
+            "mean_trade_return_pct": 0.906,
+            "portfolio_return_pct": 15.418,
+            "max_drawdown_pct": 4.748,
+            "ending_equity_usdt": 11541.84,
+            "period_end_equity_points": 17544,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 134,
+            "wins": 52,
+            "losses": 82,
+            "win_rate_pct": 38.81,
+            "net_pnl_usdt": 995.95,
+            "avg_trade_pnl_usdt": 7.43,
+            "profit_factor": 1.531,
+            "mean_trade_return_pct": 0.766,
+            "portfolio_return_pct": 9.959,
+            "max_drawdown_pct": 5.385,
+            "ending_equity_usdt": 10995.95,
+            "period_end_equity_points": 17544,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          }
+        },
+        "existing_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 4,
+            "wins": 1,
+            "losses": 3,
+            "win_rate_pct": 25.0,
+            "net_pnl_usdt": -44.39,
+            "avg_trade_pnl_usdt": -11.1,
+            "profit_factor": 0.528,
+            "mean_trade_return_pct": -1.216,
+            "portfolio_return_pct": -0.444,
+            "max_drawdown_pct": 1.128,
+            "ending_equity_usdt": 9955.61,
+            "period_end_equity_points": 17544,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1704985200000
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 17,
+            "wins": 8,
+            "losses": 9,
+            "win_rate_pct": 47.06,
+            "net_pnl_usdt": 298.94,
+            "avg_trade_pnl_usdt": 17.58,
+            "profit_factor": 2.489,
+            "mean_trade_return_pct": 1.784,
+            "portfolio_return_pct": 2.989,
+            "max_drawdown_pct": 1.214,
+            "ending_equity_usdt": 10298.94,
+            "period_end_equity_points": 17544,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1709226000000
+          }
+        }
+      },
+      "stress": {
+        "no_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 171,
+            "wins": 67,
+            "losses": 104,
+            "win_rate_pct": 39.18,
+            "net_pnl_usdt": 1004.08,
+            "avg_trade_pnl_usdt": 5.87,
+            "profit_factor": 1.384,
+            "mean_trade_return_pct": 0.605,
+            "portfolio_return_pct": 10.041,
+            "max_drawdown_pct": 5.047,
+            "ending_equity_usdt": 11004.08,
+            "period_end_equity_points": 17544,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 134,
+            "wins": 49,
+            "losses": 85,
+            "win_rate_pct": 36.57,
+            "net_pnl_usdt": 592.87,
+            "avg_trade_pnl_usdt": 4.42,
+            "profit_factor": 1.286,
+            "mean_trade_return_pct": 0.468,
+            "portfolio_return_pct": 5.929,
+            "max_drawdown_pct": 6.225,
+            "ending_equity_usdt": 10592.87,
+            "period_end_equity_points": 17544,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          }
+        },
+        "existing_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 4,
+            "wins": 1,
+            "losses": 3,
+            "win_rate_pct": 25.0,
+            "net_pnl_usdt": -55.05,
+            "avg_trade_pnl_usdt": -13.76,
+            "profit_factor": 0.459,
+            "mean_trade_return_pct": -1.49,
+            "portfolio_return_pct": -0.55,
+            "max_drawdown_pct": 1.181,
+            "ending_equity_usdt": 9944.95,
+            "period_end_equity_points": 17544,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1704985200000
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 17,
+            "wins": 8,
+            "losses": 9,
+            "win_rate_pct": 47.06,
+            "net_pnl_usdt": 251.2,
+            "avg_trade_pnl_usdt": 14.78,
+            "profit_factor": 2.123,
+            "mean_trade_return_pct": 1.486,
+            "portfolio_return_pct": 2.512,
+            "max_drawdown_pct": 1.237,
+            "ending_equity_usdt": 10251.2,
+            "period_end_equity_points": 17544,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1709226000000
+          }
+        }
+      }
+    },
+    "review_2026_01_to_10": {
+      "base": {
+        "no_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 42,
+            "wins": 13,
+            "losses": 29,
+            "win_rate_pct": 30.95,
+            "net_pnl_usdt": 244.97,
+            "avg_trade_pnl_usdt": 5.83,
+            "profit_factor": 1.496,
+            "mean_trade_return_pct": 0.715,
+            "portfolio_return_pct": 2.45,
+            "max_drawdown_pct": 2.898,
+            "ending_equity_usdt": 10244.97,
+            "period_end_equity_points": 7296,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 32,
+            "wins": 10,
+            "losses": 22,
+            "win_rate_pct": 31.25,
+            "net_pnl_usdt": 239.45,
+            "avg_trade_pnl_usdt": 7.48,
+            "profit_factor": 1.605,
+            "mean_trade_return_pct": 0.904,
+            "portfolio_return_pct": 2.394,
+            "max_drawdown_pct": 2.428,
+            "ending_equity_usdt": 10239.45,
+            "period_end_equity_points": 7296,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          }
+        },
+        "existing_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 8,
+            "wins": 3,
+            "losses": 5,
+            "win_rate_pct": 37.5,
+            "net_pnl_usdt": -34.27,
+            "avg_trade_pnl_usdt": -4.28,
+            "profit_factor": 0.647,
+            "mean_trade_return_pct": -0.44,
+            "portfolio_return_pct": -0.343,
+            "max_drawdown_pct": 1.71,
+            "ending_equity_usdt": 9965.73,
+            "period_end_equity_points": 7296,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1773471600000
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 6,
+            "wins": 2,
+            "losses": 4,
+            "win_rate_pct": 33.33,
+            "net_pnl_usdt": -94.03,
+            "avg_trade_pnl_usdt": -15.67,
+            "profit_factor": 0.31,
+            "mean_trade_return_pct": -1.626,
+            "portfolio_return_pct": -0.94,
+            "max_drawdown_pct": 1.649,
+            "ending_equity_usdt": 9905.97,
+            "period_end_equity_points": 7296,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1773471600000
+          }
+        }
+      },
+      "stress": {
+        "no_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 42,
+            "wins": 12,
+            "losses": 30,
+            "win_rate_pct": 28.57,
+            "net_pnl_usdt": 123.01,
+            "avg_trade_pnl_usdt": 2.93,
+            "profit_factor": 1.214,
+            "mean_trade_return_pct": 0.415,
+            "portfolio_return_pct": 1.23,
+            "max_drawdown_pct": 3.587,
+            "ending_equity_usdt": 10123.01,
+            "period_end_equity_points": 7296,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 32,
+            "wins": 10,
+            "losses": 22,
+            "win_rate_pct": 31.25,
+            "net_pnl_usdt": 145.43,
+            "avg_trade_pnl_usdt": 4.54,
+            "profit_factor": 1.318,
+            "mean_trade_return_pct": 0.604,
+            "portfolio_return_pct": 1.454,
+            "max_drawdown_pct": 2.812,
+            "ending_equity_usdt": 10145.43,
+            "period_end_equity_points": 7296,
+            "halts_by_end": false,
+            "halt_reason": "",
+            "halt_timestamp_ms": null
+          }
+        },
+        "existing_halts": {
+          "unfiltered_candidate": {
+            "variant": "unfiltered_candidate",
+            "closed_trades": 8,
+            "wins": 3,
+            "losses": 5,
+            "win_rate_pct": 37.5,
+            "net_pnl_usdt": -56.92,
+            "avg_trade_pnl_usdt": -7.12,
+            "profit_factor": 0.487,
+            "mean_trade_return_pct": -0.739,
+            "portfolio_return_pct": -0.569,
+            "max_drawdown_pct": 1.893,
+            "ending_equity_usdt": 9943.08,
+            "period_end_equity_points": 7296,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1773471600000
+          },
+          "dynamic_router": {
+            "variant": "dynamic_router",
+            "closed_trades": 6,
+            "wins": 2,
+            "losses": 4,
+            "win_rate_pct": 33.33,
+            "net_pnl_usdt": -110.93,
+            "avg_trade_pnl_usdt": -18.49,
+            "profit_factor": 0.246,
+            "mean_trade_return_pct": -1.915,
+            "portfolio_return_pct": -1.109,
+            "max_drawdown_pct": 1.761,
+            "ending_equity_usdt": 9889.07,
+            "period_end_equity_points": 7296,
+            "halts_by_end": true,
+            "halt_reason": "three consecutive losing trades",
+            "halt_timestamp_ms": 1773471600000
+          }
+        }
+      }
+    }
+  }
+}

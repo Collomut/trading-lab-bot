@@ -15,7 +15,7 @@ python tests.py
 python main.py --once
 ```
 
-`--once` runs one strategy cycle and may place Testnet orders. The generic `--backtest` replay is for legacy strategies only; the active EMA72/Donchian candidate is rejected by that replay to prevent misleading output. Continuous paper trading with `--interval 60` may place Testnet orders.
+`--once` runs one strategy cycle and may place Testnet orders. The `dynamic_regime` profile selects the EMA72/Donchian candidate only after three completed hourly bars confirm an uptrend; other regimes remain flat while no alternative has passed the cost-adjusted screen. Open trades retain their original exit policy. The generic `--backtest` replay does not model this profile. Continuous paper trading with `--interval 60` may place Testnet orders.
 
 ## Railway
 
@@ -29,9 +29,10 @@ python main.py --once
 
 ## Operating boundaries
 
-- The current `macro_donchian_ema72` profile is a Testnet research candidate, not a validated profitable strategy.
+- The configured `dynamic_regime` profile is a guarded Testnet research router, not a validated profitable strategy. It currently has one screened candidate, not a proven profitable multi-strategy portfolio.
+- The EMA72/Donchian candidate was positive in strategy-only historical slices but breached the training drawdown screen and quickly reached existing loss halts. No range or other regime strategy passed the cost-adjusted screen, so those regimes are deliberately not traded.
 - `python main.py --once` can place Testnet orders when configured with Testnet keys. Do not use it as a read-only health check.
-- `python main.py --backtest` is an exploratory replay for the legacy strategies; it does not simulate the active EMA72/Donchian candidate. Use the dedicated research scripts and documented historical data for candidate evaluation.
+- `python main.py --backtest` is an exploratory replay for legacy strategies; it does not simulate the EMA72 candidate or dynamic routing. Use dedicated research scripts and documented historical data for candidate evaluation.
 - SQLite remains the default local store. Setting `DATABASE_URL` enables the guarded Postgres/Supabase store and import check.
 
 ## Project notes

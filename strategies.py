@@ -648,6 +648,9 @@ def get_strategy(
         "macd": MACD_Strategy,
         "combined": CombinedStrategy,
         "macro_donchian_ema72": MacroDonchianEma72Strategy,
+        # Dynamic routing currently has one evidence-screened Testnet candidate;
+        # the router selects it only in stable uptrends and otherwise returns HOLD.
+        "dynamic_regime": MacroDonchianEma72Strategy,
     }
     if name not in strategies:
         raise ValueError(
