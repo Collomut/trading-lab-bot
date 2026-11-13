@@ -635,7 +635,9 @@ class ExchangeConnector:
 
         Returns list of [timestamp, open, high, low, close, volume]
         """
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0 or limit > 5000:
+        # fetch_closed_ohlcv requests one extra raw bar so filtering the current,
+        # still-forming candle does not leave the strategy one closed bar short.
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0 or limit > 5001:
             logger.error("Rejected invalid OHLCV limit for %s", symbol)
             return []
         with self._exchange_lock:
@@ -715,7 +717,13 @@ class ExchangeConnector:
     def fetch_closed_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> list:
         """Fetch and filter candles so strategy signals use closed bars only."""
         self._candle_sequence_issues.pop(symbol, None)
-        candles = self.fetch_ohlcv(symbol, timeframe, limit)
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0 or limit > 5000:
+            logger.error("Rejected invalid closed OHLCV limit for %s", symbol)
+            return []
+        # Exchange responses normally include the currently forming candle.
+        # Request one additional raw candle so the closed-bar filter can drop
+        # that bar while still returning the full number required by indicators.
+        candles = self.fetch_ohlcv(symbol, timeframe, limit + 1)
         if not candles:
             return []
         try:
@@ -726,7 +734,7 @@ class ExchangeConnector:
             return []
         closed = filter_closed_ohlcv(candles, seconds)
         duration_ms = int(seconds * 1000)
-        ordered = sorted(closed, key=lambda row: row[0])
+        ordered = sorted(closed, key=lambda row: row[0])[-limit:]
         for index in range(1, len(ordered)):
             expected_ts = int(ordered[index - 1][0]) + duration_ms
             actual_ts = int(ordered[index][0])
@@ -739,7 +747,9 @@ class ExchangeConnector:
                     "missing_intervals": max(0, (delta_ms // duration_ms) - 1) if duration_ms > 0 else None,
                 }
                 break
-        sequence = validate_candle_sequence(closed, seconds, symbol=symbol)
+        # In case the exchange response contains no open candle, retain the
+        # requested lookback rather than passing an unexpected extra bar along.
+        sequence = validate_candle_sequence(ordered, seconds, symbol=symbol)
         if not sequence and symbol not in self._candle_sequence_issues:
             logger.warning("Closed candle data for %s is stale, discontinuous, or invalid", symbol)
         return sequence
@@ -892,3 +902,4 @@ class ExchangeConnector:
                 return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
             except ccxt.BaseError:
                 return datetime.now(timezone.utc)
+
