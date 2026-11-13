@@ -2,6 +2,8 @@
 
 This folder contains the reproducible strategy comparison used to decide whether a higher-frequency strategy was justified. The result was negative: no evaluated variant had sufficiently positive evidence to change production entry rules.
 
+`REGIME_ROUTER_REVIEW.md` records the rule-based regime observer now shown on the Strategy page. It is shadow-only: it does not route orders or change active strategies, exits, or risk controls. Historical evidence did not validate a profitable regime-specific strategy for the bot.
+
 ## Reproduction
 
 1. Use Python with the application's pinned requirements installed.

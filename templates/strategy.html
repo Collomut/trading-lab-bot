@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strategy · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m8"><script src="/assets/app.js?v=m8" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link active" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Configuration</div><h1>Strategy &amp; risk</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state" data-skeleton aria-busy="true">Loading…</span></div></header><div class="grid two"><section class="card"><h2>Signal</h2><div id="strategy" class="metric-label" data-skeleton aria-busy="true">Loading…</div><p class="help">The active strategy defines the entry signal, exit signal, and protective stop. Backtest results do not predict future returns.</p></section><section class="card"><h2>Risk limits</h2><div id="limits"></div></section></div><section class="card section-card"><h2>Latest market checks</h2><p class="help">Checks use completed candles. Entry and exit rules depend on the selected strategy; protective stops remain active between checks.</p><div id="regimes" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for market data…</div></div></section><div class="notice compact"><strong>Limits are estimates.</strong><span>They do not cap losses during gaps, outages, or poor fills.</span></div><footer>Paper mode is for software practice; these rules have not proven a trading edge. <a href="/terms">Open glossary</a></footer></main><script>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strategy · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m8"><script src="/assets/app.js?v=m8" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link active" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Configuration</div><h1>Strategy &amp; risk</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state" data-skeleton aria-busy="true">Loading…</span></div></header><div class="grid two"><section class="card"><h2>Signal</h2><div id="strategy" class="metric-label" data-skeleton aria-busy="true">Loading…</div><p class="help">The active strategy defines the entry signal, exit signal, and protective stop. Backtest results do not predict future returns.</p></section><section class="card"><h2>Risk limits</h2><div id="limits"></div></section></div><section class="card section-card"><h2>Latest market checks</h2><p class="help">Checks use completed candles. Entry and exit rules depend on the selected strategy; protective stops remain active between checks.</p><div id="regimes" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for market data…</div></div></section><section class="card section-card"><h2>Regime router · shadow</h2><p class="help">This observer classifies market conditions for research. It does not switch strategies, place orders, or change exits. A regime must persist for three completed hourly candles.</p><div id="router" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for enough market history…</div></div></section><div class="notice compact"><strong>Limits are estimates.</strong><span>They do not cap losses during gaps, outages, or poor fills.</span></div><footer>Paper mode is for software practice; these rules have not proven a trading edge. <a href="/terms">Open glossary</a></footer></main><script>
 const pct=v=>`${Number(v||0).toLocaleString()}%`;
 function renderMarketChecks(d){
  const box=document.getElementById('regimes');
@@ -80,6 +80,23 @@ function renderMarketChecks(d){
   }
  }
 }
+function renderRegimeRouter(d){
+ const box=document.getElementById('router'),signals=d.latest_signals&&typeof d.latest_signals==='object'?d.latest_signals:{};
+ const entries=Object.entries(signals);box.replaceChildren();
+ if(!entries.length){const empty=document.createElement('div');empty.className='limit-row';empty.textContent='Waiting for completed hourly market data.';box.append(empty);return}
+ const titles={uptrend:'Uptrend',downtrend:'Downtrend',range:'Range-bound',high_volatility:'High volatility',transition:'Transition / uncertain',uncertain:'Uncertain'};
+ for(const [symbol,item] of entries){
+  const observed=item?.regime_router||{},row=document.createElement('div');row.className='limit-row';
+  const name=document.createElement('span');name.textContent=symbol;
+  const label=document.createElement('strong');label.textContent=`${titles[observed.regime]||'Uncertain'} · ${observed.route==='observe_existing_strategy_only'?'Observe current strategy':'No strategy selected'}`;
+  row.append(name,label);box.append(row);
+  const reason=document.createElement('p');reason.className='help';reason.textContent=observed.reason||'Regime observation unavailable; no strategy change is made.';box.append(reason);
+  const metrics=observed.indicators;
+  if(metrics&&Number.isFinite(Number(metrics.adx))&&Number.isFinite(Number(metrics.atr_pct))){
+   const detail=document.createElement('p');detail.className='help';detail.textContent=`ADX ${Number(metrics.adx).toFixed(1)} · ATR ${Number(metrics.atr_pct).toFixed(2)}% · 3-bar confirmation ${Array.isArray(observed.raw_regimes)&&new Set(observed.raw_regimes).size===1?'stable':'pending'}`;box.append(detail)
+  }
+ }
+}
 async function refresh(){
  try{
   const r=await fetch('/api/status',{cache:'no-store'});
@@ -90,10 +107,12 @@ async function refresh(){
   const box=document.getElementById('limits');box.replaceChildren();
   for(const [k,v] of entries){const row=document.createElement('div');row.className='limit-row';const label=document.createElement('span');label.textContent=k;const value=document.createElement('strong');value.textContent=v;row.append(label,value);box.append(row)}
   renderMarketChecks(d);
+  renderRegimeRouter(d);
   document.getElementById('dot').className='dot ok';document.getElementById('state').textContent=`Updated ${new Date().toLocaleTimeString()}`
  }catch(e){
   document.getElementById('dot').className='dot bad';document.getElementById('state').textContent=e.message;
   const box=document.getElementById('regimes');box.replaceChildren();const err=document.createElement('div');err.className='limit-row';err.textContent=`Market checks unavailable: ${e.message}`;box.append(err)
+  const router=document.getElementById('router');router.replaceChildren();const routerErr=document.createElement('div');routerErr.className='limit-row';routerErr.textContent='Regime observer unavailable; no strategy changes were made.';router.append(routerErr)
  }
 }
 refresh();setInterval(refresh,15000);
