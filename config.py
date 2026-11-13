@@ -200,9 +200,9 @@ class BotConfig:
         if not math.isfinite(self.strategy.max_atr_pct) or self.strategy.max_atr_pct <= 0:
             errors.append("MAX_ATR_PCT must be a finite value greater than 0")
         if self.strategy.name in {"macro_donchian_ema72", "dynamic_regime"}:
-            if (not self.exchange.paper_trading or self.exchange.paper_environment != "testnet"
+            if (not self.exchange.paper_trading or self.exchange.paper_environment not in {"testnet", "demo"}
                     or self.exchange.name.strip().lower() != "binance"):
-                errors.append(f"{self.strategy.name} is restricted to Binance Spot Testnet")
+                errors.append(f"{self.strategy.name} requires Binance Spot Testnet or Binance Demo paper trading")
             if self.strategy.timeframe != "1h":
                 errors.append(f"{self.strategy.name} requires TIMEFRAME=1h")
             if self.strategy.lookback_candles < 2501:
@@ -229,7 +229,11 @@ class BotConfig:
     def display(self):
         """Print current configuration (hiding secrets)."""
         masked_key = "SET" if self.exchange.api_key else "NOT SET"
-        mode = "🧪 PAPER TRADING (Testnet)" if self.exchange.paper_trading else "💰 LIVE TRADING (Real Money!)"
+        if self.exchange.paper_trading:
+            paper_names = {"testnet": "Spot Testnet", "demo": "Binance Demo", "simulated": "Simulated"}
+            mode = f"🧪 PAPER TRADING ({paper_names.get(self.exchange.paper_environment, self.exchange.paper_environment)})"
+        else:
+            mode = "💰 LIVE TRADING (Real Money!)"
 
         print(f"""
 ╔══════════════════════════════════════════════════════════╗

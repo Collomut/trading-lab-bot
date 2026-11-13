@@ -57,7 +57,7 @@ class TradingBot:
                 for position in self.risk_manager.open_positions.values()
         )):
             self.risk_manager.halt(
-                "Existing position uses a different exit policy; reconcile and close it before starting the EMA72 Testnet trial"
+                "Existing position uses a different exit policy; reconcile it before starting the EMA72 paper profile"
             )
         self.is_running = False
         self._cycle_count = 0
@@ -944,12 +944,12 @@ class TradingBot:
         if ema72_candidate:
             public_price = self.exchange.get_public_market_data_price(symbol)
             if public_price is None or public_price <= 0:
-                logger.warning("Entry blocked for %s: public market price is unavailable for Testnet parity check", symbol)
+                logger.warning("Entry blocked for %s: public market price is unavailable for paper price-parity check", symbol)
                 return
             divergence_pct = abs(current_price - public_price) / public_price * 100.0
             if divergence_pct > self.config.max_testnet_price_divergence_pct:
                 logger.info(
-                    "Entry blocked for %s: Spot Testnet and public Spot prices differ by %.3f%% (limit %.3f%%)",
+                    "Entry blocked for %s: paper and public Spot prices differ by %.3f%% (limit %.3f%%)",
                     symbol, divergence_pct, self.config.max_testnet_price_divergence_pct,
                 )
                 return

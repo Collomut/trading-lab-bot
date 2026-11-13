@@ -237,7 +237,7 @@ class TestConfigurationAndValidation(unittest.TestCase):
         self.assertTrue(any("STRATEGY must be one of" in e for e in errors))
         self.assertTrue(any("TIMEFRAME is unsupported" in e for e in errors))
 
-    def test_ema72_donchian_profile_is_testnet_only_and_requires_full_lookback(self):
+    def test_ema72_donchian_profile_requires_binance_paper_and_full_lookback(self):
         cfg = BotConfig()
         cfg.dashboard_token = "test-token"
         cfg.strategy.name = "macro_donchian_ema72"
@@ -250,9 +250,12 @@ class TestConfigurationAndValidation(unittest.TestCase):
         self.assertTrue(any("LOOKBACK_CANDLES >= 2501" in e for e in cfg.validate()))
         cfg.strategy.lookback_candles = 2501
         cfg.exchange.paper_trading = False
-        self.assertTrue(any("restricted to Binance Spot Testnet" in e for e in cfg.validate()))
+        self.assertTrue(any("requires Binance Spot Testnet or Binance Demo" in e for e in cfg.validate()))
+        cfg.exchange.paper_trading = True
+        cfg.exchange.paper_environment = "demo"
+        self.assertFalse(any("requires Binance Spot Testnet or Binance Demo" in e for e in cfg.validate()))
 
-    def test_dynamic_regime_profile_is_testnet_only_and_requires_full_lookback(self):
+    def test_dynamic_regime_profile_requires_binance_paper_and_full_lookback(self):
         cfg = BotConfig()
         cfg.dashboard_token = "test-token"
         cfg.strategy.name = "dynamic_regime"
@@ -265,7 +268,10 @@ class TestConfigurationAndValidation(unittest.TestCase):
         self.assertTrue(any("LOOKBACK_CANDLES >= 2501" in e for e in cfg.validate()))
         cfg.strategy.lookback_candles = 2501
         cfg.exchange.paper_trading = False
-        self.assertTrue(any("restricted to Binance Spot Testnet" in e for e in cfg.validate()))
+        self.assertTrue(any("requires Binance Spot Testnet or Binance Demo" in e for e in cfg.validate()))
+        cfg.exchange.paper_trading = True
+        cfg.exchange.paper_environment = "demo"
+        self.assertFalse(any("requires Binance Spot Testnet or Binance Demo" in e for e in cfg.validate()))
 
     def test_trading_pairs_validation(self):
         cfg = BotConfig()
@@ -1156,8 +1162,9 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
             paper_environment="demo",
         )
         ExchangeConnector(config)
-        self.assertEqual(binance_factory.call_args.args[0]["apiKey"], "demo-key")
-        self.assertEqual(binance_factory.call_args.args[0]["secret"], "demo-secret")
+        private_options = binance_factory.call_args_list[0].args[0]
+        self.assertEqual(private_options["apiKey"], "demo-key")
+        self.assertEqual(private_options["secret"], "demo-secret")
         exchange = binance_factory.return_value
         exchange.enable_demo_trading.assert_called_once_with(True)
         exchange.set_sandbox_mode.assert_not_called()
@@ -1233,7 +1240,7 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         connector.market_data_exchange.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", limit=1)
         connector.exchange.fetch_ohlcv.assert_not_called()
 
-    def test_testnet_public_market_client_has_no_private_credentials(self):
+    def test_paper_public_market_client_has_no_private_credentials(self):
         config = ExchangeConfig(
             name="binance", api_key="testnet-key", api_secret="testnet-secret",
             paper_trading=True, paper_environment="testnet",
@@ -1254,6 +1261,12 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
             public_client.urls["api"]["public"],
             "https://data-api.binance.vision/api/v3",
         )
+
+        config.paper_environment = "demo"
+        with patch("exchange.ccxt.binance", return_value=public_client) as constructor:
+            result = connector._create_public_market_data_exchange()
+        self.assertIs(result, public_client)
+        constructor.assert_called_once()
 
     def test_long_strategy_request_returns_required_completed_candle_count(self):
         connector = object.__new__(ExchangeConnector)
@@ -1349,6 +1362,12 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         msg_401 = account_access_message(ccxt.AuthenticationError("HTTP 401 Unauthorized"), http_status=401)
         self.assertIn("HTTP 401", msg_401)
         self.assertIn("Spot Testnet", msg_401)
+        demo_401 = account_access_message(
+            ccxt.AuthenticationError("HTTP 401 Unauthorized"), http_status=401, environment="demo"
+        )
+        self.assertIn("HTTP 401", demo_401)
+        self.assertIn("DEMO_API_KEY", demo_401)
+        self.assertIn("Binance Demo", demo_401)
 
         msg_403 = account_access_message(ccxt.PermissionDenied("HTTP 403 Forbidden"), http_status=403)
         self.assertIn("HTTP 403", msg_403)
@@ -2327,7 +2346,7 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
 
     def test_regime_router_panel_explains_dynamic_routing_and_fallback(self):
         strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
-        self.assertIn("Dynamic strategy selection · Testnet", strategy_page)
+        self.assertIn("Dynamic strategy selection · Paper", strategy_page)
         self.assertIn("Other conditions stay flat because the tested alternatives have not passed cost-adjusted review.", strategy_page)
         self.assertIn("three completed hourly candles", strategy_page)
         self.assertIn("No entry strategy · stand aside", strategy_page)

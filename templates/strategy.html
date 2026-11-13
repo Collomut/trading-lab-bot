@@ -84,7 +84,7 @@ function renderMarketChecks(d){
 function renderRegimeRouter(d){
  const box=document.getElementById('router'),signals=d.latest_signals&&typeof d.latest_signals==='object'?d.latest_signals:{};
  const dynamic=String(d.strategy_name||'').toLowerCase()==='dynamic_regime';
- document.getElementById('router-title').textContent=dynamic?'Dynamic strategy selection · Testnet':'Regime observation';
+ document.getElementById('router-title').textContent=dynamic?'Dynamic strategy selection · Paper':'Regime observation';
  document.getElementById('router-description').textContent=dynamic?'The bot can use the EMA72 trend candidate after a stable uptrend. Other conditions stay flat because the tested alternatives have not passed cost-adjusted review. Open positions keep their original exits.':'Market conditions are classified from completed hourly candles. A regime must persist for three completed hourly candles before it is shown as stable.';
  const entries=Object.entries(signals);box.replaceChildren();
  if(!entries.length){const empty=document.createElement('div');empty.className='limit-row';empty.textContent='Waiting for completed hourly market data.';box.append(empty);return}

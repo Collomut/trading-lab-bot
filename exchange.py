@@ -17,6 +17,10 @@ from config import ExchangeConfig
 logger = logging.getLogger("bot.exchange")
 
 
+def _configured_paper_environment(connector) -> str:
+    return getattr(getattr(connector, "config", None), "paper_environment", "testnet")
+
+
 class AccountAccessError(RuntimeError):
     """Safe, actionable account-access failure without echoing credentials."""
 
@@ -50,7 +54,7 @@ def extract_ccxt_response_metadata(exchange_obj, exc: Exception | None = None) -
     return body, http_status
 
 
-def account_access_message(exc: Exception, response_body=None, http_status=None) -> str:
+def account_access_message(exc: Exception, response_body=None, http_status=None, environment="testnet") -> str:
     """Safe, actionable account-access failure diagnosis without echoing credentials.
 
     Surfaces only allowlisted Binance error codes, HTTP status, and sanitized
@@ -68,6 +72,11 @@ def account_access_message(exc: Exception, response_body=None, http_status=None)
         except (TypeError, ValueError):
             pass
 
+    paper_account = "Binance Demo" if str(environment).lower() == "demo" else "Binance Spot Testnet"
+    key_name = "DEMO_API_KEY" if str(environment).lower() == "demo" else "API_KEY"
+    secret_name = "DEMO_API_SECRET" if str(environment).lower() == "demo" else "API_SECRET"
+    credential_type = "Binance Demo" if str(environment).lower() == "demo" else "Spot Testnet"
+
     response_code = response_data.get("code") if isinstance(response_data, dict) else None
     match = re.search(r'"?code"?\s*[:=]\s*(-?\d+)', error_text, re.IGNORECASE)
     code = str(response_code) if isinstance(response_code, (int, str)) else (match.group(1) if match else "")
@@ -84,37 +93,36 @@ def account_access_message(exc: Exception, response_body=None, http_status=None)
                 pass
 
     if code == "-2015" or "invalid api-key, ip, or permissions" in combined_text:
-        return "Binance rejected the API key, IP, or permissions (-2015). Use an active Spot Testnet key pair and check its IP restrictions and Spot permission."
+        return f"Binance rejected the API key, IP, or permissions (-2015). Use an active {credential_type} key pair and check its IP restrictions and Spot permission."
     if code == "-2014" or "api-key format invalid" in combined_text:
-        return "Binance says the API key format is invalid (-2014). Re-enter the complete Spot Testnet API key without spaces."
+        return f"Binance says the API key format is invalid (-2014). Re-enter the complete {key_name} without spaces."
     if code == "-1022" or "signature for this request is not valid" in combined_text:
-        return "Binance rejected the request signature (-1022). API_SECRET does not match this API_KEY; re-enter the matching Spot Testnet pair."
+        return f"Binance rejected the request signature (-1022). {secret_name} does not match {key_name}; re-enter the matching {credential_type} pair."
     if code == "-1021" or "timestamp for this request is outside" in combined_text or "timestamp for this request was" in combined_text:
         return "Binance rejected the request timestamp (-1021). Check server clock synchronization and retry."
     if code == "-1003" or valid_http_status in (418, 429) or isinstance(exc, ccxt.RateLimitExceeded):
-        return "Binance Testnet rate-limited the account request. The bot is waiting and will retry."
+        return f"{paper_account} rate-limited the account request. The bot is waiting and will retry."
     if code == "-2010" or "account has insufficient balance" in combined_text:
         return "Binance reported insufficient balance or rejected the trade rules (-2010)."
 
     if valid_http_status == 403 or isinstance(exc, ccxt.PermissionDenied):
         status_label = f" (HTTP {valid_http_status})" if valid_http_status else ""
-        return f"Binance denied account access{status_label}. Check the Testnet key permissions, WAF rules, and any IP restrictions."
+        return f"Binance denied account access{status_label}. Check the {credential_type} key permissions, WAF rules, and any IP restrictions."
     if valid_http_status == 401 or isinstance(exc, ccxt.AuthenticationError):
         status_label = f" (HTTP {valid_http_status})" if valid_http_status else ""
         return (
-            f"Binance rejected Testnet authentication{status_label}. Check that API_KEY and API_SECRET are the matching pair "
-            "created for Spot Testnet, are active, and have Spot trading permission. Do not use Demo or live keys."
+            f"Binance rejected {credential_type} authentication{status_label}. Check that {key_name} and {secret_name} "
+            f"are the matching active {credential_type} pair with Spot trading permission. Do not use keys from another environment."
         )
     if isinstance(exc, ccxt.NetworkError):
-        return "Binance Testnet could not be reached. Check service networking and retry after it recovers."
+        return f"{paper_account} could not be reached. Check service networking and retry after it recovers."
 
     suffix = f" (Binance error {code})" if code else ""
     if not code and isinstance(valid_http_status, int):
         suffix = f" (HTTP {valid_http_status})"
     return (
-        f"Binance Testnet rejected the authenticated account request{suffix}. In Railway, verify that API_KEY and "
-        "API_SECRET are the matching, active Spot Testnet pair, with Spot permission and any required IP access. "
-        "Demo or live credentials will not work on this endpoint."
+        f"{paper_account} rejected the authenticated account request{suffix}. In Railway, verify that {key_name} and "
+        f"{secret_name} are the matching, active {credential_type} pair, with Spot permission and any required IP access."
     )
 
 
@@ -206,12 +214,12 @@ class ExchangeConnector:
         self.fallback_reason = ""
 
     def _create_public_market_data_exchange(self):
-        """Use Binance's unauthenticated public data API for candles in Testnet mode.
+        """Use Binance's unauthenticated public data API for candles in paper mode.
 
-        Spot Testnet may not retain enough history to warm up long indicators.
+        Testnet and Demo may not retain enough history to warm up long indicators.
         This client has no credentials and is never used for balances or orders.
         """
-        if not (self.config.paper_trading and self.config.paper_environment == "testnet"):
+        if not (self.config.paper_trading and self.config.paper_environment in {"testnet", "demo"}):
             return None
         if self.config.name.strip().lower() != "binance":
             return None
@@ -223,8 +231,8 @@ class ExchangeConnector:
         if isinstance(public_urls, dict) and "public" in public_urls:
             public_urls["public"] = "https://data-api.binance.vision/api/v3"
         logger.info(
-            "Testnet mode: candles use Binance's unauthenticated public Spot data API; "
-            "account and order requests remain on Spot Testnet"
+            "Binance paper mode: candles use unauthenticated public Spot data; "
+            "account and order requests remain on the configured paper endpoint"
         )
         return public_exchange
 
@@ -403,7 +411,7 @@ class ExchangeConnector:
                 return holdings
             except ccxt.BaseError as e:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, e)
-                safe_message = account_access_message(e, body, status_code)
+                safe_message = account_access_message(e, body, status_code, _configured_paper_environment(self))
                 cfg = getattr(self, "config", None)
                 if (cfg and getattr(cfg, "paper_trading", False) and
                         getattr(cfg, "fallback_to_simulation", False) and
@@ -433,7 +441,7 @@ class ExchangeConnector:
                 return balance, orders
             except ccxt.BaseError as exc:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-                safe_message = account_access_message(exc, body, status_code)
+                safe_message = account_access_message(exc, body, status_code, _configured_paper_environment(self))
                 cfg = getattr(self, "config", None)
                 if (cfg and getattr(cfg, "paper_trading", False) and
                         getattr(cfg, "fallback_to_simulation", False) and
@@ -454,7 +462,7 @@ class ExchangeConnector:
                 return self.exchange.fetch_balance()
             except ccxt.BaseError as exc:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-                safe_message = account_access_message(exc, body, status_code)
+                safe_message = account_access_message(exc, body, status_code, _configured_paper_environment(self))
                 cfg = getattr(self, "config", None)
                 if (cfg and getattr(cfg, "paper_trading", False) and
                         getattr(cfg, "fallback_to_simulation", False) and
@@ -494,7 +502,7 @@ class ExchangeConnector:
                 result["balance_ok"] = True
             except ccxt.BaseError as exc:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-                result["balance_error"] = account_access_message(exc, body, status_code)
+                result["balance_error"] = account_access_message(exc, body, status_code, _configured_paper_environment(self))
 
             # 2. Test open-order access independently
             try:
@@ -502,10 +510,10 @@ class ExchangeConnector:
                 result["orders_ok"] = True
             except ccxt.ExchangeError as ee:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, ee)
-                result["orders_error"] = account_access_message(ee, body, status_code)
+                result["orders_error"] = account_access_message(ee, body, status_code, _configured_paper_environment(self))
             except ccxt.BaseError as exc:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-                result["orders_error"] = account_access_message(exc, body, status_code)
+                result["orders_error"] = account_access_message(exc, body, status_code, _configured_paper_environment(self))
 
         if result["balance_ok"] and result["orders_ok"]:
             result["overall_status"] = "AUTHENTICATED_AND_RECONCILED"
@@ -585,7 +593,7 @@ class ExchangeConnector:
                 )
             except ccxt.BaseError as exc:
                 body, status_code = extract_ccxt_response_metadata(self.exchange, exc)
-                safe_msg = account_access_message(exc, body, status_code)
+                safe_msg = account_access_message(exc, body, status_code, _configured_paper_environment(self))
                 logger.error("Native stop placement failed for %s (%s): %s", symbol, type(exc).__name__, safe_msg)
                 raise RuntimeError(f"Exchange-native stop was not confirmed: {safe_msg}") from exc
 

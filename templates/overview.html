@@ -1017,7 +1017,7 @@ async function refreshStatus() {
     p.className = 'metric ' + (d.total_gain_loss > 0 ? 'positive' : d.total_gain_loss < 0 ? 'negative' : '');
     $('open-count').textContent = `${d.positions_count} / ${d.max_positions}`;
 
-    const paperName = d.fallback_simulated ? 'Simulated (Testnet fallback)' :
+    const paperName = d.fallback_simulated ? `Simulated (${d.paper_environment || 'paper'} fallback)` :
                       d.paper_environment === 'demo' ? 'Binance Demo' :
                       d.paper_environment === 'testnet' ? 'Spot Testnet' :
                       (d.paper_environment || 'paper environment');
@@ -1032,7 +1032,7 @@ async function refreshStatus() {
     action.dataset.intent = (paused || manualResume) ? 'resume' : 'pause';
     action.disabled = haltLocked || (paused && !d.resume_available && !manualResume);
 
-    $('control-status').textContent = manualResume ? `Safety-halt review is ready (${d.halt_reason}). Verify the Testnet account before confirming.` :
+    $('control-status').textContent = manualResume ? `Safety-halt review is ready (${d.halt_reason}). Verify the configured paper account before confirming.` :
                                       d.halted ? d.halt_reason :
                                       paused ? 'New entries are paused. Existing positions remain monitored.' :
                                       (!d.exchange_reconciled ? 'Account reconciliation pending' : '');
@@ -1097,8 +1097,8 @@ setInterval(loadChart, 30000);
 $('entry-control').addEventListener('click', async () => {
   const paused = $('entry-control').dataset.intent === 'resume';
   const manualReview = paused && $('entry-control').dataset.manualReview === '1';
-  if (manualReview && !confirm('Confirm you reviewed the Binance Spot Testnet account and verified there are no open bot positions or unresolved orders. The bot will reconcile again. A consecutive-loss review resets only that streak; daily and drawdown limits remain active.')) return;
-  if (paused && !manualReview && !confirm('Reconcile the Testnet account and resume new entries? Resume will be blocked if the account or any safety check is unhealthy.')) return;
+  if (manualReview && !confirm('Confirm you reviewed the configured paper account and verified there are no open bot positions or unresolved orders. The bot will reconcile again. A consecutive-loss review resets only that streak; daily and drawdown limits remain active.')) return;
+  if (paused && !manualReview && !confirm('Reconcile the configured paper account and resume new entries? Resume will be blocked if the account or any safety check is unhealthy.')) return;
   if (!paused && !confirm('Pause all new entries? Existing positions will still be monitored.')) return;
   $('entry-control').disabled = true;
   $('control-status').textContent = paused ? 'Checking the account before resuming…' : 'Pausing new entries…';

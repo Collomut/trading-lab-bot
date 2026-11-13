@@ -405,7 +405,8 @@ class WebDashboard:
             account_available = True
             if not self.bot._last_reconciliation_ok:
                 account_issue = (
-                    "Spot Testnet keys rejected by Binance (-2015). Initializing simulated mode with live Binance prices."
+                    f"{self.config.exchange.paper_environment.title()} keys were rejected by Binance. "
+                    "The bot is using a simulated wallet with public Binance prices."
                 )
         elif not self.bot._last_reconciliation_ok and self.bot._last_account_error:
             account_issue = self.bot._last_account_error
@@ -543,7 +544,7 @@ class WebDashboard:
             "take_profit_pct": self.config.risk.take_profit_pct,
             "take_profit_managed_by_strategy": self.config.strategy.name in {"macro_donchian_ema72", "dynamic_regime"},
             "strategy_exit_description": (
-                "Dynamic Testnet route: EMA72 candidate exits on a completed 1-hour close below EMA72; 100×ATR target is a distant backstop"
+                "Dynamic paper route: EMA72 candidate exits on a completed 1-hour close below EMA72; 100×ATR target is a distant backstop"
                 if self.config.strategy.name == "dynamic_regime" else
                 "Completed 1-hour close below EMA72; 100×ATR target is a distant backstop"
                 if self.config.strategy.name == "macro_donchian_ema72" else "Fixed take-profit"
