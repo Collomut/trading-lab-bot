@@ -21,6 +21,29 @@ MIN_CANDLES = 2501
 HOUR_MS = 3_600_000
 ACTIVE_CANDIDATE = "macro_donchian_ema72"
 DYNAMIC_PROFILE = "dynamic_regime"
+ROUTER_ERROR_MESSAGES = {
+    "non_finite_ohlcv": "Market data contains an invalid number; this check was skipped.",
+    "invalid_timestamp": "Market data has an invalid candle time; this check was skipped.",
+    "non_positive_price": "Market data contains a zero or negative price; this check was skipped.",
+    "negative_volume": "Market data contains negative volume; this check was skipped.",
+    "high_below_low": "A candle high is below its low; this check was skipped.",
+    "high_below_open_or_close": "A candle high is below its open or close; this check was skipped.",
+    "low_above_open_or_close": "A candle low is above its open or close; this check was skipped.",
+    "hourly_sequence_gap_or_duplicate": "Hourly candles have a gap or duplicate; this check was skipped.",
+    "malformed_ohlcv": "Market data is incomplete or malformed; this check was skipped.",
+    "indicator_warmup_incomplete": "Indicators need more completed hourly candles to warm up.",
+}
+
+
+def _readable_router_error(error: str) -> str:
+    parts = error.split("_")
+    if len(parts) == 7 and parts[0] == "needs" and parts[2:6] == ["closed", "hourly", "candles", "received"]:
+        try:
+            required, received = int(parts[1]), int(parts[6])
+            return f"Need {required:,} completed hourly candles; received {received:,}."
+        except ValueError:
+            pass
+    return ROUTER_ERROR_MESSAGES.get(error, "Market data is unavailable; this check was skipped.")
 
 
 def _validate_ohlcv(ohlcv: list) -> tuple[pd.DataFrame | None, str | None]:
@@ -108,7 +131,11 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
     }
     frame, error = _validate_ohlcv(ohlcv)
     if error:
-        result.update(status="unavailable", reason=error)
+        result.update(
+            status="unavailable",
+            reason=_readable_router_error(error),
+            reason_code=error,
+        )
         return result
 
     close, high, low = frame.close, frame.high, frame.low
@@ -118,7 +145,11 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
     observations = [_classify_closed_bar(close, index, adx, atr, ema200)
                     for index in range(len(frame) - 3, len(frame))]
     if any(item is None for item in observations):
-        result.update(status="unavailable", reason="indicator_warmup_incomplete")
+        result.update(
+            status="unavailable",
+            reason=ROUTER_ERROR_MESSAGES["indicator_warmup_incomplete"],
+            reason_code="indicator_warmup_incomplete",
+        )
         return result
 
     raw_regimes = [item[0] for item in observations]

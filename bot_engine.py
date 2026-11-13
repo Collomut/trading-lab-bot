@@ -313,7 +313,8 @@ class TradingBot:
                 router_observation = evaluate_regime_router(ohlcv, strategy_name)
             except Exception as exc:
                 logger.warning("Regime routing unavailable for %s (%s)", symbol, type(exc).__name__)
-                router_observation["reason"] = f"router_error_{type(exc).__name__}"[:64]
+                router_observation["reason"] = f"The market-regime check failed ({type(exc).__name__}); new entries are disabled."
+                router_observation["reason_code"] = f"router_error_{type(exc).__name__}"[:64]
 
         # Convert to DataFrame and run the selected strategy once per candle.
         df = ohlcv_to_dataframe(ohlcv)
@@ -322,7 +323,7 @@ class TradingBot:
         if dynamic_mode and not has_position and not router_observation.get("entry_route_enabled", False):
             reason = str(router_observation.get("reason") or "No validated strategy for this regime.")
             signal = TradeSignal(
-                Signal.HOLD, symbol, 0.0, f"Dynamic router: no entry · {reason}",
+                Signal.HOLD, symbol, 0.0, f"No entry strategy selected · {reason}",
                 {
                     "strategy": "dynamic_regime",
                     "selected_strategy": None,

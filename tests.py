@@ -169,6 +169,9 @@ class TestShadowRegimeRouter(unittest.TestCase):
         short = evaluate_regime_router(self.candles()[:100], "macro_donchian_ema72")
         self.assertEqual(short["status"], "unavailable")
         self.assertEqual(short["regime"], "uncertain")
+        self.assertEqual(short["reason_code"], "needs_2501_closed_hourly_candles_received_100")
+        self.assertEqual(short["reason"], "Need 2,501 completed hourly candles; received 100.")
+        self.assertNotIn("_", short["reason"])
         gapped = self.candles()
         gapped[100][0] += 3_600_000
         result = evaluate_regime_router(gapped, "macro_donchian_ema72")
@@ -2420,9 +2423,12 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
     def test_machine_labels_are_formatted_for_dashboard_readers(self):
         strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
         logs_page = (Path("templates") / "logs.html").read_text(encoding="utf-8")
+        overview_page = (Path("templates") / "overview.html").read_text(encoding="utf-8")
         self.assertIn("macro_donchian_ema72:'Donchian breakout · EMA 72'", strategy_page)
         self.assertIn("replaceAll('_',' ')", strategy_page)
         self.assertIn("replaceAll('_',' ')", logs_page)
+        self.assertIn("readableReason", overview_page)
+        self.assertIn("needs_(\\d+)_closed_hourly_candles_received_(\\d+)", logs_page)
         self.assertIn("Donchian breakout · EMA 72", strategy_page)
         self.assertIn("paper_environment_changed:'Paper account changed'", logs_page)
         self.assertIn("Enter your private dashboard access token", LOGIN_HTML)

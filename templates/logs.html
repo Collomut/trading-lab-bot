@@ -83,6 +83,7 @@
     market_check:'Market check'
   };
   const readable=value=>String(value||'').replaceAll('_',' ').replace(/\b[a-z]/g,c=>c.toUpperCase());
+  const readableReason=value=>String(value||'').replace(/needs_(\d+)_closed_hourly_candles_received_(\d+)/gi,(_,need,count)=>`needs ${Number(need).toLocaleString()} completed hourly candles; ${Number(count).toLocaleString()} received`).replaceAll('_',' ');
   const category=e=>e.type==='market_check'?'market':e.type==='order_status'||e.type==='testnet_smoke_trade_completed'?'orders':'safety';
   const tone=value=>value==='BUY'||value==='FILLED'||value==='ACTIVE'?'is-buy':value==='SELL'||value==='REJECTED'||value==='UNKNOWN'?'is-sell':value==='HOLD'||value==='PENDING'?'is-wait':'';
   function appendText(parent,tag,className,value){
@@ -130,7 +131,7 @@
     addBadge(card,badgeText,badgeTone);
 
     if(e.type==='market_check'){
-      if(d.reason)appendText(card,'p','log-reason',d.reason);
+      if(d.reason)appendText(card,'p','log-reason',readableReason(d.reason));
       const indicators=d.indicators||{};
       if(indicators.strategy==='macro_donchian_ema72'){
         const close=Number(indicators.close),ema=Number(indicators.ema480),high=Number(indicators.donchian_high168);
@@ -172,11 +173,11 @@
         const chip=document.createElement('span');
         chip.className=`log-vote ${signal==='BUY'?'is-buy':signal==='SELL'?'is-sell':'is-hold'}`;
         chip.textContent=`${name.toUpperCase()} · ${signal}`;
-        chip.title=String(vote?.reason||'');
+        chip.title=readableReason(vote?.reason||'');
         voteLines.append(chip);
       }
       if(Object.keys(votes).length)card.append(voteLines);
-      if(votes.rsi?.reason)appendText(card,'p','log-reason',`RSI detail: ${votes.rsi.reason}`);
+      if(votes.rsi?.reason)appendText(card,'p','log-reason',`RSI detail: ${readableReason(votes.rsi.reason)}`);
       const gates=indicators.entry_gates;
       if(gates&&typeof gates==='object'){
         const gateLine=document.createElement('div');gateLine.className='log-gates';
@@ -208,10 +209,10 @@
       if(summary)appendText(card,'p','log-reason',summary);
       if(d.message)appendText(card,'p','log-reason',d.message);
     }else{
-      const message=d.reason||d.message||
+      const message=readableReason(d.reason||d.message||
         (d.error_type?('Analysis failed ('+d.error_type+')'):
         d.issue?String(d.issue).replaceAll('_',' '):
-        d.status||d.mode||'');
+        d.status||d.mode||''));
       if(message)appendText(card,'p','log-reason',message);
       if(d.available_candles!=null)appendText(card,'p','log-reason','Available candles: '+d.available_candles);
       if(d.expected_timestamp!=null&&d.actual_timestamp!=null){

@@ -96,6 +96,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const money = v => v == null ? 'Unavailable' : '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const readableReason = v => String(v || '').replace(/needs_(\d+)_closed_hourly_candles_received_(\d+)/gi, (_, need, count) => `needs ${Number(need).toLocaleString()} completed hourly candles; ${Number(count).toLocaleString()} received`).replaceAll('_', ' ');
 let latestPairs = [];
 
 // ==============================================================================
@@ -982,7 +983,7 @@ function renderMarketPulse(d) {
     } else {
       const reason = document.createElement('div');
       reason.className = 'pulse-reason';
-      reason.textContent = item?.reason || 'Waiting for the next valid strategy signal';
+      reason.textContent = readableReason(item?.reason || 'Waiting for the next valid strategy signal');
       card.append(reason);
     }
 
