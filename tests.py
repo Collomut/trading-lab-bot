@@ -1294,14 +1294,15 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         connector.exchange.parse_timeframe.return_value = 3600
         now = int(datetime.now(timezone.utc).timestamp() * 1000)
         latest_open = now // 3_600_000 * 3_600_000
-        start = latest_open - 2500 * 3_600_000
-        connector.exchange.fetch_ohlcv.return_value = [
+        start = latest_open - 2501 * 3_600_000
+        connector.fetch_ohlcv = Mock(return_value=[
             [start + i * 3_600_000, 100, 101, 99, 100, 10]
-            for i in range(2501)
-        ]
+            for i in range(2502)
+        ])
         closed = connector.fetch_closed_ohlcv("BTC/USDT", "1h", 2501)
-        self.assertEqual(len(closed), 2500)
+        self.assertEqual(len(closed), 2501)
         self.assertLess(closed[-1][0], latest_open)
+        connector.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", 2502)
 
     def test_closed_candle_return_correlation_is_aligned_by_timestamp(self):
         candles_a, candles_b = [], []
