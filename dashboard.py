@@ -57,12 +57,12 @@ LOGIN_HTML = """<!doctype html>
     <div class="eyebrow" style="margin-bottom: 6px;">Secure Access</div>
     <h1 style="font-size: 24px; margin-bottom: 12px;">Sign in to Trading Lab</h1>
     <p class="intro" style="font-size: 13px; margin-bottom: 20px;">
-      Enter your secret operator access token (<code>DASHBOARD_TOKEN</code>) to view the surveillance dashboard and manage trading controls.
+      Enter your private dashboard access token to view account information and manage trading controls.
     </p>
     <form method="POST" action="/api/login" id="login-form">
       <div style="margin-bottom: 16px;">
         <label for="token-input" style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 600;">ACCESS TOKEN</label>
-        <input type="password" id="token-input" name="token" required autofocus autocomplete="current-password" placeholder="Enter DASHBOARD_TOKEN" style="width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px; background: var(--soft); border: 1px solid var(--line); border-radius: 6px; color: var(--ink);">
+        <input type="password" id="token-input" name="token" required autofocus autocomplete="current-password" placeholder="Enter your access token" style="width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px; background: var(--soft); border: 1px solid var(--line); border-radius: 6px; color: var(--ink);">
       </div>
       <button type="submit" class="button" style="width: 100%; justify-content: center; padding: 11px;">Enter Dashboard</button>
       <div id="login-error" class="help error-text" style="margin-top: 10px; text-align: center;"></div>
@@ -132,13 +132,13 @@ async def dashboard_auth(request, handler):
         return await handler(request)
 
     if not token:
-        return web.json_response({"error": "Dashboard access is disabled: DASHBOARD_TOKEN is not configured"}, status=503)
+        return web.json_response({"error": "Dashboard access is disabled because its access token is not configured"}, status=503)
 
     authenticated = verify_token(request, token)
 
     if not authenticated:
         if path.startswith("/api/"):
-            return web.json_response({"error": "Unauthorized: valid DASHBOARD_TOKEN required"}, status=401)
+            return web.json_response({"error": "Unauthorized: a valid dashboard access token is required"}, status=401)
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Basic "):
             raise web.HTTPUnauthorized(headers={"WWW-Authenticate": 'Basic realm="Trading Bot", charset="UTF-8"'})
@@ -342,7 +342,7 @@ class WebDashboard:
     async def handle_login(self, request):
         token = os.getenv("DASHBOARD_TOKEN", "")
         if not token:
-            raise web.HTTPServiceUnavailable(text="Dashboard access is disabled: DASHBOARD_TOKEN is not configured")
+            raise web.HTTPServiceUnavailable(text="Dashboard access is disabled because its access token is not configured")
         now = time.monotonic()
         ip = request.remote or "unknown"
         failures = [stamp for stamp in _LOGIN_FAILURES.get(ip, []) if now - stamp < _LOGIN_WINDOW_SECONDS]

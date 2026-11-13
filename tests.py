@@ -43,7 +43,7 @@ from aiohttp.web import HTTPNotFound
 
 from bot_engine import TradingBot
 from config import BotConfig, ExchangeConfig, RiskConfig, StrategyConfig
-from dashboard import WebDashboard, verify_token
+from dashboard import LOGIN_HTML, WebDashboard, verify_token
 from exchange import (
     AccountAccessError,
     ExchangeConnector,
@@ -2416,6 +2416,17 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("Other conditions stay flat because the tested alternatives have not passed cost-adjusted review.", strategy_page)
         self.assertIn("three completed hourly candles", strategy_page)
         self.assertIn("No entry strategy · stand aside", strategy_page)
+
+    def test_machine_labels_are_formatted_for_dashboard_readers(self):
+        strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
+        logs_page = (Path("templates") / "logs.html").read_text(encoding="utf-8")
+        self.assertIn("macro_donchian_ema72:'Donchian breakout · EMA 72'", strategy_page)
+        self.assertIn("replaceAll('_',' ')", strategy_page)
+        self.assertIn("replaceAll('_',' ')", logs_page)
+        self.assertIn("Donchian breakout · EMA 72", strategy_page)
+        self.assertIn("paper_environment_changed:'Paper account changed'", logs_page)
+        self.assertIn("Enter your private dashboard access token", LOGIN_HTML)
+        self.assertNotIn("DASHBOARD_TOKEN", LOGIN_HTML)
 
     def test_wording_safety_no_misleading_profit_claims(self):
         banned_phrases = [

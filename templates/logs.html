@@ -75,11 +75,14 @@
     emergency_stop_review_acknowledged:'Emergency stop review acknowledged',
     testnet_smoke_trade_completed:'Testnet smoke trade completed',
     testnet_reset_recovery:'Testnet reset recorded',
+    paper_environment_changed:'Paper account changed',
+    paper_environment_baselined:'Paper account recorded',
     analysis_error:'Market analysis error',
     market_data_issue:'Market data issue',
     order_status:'Order update',
     market_check:'Market check'
   };
+  const readable=value=>String(value||'').replaceAll('_',' ').replace(/\b[a-z]/g,c=>c.toUpperCase());
   const category=e=>e.type==='market_check'?'market':e.type==='order_status'||e.type==='testnet_smoke_trade_completed'?'orders':'safety';
   const tone=value=>value==='BUY'||value==='FILLED'||value==='ACTIVE'?'is-buy':value==='SELL'||value==='REJECTED'||value==='UNKNOWN'?'is-sell':value==='HOLD'||value==='PENDING'?'is-wait':'';
   function appendText(parent,tag,className,value){
@@ -100,14 +103,14 @@
     const heading=document.createElement('div');heading.className='log-head';
     const title=document.createElement('strong');title.className='log-title';
     let titleText=eventNames[e.type]||'Bot event';
-    let badgeText=e.type.replaceAll('_',' ');
+    let badgeText=readable(e.type);
     let badgeTone='';
     if(e.type==='market_check'){
       titleText=`${d.symbol||'Market'} · completed-candle check`;
       badgeText=d.signal||'HOLD';badgeTone=tone(badgeText);
     }else if(e.type==='order_status'){
       titleText=`${String(d.side||'').toUpperCase()} order · ${d.symbol||'symbol unavailable'}`;
-      badgeText=d.state||'Update';badgeTone=tone(badgeText);
+      badgeText=readable(d.state)||'Update';badgeTone=tone(d.state);
     }else if(e.type==='testnet_smoke_trade_completed'){
       titleText=`Testnet order-path check · ${d.symbol||'symbol unavailable'}`;
       badgeText='Complete';badgeTone='is-buy';
@@ -182,7 +185,7 @@
           const passed=gate.passed===true, relevant=gate.relevant_to_current_buy===true;
           const item=document.createElement('span');
           item.className=`log-gate ${passed?'pass':relevant?'block':'inactive'}`;
-          item.textContent=`${name}: ${passed?'pass':relevant?'blocked this BUY setup':'not met · no BUY setup'}`;
+          item.textContent=`${readable(name)}: ${passed?'pass':relevant?'blocked this BUY setup':'not met · no BUY setup'}`;
           item.title=String(gate.detail||'');
           gateLine.append(item);
         }
@@ -246,7 +249,7 @@
     }else if(!buys){
       const reasons=[];
       if(summary.no_consensus)reasons.push(`${summary.no_consensus} checks had fewer than two matching indicator votes`);
-      const gates=Object.entries(summary.blocked_by_gate||{}).map(([name,count])=>`${count} blocked by ${name}`);
+      const gates=Object.entries(summary.blocked_by_gate||{}).map(([name,count])=>`${count} blocked by ${readable(name)}`);
       reasons.push(...gates);
       note=`No BUY signals were produced${reasons.length?`: ${reasons.join('; ')}`:'.'}`;
     }else{
