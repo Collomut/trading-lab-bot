@@ -40,6 +40,7 @@ class Position:
     highest_price: float = 0.0  # For trailing stop
     break_even_activated: bool = False
     exit_policy: str = "risk_managed"
+    accounting_complete: bool = True
 
     @property
     def cost_basis(self) -> float:
@@ -85,14 +86,15 @@ class TradeRecord:
     amount: float
     entry_time: str
     exit_time: str
-    pnl: float
-    pnl_pct: float
+    pnl: float | None
+    pnl_pct: float | None
     reason: str  # Why the trade was closed
-    fee: float = 0.0
+    fee: float | None = 0.0
+    accounting_complete: bool = True
 
     @property
     def is_winner(self) -> bool:
-        return self.pnl > 0
+        return self.accounting_complete and self.pnl is not None and self.pnl > 0
 
 
 class RiskManager:
@@ -621,6 +623,17 @@ class RiskManager:
         if not position or not math.isfinite(float(amount)) or amount <= 0:
             return False
         position.amount = float(amount)
+        # A partial sell changes the position's cost basis and fee allocation.
+        # Until that partial execution is fully reconstructed, exclude the
+        # eventual round trip from profit-factor statistics.
+        position.accounting_complete = False
+        return self._save_positions()
+
+    def mark_position_accounting_incomplete(self, symbol: str) -> bool:
+        position = self.open_positions.get(symbol)
+        if not position:
+            return False
+        position.accounting_complete = False
         return self._save_positions()
 
     def close_position(
@@ -628,11 +641,18 @@ class RiskManager:
         symbol: str,
         exit_price: float,
         reason: str,
-        fee_cost: float = 0.0
+        fee_cost: float | None = 0.0
     ) -> TradeRecord | None:
         """Close an open position, record the trade, and update persistence."""
         if symbol not in self.open_positions:
             logger.warning(f"No open position for {symbol} to close")
+            return None
+
+        if not isinstance(exit_price, (int, float)) or not math.isfinite(float(exit_price)) or exit_price <= 0:
+            return None
+        if fee_cost is not None and (
+            not isinstance(fee_cost, (int, float)) or not math.isfinite(float(fee_cost)) or fee_cost < 0
+        ):
             return None
 
         position = self.open_positions.pop(symbol)
@@ -642,11 +662,19 @@ class RiskManager:
             self.open_positions[symbol] = position
             return None
 
-        gross_pnl = position.unrealized_pnl(exit_price)
-        total_fee = position.entry_fee_quote + max(0.0, float(fee_cost))
-        pnl = gross_pnl - total_fee
-        total_cost = position.entry_price * position.amount
-        pnl_pct = (pnl / total_cost * 100) if total_cost > 0 else 0.0
+        accounting_complete = position.accounting_complete and fee_cost is not None
+        if accounting_complete:
+            gross_pnl = position.unrealized_pnl(exit_price)
+            total_fee = position.entry_fee_quote + float(fee_cost)
+            pnl = gross_pnl - total_fee
+            total_cost = position.entry_price * position.amount
+            pnl_pct = (pnl / total_cost * 100) if total_cost > 0 else 0.0
+        else:
+            # Do not represent an unpriced commission or partial-fill basis as
+            # a zero-fee completed result. The account is halted for review.
+            total_fee = None
+            pnl = None
+            pnl_pct = None
 
         record = TradeRecord(
             symbol=symbol,
@@ -660,8 +688,13 @@ class RiskManager:
             pnl_pct=pnl_pct,
             reason=reason,
             fee=total_fee,
+            accounting_complete=accounting_complete,
         )
         self.trade_history.append(record)
+        if not accounting_complete:
+            self.halt(f"Trade closed for {symbol}, but fee or partial-fill accounting is incomplete; operator reconciliation required")
+            return record
+
         self._daily_loss += pnl
         self._consecutive_losses = self._consecutive_losses + 1 if pnl < 0 else 0
         try:
@@ -758,35 +791,44 @@ class RiskManager:
 
     def get_performance_summary(self) -> dict:
         """Calculate overall trading performance statistics."""
-        if not self.trade_history:
+        incomplete_trades = [t for t in self.trade_history if not t.accounting_complete or t.pnl is None]
+        completed_trades = [t for t in self.trade_history if t.accounting_complete and t.pnl is not None]
+        if not completed_trades:
             return {
                 "total_trades": 0,
-                "message": "No completed trades yet",
+                "incomplete_trades": len(incomplete_trades),
+                "message": "No fully reconciled completed trades yet",
                 "open_positions": len(self.open_positions),
                 "daily_pnl": round(self._daily_loss, 2),
                 "is_halted": self._is_halted,
+                "profit_factor": None,
             }
 
-        total_pnl = sum(t.pnl for t in self.trade_history)
-        winners = [t for t in self.trade_history if t.is_winner]
-        losers = [t for t in self.trade_history if not t.is_winner]
-        win_rate = (len(winners) / len(self.trade_history)) * 100
+        total_pnl = sum(t.pnl for t in completed_trades)
+        winners = [t for t in completed_trades if t.is_winner]
+        losers = [t for t in completed_trades if t.pnl <= 0]
+        win_rate = (len(winners) / len(completed_trades)) * 100
 
         avg_win = sum(t.pnl for t in winners) / len(winners) if winners else 0
         avg_loss = sum(t.pnl for t in losers) / len(losers) if losers else 0
-        profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+        gross_profit = sum(t.pnl for t in winners)
+        gross_loss = -sum(t.pnl for t in losers)
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
 
         return {
-            "total_trades": len(self.trade_history),
+            "total_trades": len(completed_trades),
+            "incomplete_trades": len(incomplete_trades),
             "winners": len(winners),
             "losers": len(losers),
             "win_rate": round(win_rate, 1),
             "total_pnl": round(total_pnl, 2),
             "avg_win": round(avg_win, 2),
             "avg_loss": round(avg_loss, 2),
-            "profit_factor": round(profit_factor, 2),
-            "best_trade": round(max(t.pnl for t in self.trade_history), 2),
-            "worst_trade": round(min(t.pnl for t in self.trade_history), 2),
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+            "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
+            "best_trade": round(max(t.pnl for t in completed_trades), 2),
+            "worst_trade": round(min(t.pnl for t in completed_trades), 2),
             "open_positions": len(self.open_positions),
             "daily_pnl": round(self._daily_loss, 2),
             "is_halted": self._is_halted,
@@ -797,8 +839,14 @@ class RiskManager:
         stats = self.get_performance_summary()
 
         if stats["total_trades"] == 0:
-            print(f"\n📊 Open Positions: {stats['open_positions']} | Today's P&L: ${stats['daily_pnl']:+,.2f} | Status: {'🛑 HALTED' if stats['is_halted'] else '✅ ACTIVE'}\n")
+            print(
+                f"\n📊 Reconciled Trades: 0 | Incomplete exits: {stats['incomplete_trades']} | "
+                f"Open Positions: {stats['open_positions']} | Today's P&L: ${stats['daily_pnl']:+,.2f} | "
+                f"Status: {'🛑 HALTED' if stats['is_halted'] else '✅ ACTIVE'}\n"
+            )
             return
+
+        pf_display = f"{stats['profit_factor']:.2f}" if stats["profit_factor"] is not None else "N/A (no losses)"
 
         print(f"""
 ╔══════════════════════════════════════════════════════════╗
@@ -809,7 +857,8 @@ class RiskManager:
 ║  Total P&L:       ${stats['total_pnl']:+,.2f}{'':<30}║
 ║  Avg Win:         ${stats['avg_win']:+,.2f}{'':<30}║
 ║  Avg Loss:        ${stats['avg_loss']:+,.2f}{'':<30}║
-║  Profit Factor:   {stats['profit_factor']:<38}║
+║  Profit Factor:   {pf_display:<38}║
+║  Incomplete Exits:{stats['incomplete_trades']:<38}║
 ║  Best Trade:      ${stats['best_trade']:+,.2f}{'':<30}║
 ║  Worst Trade:     ${stats['worst_trade']:+,.2f}{'':<30}║
 ╠══════════════════════════════════════════════════════════╣

@@ -15,6 +15,7 @@ import asyncio
 import logging
 import base64
 import hmac
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from aiohttp import web
@@ -491,19 +492,39 @@ class WebDashboard:
                     if line:
                         trades.append(json.loads(line))
 
-        # 6. Calculate accuracy and performance stats
-        realized_pnl = sum(t.get("pnl", 0.0) for t in trades if t.get("action") == "SELL")
-        total_gain_loss = None if total_net_worth is None else realized_pnl + unrealized_total
+        # 6. Calculate reconciled performance statistics. Never turn an
+        # unvalued-fee or partial-fill close into a zero-fee result.
+        sell_events = [t for t in trades if t.get("action") == "SELL"]
+        def is_reconciled_trade(trade):
+            try:
+                pnl = float(trade.get("pnl"))
+                fee = float(trade.get("fee"))
+                return (
+                    trade.get("accounting_complete") is not False
+                    and math.isfinite(pnl) and math.isfinite(fee) and fee >= 0
+                )
+            except (TypeError, ValueError):
+                return False
+
+        incomplete_sell_events = [t for t in sell_events if not is_reconciled_trade(t)]
+        completed_sells = [t for t in sell_events if t not in incomplete_sell_events]
+        realized_pnl = sum(float(t.get("pnl", 0.0)) for t in completed_sells)
+        total_gain_loss = (
+            None if total_net_worth is None or incomplete_sell_events
+            else realized_pnl + unrealized_total
+        )
         gain_loss_pct = (
             ((total_gain_loss / self.initial_balance) * 100)
             if (total_gain_loss is not None and self.initial_balance > 0)
             else 0.0
         )
 
-        completed_sells = [t for t in trades if t.get("action") == "SELL"]
         winners = [t for t in completed_sells if t.get("pnl", 0) > 0]
-        losers = [t for t in completed_sells if t.get("pnl", 0) <= 0]
+        losers = [t for t in completed_sells if t.get("pnl", 0) < 0]
         accuracy_pct = (len(winners) / len(completed_sells) * 100) if completed_sells else 0.0
+        gross_profit = sum(float(t.get("pnl") or 0.0) for t in winners)
+        gross_loss = -sum(float(t.get("pnl") or 0.0) for t in losers)
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
 
         # Beginner explanation summary
         if len(positions) == 0:
@@ -533,6 +554,10 @@ class WebDashboard:
             "total_trades": len(completed_sells),
             "winners_count": len(winners),
             "losers_count": len(losers),
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+            "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
+            "incomplete_trade_accounting": len(incomplete_sell_events),
             "positions": positions,
             "positions_count": len(positions),
             "latest_signals": self.bot.last_signals,

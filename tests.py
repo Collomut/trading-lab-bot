@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 33540)
-Total output lines: 2604
-
 """
 Comprehensive unit and integration test suite for the Automated Trading Bot.
 
@@ -965,6 +962,31 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertEqual(record.fee, 10.0)
             self.assertAlmostEqual(record.pnl_pct, 0.8)
 
+    def test_profit_factor_uses_gross_profit_divided_by_gross_loss(self):
+        with TemporaryDirectory() as persistence_dir:
+            risk = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            for price in (200.0, 90.0, 90.0):
+                risk.open_position("BTC/USDT", 100.0, 1.0)
+                risk.close_position("BTC/USDT", price, "fixture", fee_cost=0.0)
+            stats = risk.get_performance_summary()
+            self.assertEqual(stats["gross_profit"], 100.0)
+            self.assertEqual(stats["gross_loss"], 20.0)
+            self.assertEqual(stats["profit_factor"], 5.0)
+
+    def test_unknown_exit_fee_is_incomplete_and_halts_entries(self):
+        with TemporaryDirectory() as persistence_dir:
+            risk = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            risk.open_position("BTC/USDT", 100.0, 1.0)
+            record = risk.close_position("BTC/USDT", 110.0, "fee missing", fee_cost=None)
+            self.assertIsNotNone(record)
+            self.assertIsNone(record.pnl)
+            self.assertIsNone(record.pnl_pct)
+            self.assertIsNone(record.fee)
+            self.assertFalse(record.accounting_complete)
+            self.assertTrue(risk._is_halted)
+            self.assertEqual(risk.get_performance_summary()["total_trades"], 0)
+            self.assertEqual(risk.get_performance_summary()["incomplete_trades"], 1)
+
     def test_f12_start_paused_policy(self):
         """F-12: START_PAUSED=true policy defaults to EXIT_ONLY mode."""
         with TemporaryDirectory() as persistence_dir:
@@ -1214,7 +1236,285 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         self.assertIn("intervals", captured.output[0])
         self.assertEqual(validate_candle_sequence(continuous, 60, now_ms=now + 600_000), [])
 
-    def test_exchange_preserves_gap_metada…3540 tokens truncated…pshot, orders = connector.fetch_account_snapshot()
+    def test_exchange_preserves_gap_metadata_for_audit_event(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector._candle_sequence_issues = {}
+        connector.exchange = Mock()
+        connector.exchange.parse_timeframe.return_value = 60
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        start = (now_ms // 60_000) * 60_000 - 180_000
+        connector.exchange.fetch_ohlcv.return_value = [
+            [start, 100, 101, 99, 100, 10],
+            [start + 120_000, 100, 101, 99, 100, 10],
+        ]
+
+        self.assertEqual(connector.fetch_closed_ohlcv("BTC/USDT", "1m", 10), [])
+        self.assertEqual(connector._candle_sequence_issues["BTC/USDT"]["missing_intervals"], 1)
+
+    def test_long_ohlcv_history_is_paged_and_returned_in_timestamp_order(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector.exchange = Mock()
+        connector.exchange.parse_timeframe.return_value = 3600
+
+        def page(_symbol, _timeframe, since=None, limit=None):
+            self.assertEqual(limit, 1000)
+            timestamps = range(1000, 2000) if since is None else range(0, 1000)
+            return [[ts * 3_600_000, 1, 2, 1, 2, 3] for ts in timestamps]
+
+        connector.exchange.fetch_ohlcv.side_effect = page
+        candles = connector.fetch_ohlcv("BTC/USDT", "1h", 1500)
+        self.assertEqual(len(candles), 1500)
+        self.assertEqual(candles[0][0], 500 * 3_600_000)
+        self.assertEqual(candles[-1][0], 1999 * 3_600_000)
+        self.assertEqual(connector.exchange.fetch_ohlcv.call_count, 2)
+
+    def test_testnet_candles_use_public_data_client_not_authenticated_testnet_client(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector.exchange = Mock()
+        connector.market_data_exchange = Mock()
+        connector.market_data_exchange.fetch_ohlcv.return_value = [[1, 100, 101, 99, 100, 10]]
+
+        candles = connector.fetch_ohlcv("BTC/USDT", "1h", 1)
+
+        self.assertEqual(candles, [[1, 100, 101, 99, 100, 10]])
+        connector.market_data_exchange.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", limit=1)
+        connector.exchange.fetch_ohlcv.assert_not_called()
+
+    def test_paper_public_market_client_has_no_private_credentials(self):
+        config = ExchangeConfig(
+            name="binance", api_key="testnet-key", api_secret="testnet-secret",
+            paper_trading=True, paper_environment="testnet",
+        )
+        connector = object.__new__(ExchangeConnector)
+        connector.config = config
+        public_client = Mock()
+        public_client.urls = {"api": {"public": "https://api.binance.com/api/v3"}}
+        with patch("exchange.ccxt.binance", return_value=public_client) as constructor:
+            result = connector._create_public_market_data_exchange()
+
+        self.assertIs(result, public_client)
+        constructor.assert_called_once()
+        options = constructor.call_args.args[0]
+        self.assertNotIn("apiKey", options)
+        self.assertNotIn("secret", options)
+        self.assertEqual(
+            public_client.urls["api"]["public"],
+            "https://data-api.binance.vision/api/v3",
+        )
+
+        config.paper_environment = "demo"
+        with patch("exchange.ccxt.binance", return_value=public_client) as constructor:
+            result = connector._create_public_market_data_exchange()
+        self.assertIs(result, public_client)
+        constructor.assert_called_once()
+
+    def test_long_strategy_request_returns_required_completed_candle_count(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector._candle_sequence_issues = {}
+        connector.exchange = Mock()
+        connector.exchange.parse_timeframe.return_value = 3600
+        now = int(datetime.now(timezone.utc).timestamp() * 1000)
+        latest_open = now // 3_600_000 * 3_600_000
+        start = latest_open - 2501 * 3_600_000
+        connector.fetch_ohlcv = Mock(return_value=[
+            [start + i * 3_600_000, 100, 101, 99, 100, 10]
+            for i in range(2502)
+        ])
+        closed = connector.fetch_closed_ohlcv("BTC/USDT", "1h", 2501)
+        self.assertEqual(len(closed), 2501)
+        self.assertLess(closed[-1][0], latest_open)
+        connector.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", 2502)
+
+    def test_closed_candle_return_correlation_is_aligned_by_timestamp(self):
+        candles_a, candles_b = [], []
+        for i in range(40):
+            price_a = 100 + i * 2 + (i % 3)
+            price_b = 50 + i * 1 + ((i % 3) / 2)
+            candles_a.append([i + 1, price_a, price_a, price_a, price_a, 1])
+            candles_b.append([i + 1, price_b, price_b, price_b, price_b, 1])
+        self.assertGreater(TradingBot._return_correlation(candles_a, candles_b), 0.9)
+
+    def test_exchange_reconciliation_error_is_not_treated_as_empty_balance(self):
+        connector = object.__new__(ExchangeConnector)
+        connector.exchange = Mock()
+        connector.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("secret omitted")
+        with self.assertRaisesRegex(RuntimeError, "Testnet authentication"):
+            connector.fetch_account_snapshot()
+
+    def test_open_order_lookup_failure_blocks_account_reconciliation(self):
+        connector = object.__new__(ExchangeConnector)
+        connector.config = ExchangeConfig(paper_trading=True, paper_environment="testnet")
+        connector.exchange = Mock()
+        connector.exchange.fetch_balance.return_value = {"total": {"USDT": 1000.0}}
+        connector.exchange.fetch_open_orders.side_effect = ccxt.ExchangeError(
+            "fetchOpenOrders is not supported"
+        )
+        connector._is_simulated = lambda: False
+
+        with self.assertRaises(AccountAccessError):
+            connector.fetch_account_snapshot()
+
+        diagnostic = connector.diagnose_account_access()
+        self.assertEqual(diagnostic["overall_status"], "BALANCE_ONLY_ORDER_PERMISSION_MISSING")
+        self.assertFalse(diagnostic["orders_ok"])
+
+    def test_account_authentication_failure_is_actionable_without_echoing_secrets(self):
+        mock_ex = Mock()
+        mock_ex.last_json_response = {"code": -2014, "msg": "API-key format invalid."}
+        mock_ex.last_http_response = '{"code": -2014, "msg": "API-key format invalid."}'
+        mock_ex.last_http_status = 400
+        body, status = extract_ccxt_response_metadata(mock_ex)
+        self.assertEqual(body, {"code": -2014, "msg": "API-key format invalid."})
+        self.assertEqual(status, 400)
+
+        connector = object.__new__(ExchangeConnector)
+        connector.exchange = Mock()
+        connector.exchange.last_json_response = None
+        connector.exchange.last_http_response = None
+        connector.exchange.last_http_status = None
+        connector.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("private-value-must-not-appear")
+
+        with self.assertRaises(AccountAccessError) as raised:
+            connector.fetch_balance_snapshot()
+
+        self.assertIn("Spot Testnet", str(raised.exception))
+        self.assertNotIn("private-value-must-not-appear", str(raised.exception))
+
+        msg_2014 = account_access_message(ccxt.ExchangeError('{"code":-2014,"msg":"API-key format invalid."}'))
+        self.assertIn("-2014", msg_2014)
+        self.assertIn("API key format is invalid", msg_2014)
+
+        msg_2015_dict = account_access_message(ccxt.ExchangeError("Authentication error"), response_body={"code": -2015, "msg": "key rejected"})
+        self.assertIn("-2015", msg_2015_dict)
+        self.assertIn("API key, IP, or permissions", msg_2015_dict)
+
+        msg_2015_text = account_access_message(ccxt.ExchangeError("Invalid API-key, IP, or permissions for action."))
+        self.assertIn("-2015", msg_2015_text)
+
+        msg_1022 = account_access_message(ccxt.ExchangeError('{"code":-1022,"msg":"signature for this request is not valid"}'))
+        self.assertIn("-1022", msg_1022)
+        self.assertIn("API_SECRET does not match", msg_1022)
+
+        msg_1021 = account_access_message(ccxt.ExchangeError('{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'))
+        self.assertIn("-1021", msg_1021)
+        self.assertIn("server clock synchronization", msg_1021)
+
+        msg_401 = account_access_message(ccxt.AuthenticationError("HTTP 401 Unauthorized"), http_status=401)
+        self.assertIn("HTTP 401", msg_401)
+        self.assertIn("Spot Testnet", msg_401)
+        demo_401 = account_access_message(
+            ccxt.AuthenticationError("HTTP 401 Unauthorized"), http_status=401, environment="demo"
+        )
+        self.assertIn("HTTP 401", demo_401)
+        self.assertIn("DEMO_API_KEY", demo_401)
+        self.assertIn("Binance Demo", demo_401)
+
+        msg_403 = account_access_message(ccxt.PermissionDenied("HTTP 403 Forbidden"), http_status=403)
+        self.assertIn("HTTP 403", msg_403)
+        self.assertIn("denied account access", msg_403)
+
+        msg_html = account_access_message(ccxt.ExchangeError("502 Bad Gateway"), response_body="<html><title>502 Bad Gateway</title></html>", http_status=502)
+        self.assertIn("HTTP 502", msg_html)
+        self.assertNotIn("<html>", msg_html)
+        self.assertNotIn("<title>", msg_html)
+
+        msg_net = account_access_message(ccxt.NetworkError("Failed to connect to host"))
+        self.assertIn("could not be reached", msg_net)
+
+        leak_probe = (
+            "GET https://testnet.binance.vision/api/v3/account?timestamp=1690000000"
+            "&signature=supersecret_sig_1234567890abcdef&apiKey=supersecret_key_9876543210 "
+            'failed with {"code":-2015,"msg":"Invalid API-key"}'
+        )
+        msg_probe = account_access_message(ccxt.ExchangeError(leak_probe))
+        self.assertNotIn("supersecret_sig_1234567890abcdef", msg_probe)
+        self.assertNotIn("supersecret_key_9876543210", msg_probe)
+        self.assertNotIn("https://testnet.binance.vision", msg_probe)
+        self.assertNotIn("1690000000", msg_probe)
+        self.assertIn("-2015", msg_probe)
+
+    def test_diagnose_account_access(self):
+        config_sim = ExchangeConfig(paper_trading=True, paper_environment="simulated")
+        conn_sim = ExchangeConnector(config_sim)
+        diag_sim = conn_sim.diagnose_account_access()
+        self.assertEqual(diag_sim["overall_status"], "SIMULATED_WALLET")
+        self.assertTrue(diag_sim["balance_ok"])
+        self.assertTrue(diag_sim["orders_ok"])
+
+        conn = object.__new__(ExchangeConnector)
+        conn.config = ExchangeConfig(paper_trading=True, paper_environment="testnet")
+        conn.exchange = Mock()
+        conn.exchange.last_json_response = {"code": -2015, "msg": "Invalid API-key"}
+        conn.exchange.last_http_response = '{"code": -2015, "msg": "Invalid API-key"}'
+        conn.exchange.last_http_status = 401
+        conn.exchange.fetch_balance.side_effect = ccxt.AuthenticationError("auth failed")
+        conn._is_simulated = lambda: False
+
+        diag_auth_fail = conn.diagnose_account_access()
+        self.assertEqual(diag_auth_fail["overall_status"], "AUTHENTICATION_FAILED")
+        self.assertFalse(diag_auth_fail["balance_ok"])
+        self.assertIn("-2015", diag_auth_fail["balance_error"])
+
+        conn.exchange.fetch_balance.side_effect = None
+        conn.exchange.fetch_balance.return_value = {"total": {"USDT": 1000.0}}
+        conn.exchange.fetch_open_orders.side_effect = ccxt.PermissionDenied("HTTP 403 Forbidden")
+        conn.exchange.last_json_response = None
+        conn.exchange.last_http_response = None
+        conn.exchange.last_http_status = 403
+
+        diag_perm = conn.diagnose_account_access()
+        self.assertEqual(diag_perm["overall_status"], "BALANCE_ONLY_ORDER_PERMISSION_MISSING")
+        self.assertTrue(diag_perm["balance_ok"])
+        self.assertFalse(diag_perm["orders_ok"])
+        self.assertIn("HTTP 403", diag_perm["orders_error"])
+
+        conn.exchange.fetch_open_orders.side_effect = None
+        conn.exchange.fetch_open_orders.return_value = []
+        diag_ok = conn.diagnose_account_access()
+        self.assertEqual(diag_ok["overall_status"], "AUTHENTICATED_AND_RECONCILED")
+        self.assertTrue(diag_ok["balance_ok"])
+        self.assertTrue(diag_ok["orders_ok"])
+
+    def test_simulated_paper_trading_mode(self):
+        config = ExchangeConfig(
+            api_key="", api_secret="",
+            paper_trading=True, paper_environment="simulated",
+        )
+        connector = ExchangeConnector(config)
+        connector.get_current_price = lambda symbol: 50000.0
+
+        snapshot, orders = connector.fetch_account_snapshot()
+        self.assertIn("USDT", snapshot["total"])
+        self.assertEqual(len(orders), 0)
+
+        buy = connector.place_market_buy("BTC/USDT", 0.1, "sim-buy-1")
+        self.assertEqual(buy["status"], "closed")
+        self.assertEqual(buy["filled"], 0.1)
+
+        stop = connector.place_native_stop_loss("BTC/USDT", 0.1, 49000.0, "sim-stop-1")
+        self.assertEqual(stop["status"], "open")
+
+        snap2, orders2 = connector.fetch_account_snapshot()
+        self.assertEqual(len(orders2), 1)
+
+        sell = connector.place_market_sell("BTC/USDT", 0.1, "sim-sell-1")
+        self.assertEqual(sell["status"], "closed")
+
+    def test_auto_fallback_to_simulation_on_2015(self):
+        config = ExchangeConfig(
+            api_key="key", api_secret="secret",
+            paper_trading=True, paper_environment="testnet",
+            fallback_to_simulation=True,
+        )
+        connector = ExchangeConnector(config)
+        connector.exchange.fetch_balance = Mock(side_effect=ccxt.AuthenticationError('{"code":-2015,"msg":"Invalid API-key"}'))
+        connector.get_current_price = lambda symbol: 50000.0
+
+        snapshot, orders = connector.fetch_account_snapshot()
         self.assertTrue(connector.is_fallback_simulated)
         self.assertIn("USDT", snapshot["total"])
 
@@ -1446,6 +1746,22 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         ), 2.5)
         self.assertIsNone(TradingBot._fee_quote_cost(
             {"fee": {"currency": "BNB", "cost": "0.01"}}, "BTC/USDT", 50000
+        ))
+
+    def test_fee_accounting_recovers_verified_order_fill_fees(self):
+        bot = object.__new__(TradingBot)
+        bot.exchange = Mock()
+        bot.exchange.fetch_order_trades.return_value = [
+            {"amount": "0.4", "fee": {"currency": "USDT", "cost": "0.04"}},
+            {"amount": "0.6", "fee": {"currency": "USDT", "cost": "0.06"}},
+        ]
+        self.assertAlmostEqual(
+            bot._resolve_fee_quote_cost({"id": "order-1", "filled": "1.0"}, "BTC/USDT", 100.0),
+            0.1,
+        )
+        bot.exchange.fetch_order_trades.return_value[1]["amount"] = "0.5"
+        self.assertIsNone(bot._resolve_fee_quote_cost(
+            {"id": "order-1", "filled": "1.0"}, "BTC/USDT", 100.0
         ))
 
     def test_entry_and_exit_fees_are_both_counted_in_realized_pnl(self):
@@ -2182,6 +2498,13 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("Practice mode", overview)
         self.assertIn("App-monitored exits can fail during outages", overview)
 
+    def test_trade_history_explains_profit_factor_and_incomplete_accounting(self):
+        history = (Path("templates") / "history.html").read_text(encoding="utf-8")
+        self.assertIn("Profit factor", history)
+        self.assertIn("Gross gains ÷ gross losses", history)
+        self.assertIn("Pending reconciliation", history)
+        self.assertIn("incomplete fee or partial-fill accounting", history)
+
     def test_glossary_definitions_completeness(self):
         glossary = (Path("templates") / "glossary.html").read_text(encoding="utf-8")
         expected_terms = [
@@ -2326,4 +2649,3 @@ class TestBacktestingAndRealism(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -623,6 +623,21 @@ class ExchangeConnector:
                 logger.error("Client-order reconciliation failed for %s (%s)", symbol, type(exc).__name__)
                 raise RuntimeError("Client order status is unavailable") from exc
 
+    def fetch_order_trades(self, order_id: str, symbol: str) -> list:
+        """Fetch private execution fills for one order when order responses omit fees."""
+        if not order_id or not symbol or self._is_simulated():
+            return []
+        fetch_fills = getattr(self.exchange, "fetch_order_trades", None)
+        if not callable(fetch_fills):
+            return []
+        with self._exchange_lock:
+            try:
+                trades = fetch_fills(str(order_id), symbol)
+                return trades if isinstance(trades, list) else []
+            except ccxt.BaseError as exc:
+                logger.warning("Order fill-fee reconciliation unavailable for %s (%s)", symbol, type(exc).__name__)
+                return []
+
     def get_usdt_balance(self) -> float:
         """Get available USDT balance."""
         balance = self.get_balance()
@@ -902,4 +917,3 @@ class ExchangeConnector:
                 return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
             except ccxt.BaseError:
                 return datetime.now(timezone.utc)
-
