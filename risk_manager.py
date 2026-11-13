@@ -307,6 +307,20 @@ class RiskManager:
                 logger.info("✅ Trading resumed — new day, daily loss limit reset")
             self._save_daily_state()
 
+    def rebase_for_paper_environment(self, equity: float):
+        """Start fresh equity anchors for a new paper exchange, keeping safety latches."""
+        if not isinstance(equity, (int, float)) or not math.isfinite(equity) or equity <= 0:
+            raise ValueError("Paper account equity must be finite and positive")
+        today = datetime.now(timezone.utc).date()
+        self._daily_loss = 0.0
+        self._daily_loss_reset_date = today
+        self._daily_starting_equity = float(equity)
+        self._rolling_peak_equity = float(equity)
+        self._equity_basis = self.EQUITY_BASIS
+        self._equity_basis_migration_pending = False
+        # Existing halt and consecutive-loss state are deliberately preserved.
+        self._save_daily_state()
+
     def _has_persisted_trade_history(self) -> bool:
         """Check durable strategy history before clearing a legacy equity halt."""
         if self.trade_history:

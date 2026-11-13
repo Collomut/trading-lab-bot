@@ -633,6 +633,21 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             size = rm.calculate_position_size(portfolio, entry_price, sl_price)
             self.assertAlmostEqual(size, 10.0)
 
+    def test_paper_environment_rebase_keeps_safety_latches_and_loss_streak(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm._consecutive_losses = 1
+            rm._is_halted = True
+            rm._halt_reason = "Manual halt review required"
+            rm.rebase_for_paper_environment(5000.0)
+
+            self.assertEqual(rm._daily_loss, 0.0)
+            self.assertEqual(rm._daily_starting_equity, 5000.0)
+            self.assertEqual(rm._rolling_peak_equity, 5000.0)
+            self.assertEqual(rm._consecutive_losses, 1)
+            self.assertTrue(rm._is_halted)
+            self.assertEqual(rm._halt_reason, "Manual halt review required")
+
     def test_position_sizing_calculation_and_hard_risk_cap(self):
         with TemporaryDirectory() as tmpdir:
             config = RiskConfig(
@@ -1743,7 +1758,10 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
     def test_seeded_testnet_inventory_is_baselined_not_mistaken_for_a_position(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
-            bot.config = SimpleNamespace(strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]))
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="testnet"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
             bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
             bot.exchange = Mock()
             bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "1.25", "USDT": "10000"}}, [])
@@ -1754,6 +1772,54 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             bot._last_reconciliation_ok = False
             self.assertTrue(bot._reconcile_exchange_state())
             self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"BTC": "1.25"})
+
+    def test_paper_environment_switch_rebaselines_and_pauses_entries(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.store.write_state("paper_environment", "testnet")
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "1.25"})
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"BTC": "0.5", "USDT": "5000"}}, []
+            )
+            bot.exchange.exchange.load_markets.return_value = None
+            bot.exchange.exchange.market.return_value = {"precision": {"amount": 8}}
+            bot.exchange.exchange.precisionMode = 2
+            bot.exchange.amount_to_precision.return_value = "1.00000000"
+            bot._last_reconciliation_ok = False
+
+            self.assertTrue(bot._reconcile_exchange_state())
+            self.assertEqual(bot.risk_manager.store.read_state("paper_environment"), "demo")
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"BTC": "0.5"})
+            self.assertEqual(bot.risk_manager.entry_mode(), "EXIT_ONLY")
+            self.assertEqual(bot.risk_manager._daily_starting_equity, 5000.0)
+            events = bot.risk_manager.store.list_events(10)
+            self.assertTrue(any(event["event_type"] == "paper_environment_changed" for event in events))
+
+    def test_paper_environment_switch_refuses_existing_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.store.write_state("paper_environment", "testnet")
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "1.25"})
+            bot.risk_manager.open_position("BTC/USDT", 100.0, 0.1)
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "1.35", "USDT": "5000"}}, [])
+            bot._last_reconciliation_ok = False
+
+            self.assertFalse(bot._reconcile_exchange_state())
+            self.assertEqual(bot.risk_manager.store.read_state("paper_environment"), "testnet")
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"BTC": "1.25"})
+            self.assertTrue(bot.risk_manager._is_halted)
 
     def test_native_stop_is_submitted_as_market_stop_with_persistable_client_id(self):
         connector = object.__new__(ExchangeConnector)

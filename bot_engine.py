@@ -611,6 +611,40 @@ class TradingBot:
             totals = balance.get("total", {}) or {}
             configured = {pair.strip(): pair.strip().split("/")[0] for pair in self.config.strategy.trading_pairs}
             baseline = self.risk_manager.store.read_state("baseline_asset_balances")
+            current_environment = (
+                self.config.exchange.paper_environment
+                if self.config.exchange.paper_trading else "live"
+            )
+            persisted_environment = self.risk_manager.store.read_state("paper_environment")
+            if persisted_environment is None:
+                # Establish an origin marker on the current paper profile before any switch.
+                self.risk_manager.store.write_state("paper_environment", current_environment)
+                self.risk_manager.store.append_event("paper_environment_baselined", {
+                    "environment": current_environment,
+                    "existing_baseline": baseline is not None,
+                })
+            elif persisted_environment != current_environment:
+                unresolved = self.risk_manager.store.unresolved_orders()
+                if (not self.config.exchange.paper_trading or self.risk_manager.open_positions
+                        or unresolved or open_orders):
+                    raise ValueError(
+                        "Paper environment changed while positions or orders exist; reconcile before switching"
+                    )
+                demo_equity = Decimal(str(totals.get("USDT") or 0))
+                if not demo_equity.is_finite() or demo_equity <= 0:
+                    raise ValueError("New paper account has no valid USDT equity for risk initialization")
+                next_baseline = {base: str(totals.get(base) or 0) for base in set(configured.values())}
+                # Save the account-specific baseline first; marker is written last so a crash retries safely.
+                self.risk_manager.store.write_state("baseline_asset_balances", next_baseline)
+                self.risk_manager.rebase_for_paper_environment(float(demo_equity))
+                self.risk_manager.set_exit_only()
+                self.risk_manager.store.append_event("paper_environment_changed", {
+                    "from": str(persisted_environment), "to": current_environment,
+                    "positions": 0, "unresolved_orders": 0, "exchange_open_orders": 0,
+                    "risk_equity_rebased": True, "entries_paused_for_review": True,
+                })
+                self.risk_manager.store.write_state("paper_environment", current_environment)
+                baseline = next_baseline
             if baseline is None:
                 if self.risk_manager.open_positions:
                     raise ValueError("baseline asset balances are missing while local positions exist")
