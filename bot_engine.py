@@ -772,7 +772,7 @@ class TradingBot:
                                 or not expected_residual.is_finite()
                                 or (baseline_known and base_total < baseline_total)
                                 or expected_residual < 0
-                                or expected_residual > amount_steps[base] + tolerances[base]
+                                or (baseline_known and expected_residual > amount_steps[base] + tolerances[base])
                                 or (baseline_known and residual > expected_residual + amount_steps[base] + tolerances[base])):
                             raise ValueError(f"filled stop for {symbol} left an unexpected remaining balance")
                         # If this asset was absent from the account baseline, its
