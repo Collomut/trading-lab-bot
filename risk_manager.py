@@ -453,15 +453,16 @@ class RiskManager:
         self.store.append_event("mode_changed", {"mode": "EXIT_ONLY"})
 
     def acknowledge_manual_halt_review(self) -> bool:
-        """Clear an explicitly reviewed emergency or consecutive-loss halt only."""
+        """Clear an explicitly reviewed protective-stop, emergency, or loss halt."""
         if not self._is_halted:
             return False
+        protective_stop_halt = self._halt_reason.startswith("Exchange stop filled")
         emergency_halt = self._halt_reason.startswith("Emergency stop")
         loss_limit_halt = self._halt_reason.startswith((
             "Consecutive loss limit reached",
             "Consecutive loss limit persists",
         ))
-        if not (emergency_halt or loss_limit_halt):
+        if not (emergency_halt or protective_stop_halt or loss_limit_halt):
             return False
         previous_reason = self._halt_reason
         previous_losses = self._consecutive_losses
@@ -471,7 +472,11 @@ class RiskManager:
             self._consecutive_losses = 0
         self._is_halted, self._halt_reason = False, ""
         try:
-            event_type = "consecutive_loss_halt_review_acknowledged" if loss_limit_halt else "emergency_stop_review_acknowledged"
+            event_type = (
+                "consecutive_loss_halt_review_acknowledged" if loss_limit_halt else
+                "protective_stop_review_acknowledged" if protective_stop_halt else
+                "emergency_stop_review_acknowledged"
+            )
             self.store.append_event(event_type, {
                 "previous_reason": previous_reason,
                 "previous_consecutive_losses": previous_losses,
@@ -645,7 +650,8 @@ class RiskManager:
         symbol: str,
         exit_price: float,
         reason: str,
-        fee_cost: float | None = 0.0
+        fee_cost: float | None = 0.0,
+        closed_amount: float | None = None,
     ) -> TradeRecord | None:
         """Close an open position, record the trade, and update persistence."""
         if symbol not in self.open_positions:
@@ -659,7 +665,14 @@ class RiskManager:
         ):
             return None
 
-        position = self.open_positions.pop(symbol)
+        position = self.open_positions[symbol]
+        amount = position.amount if closed_amount is None else closed_amount
+        if (not isinstance(amount, (int, float)) or not math.isfinite(float(amount))
+                or amount <= 0 or amount > position.amount):
+            return None
+        amount = float(amount)
+        allocated_entry_fee = position.entry_fee_quote * (amount / position.amount)
+        self.open_positions.pop(symbol)
         if not self._save_positions():
             # Keep the in-memory view conservative and aligned with the last
             # durable state, which still contains this potentially open position.
@@ -668,10 +681,10 @@ class RiskManager:
 
         accounting_complete = position.accounting_complete and fee_cost is not None
         if accounting_complete:
-            gross_pnl = position.unrealized_pnl(exit_price)
-            total_fee = position.entry_fee_quote + float(fee_cost)
+            gross_pnl = (exit_price - position.entry_price) * amount
+            total_fee = allocated_entry_fee + float(fee_cost)
             pnl = gross_pnl - total_fee
-            total_cost = position.entry_price * position.amount
+            total_cost = position.entry_price * amount
             pnl_pct = (pnl / total_cost * 100) if total_cost > 0 else 0.0
         else:
             # Do not represent an unpriced commission or partial-fill basis as
@@ -685,7 +698,7 @@ class RiskManager:
             side=position.side,
             entry_price=position.entry_price,
             exit_price=exit_price,
-            amount=position.amount,
+            amount=amount,
             entry_time=position.entry_time,
             exit_time=datetime.now(timezone.utc).isoformat(),
             pnl=pnl,

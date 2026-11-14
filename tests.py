@@ -72,6 +72,20 @@ from regime_router import REGIME_ROUTE_POLICY, evaluate_regime_router
 
 
 class TestShadowLogSafety(unittest.TestCase):
+    def test_reconciliation_log_shows_safe_reason_and_hides_unrecognized_details(self):
+        safe = WebDashboard._safe_log_details("reconciliation_failed", {
+            "reason": "Exchange reconciliation failed: persisted exchange stop for XRP/USDT is missing or not fully filled",
+        })
+        self.assertIn("persisted exchange stop", safe["message"])
+
+        unsafe = WebDashboard._safe_log_details("reconciliation_failed", {
+            "reason": "Exchange reconciliation failed: traceback with credential=private-value",
+        })
+        self.assertEqual(
+            unsafe["message"],
+            "Account reconciliation failed; new entries remained blocked.",
+        )
+
     def test_volume_breakout_observer_detects_predeclared_setup(self):
         candles = []
         for index in range(260):
@@ -2062,6 +2076,86 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             "BTC/USDT", "market", "sell", 0.1, None,
             {"stopLossPrice": "98.00", "clientOrderId": "stop-client-1"},
         )
+
+    def test_reconciliation_closes_stop_filled_at_exchange_amount_precision_and_allows_reviewed_resume(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["XRP/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
+            bot.risk_manager.store.write_state("paper_environment", "demo")
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"XRP": "1"})
+            position = bot.risk_manager.open_position(
+                "XRP/USDT", 0.9943, 500.9985, order_id="buy-1",
+                entry_fee_quote=0.49864145, stop_loss_override=0.98,
+                exit_policy="downtrend_rsi_recovery",
+            )
+            position.stop_order_id = "stop-1"
+            position.stop_client_order_id = "stop-client-1"
+            bot.risk_manager._save_positions()
+
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"XRP": "0.0985", "USDT": "4487.76"}}, []
+            )
+            bot.exchange.exchange.load_markets.return_value = None
+            bot.exchange.exchange.market.return_value = {"precision": {"amount": 1}}
+            bot.exchange.exchange.precisionMode = 2
+            bot.exchange.exchange.TICK_SIZE = 4
+            bot.exchange.amount_to_precision.side_effect = lambda symbol, amount: (
+                "1.0" if Decimal(str(amount)) == Decimal("1") else "500.9"
+            )
+            bot.exchange.fetch_order.return_value = {
+                "id": "stop-1", "side": "sell", "status": "closed", "amount": "500.9",
+                "filled": "500.9", "average": "0.98",
+                "fees": [{"cost": "0.49", "currency": "USDT"}],
+            }
+            bot._last_reconciliation_ok = False
+            bot._cycle_lock = threading.Lock()
+
+            # Refuse to rebaseline if XRP fell below its recorded starting
+            # balance; a confirmed stop fill cannot explain that loss.
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"XRP": "0.5", "USDT": "4487.76"}}, []
+            )
+            self.assertFalse(bot._reconcile_exchange_state())
+            self.assertIn("XRP/USDT", bot.risk_manager.open_positions)
+            self.assertEqual(
+                bot.risk_manager.store.read_state("baseline_asset_balances"),
+                {"XRP": "1"},
+            )
+            self.assertEqual(bot.risk_manager.trade_history, [])
+
+            # Binance filled the full precision-rounded stop amount; only
+            # 0.0985 XRP remained from the 0.1 XRP amount step, in addition
+            # to the prior 1 XRP account baseline.
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"XRP": "1.0985", "USDT": "4487.76"}}, []
+            )
+            self.assertFalse(bot._reconcile_exchange_state())
+            self.assertNotIn("XRP/USDT", bot.risk_manager.open_positions)
+            self.assertEqual(
+                bot.risk_manager.store.read_state("baseline_asset_balances"),
+                {"XRP": "1.0985"},
+            )
+            record = bot.risk_manager.trade_history[-1]
+            self.assertEqual(record.reason, "Exchange-native stop-loss filled")
+            self.assertAlmostEqual(record.amount, 500.9)
+            self.assertAlmostEqual(record.exit_price, 0.98)
+            self.assertTrue(record.accounting_complete)
+            self.assertTrue(bot.risk_manager._is_halted)
+            events = bot.risk_manager.store.list_events(10)
+            self.assertTrue(any(event["event_type"] == "protective_stop_filled" for event in events))
+
+            # The dashboard's explicit review-and-resume action performs a
+            # fresh clean reconciliation before acknowledging this halt.
+            resumed, message = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertTrue(resumed, message)
+            self.assertEqual(bot.risk_manager.entry_mode(), "ACTIVE")
+            self.assertFalse(bot.risk_manager._is_halted)
 
     def test_terminal_partial_sell_reconciles_and_reprotects_remaining_position(self):
         with TemporaryDirectory() as persistence_dir:

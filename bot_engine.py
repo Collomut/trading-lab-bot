@@ -687,17 +687,41 @@ class TradingBot:
                 baseline = {base: str(totals.get(base) or 0) for base in set(configured.values())}
                 self.risk_manager.store.write_state("baseline_asset_balances", baseline)
             tolerances = {}
+            amount_steps = {}
             for symbol, base in configured.items():
                 market = self.exchange.exchange.market(symbol)
                 precision = market.get("precision", {}).get("amount")
                 precision_mode = getattr(self.exchange.exchange, "precisionMode", None)
                 tick_size_mode = getattr(self.exchange.exchange, "TICK_SIZE", 4)
+                decimal_places_mode = getattr(self.exchange.exchange, "DECIMAL_PLACES", 2)
+                significant_digits_mode = getattr(self.exchange.exchange, "SIGNIFICANT_DIGITS", 3)
+                if not isinstance(tick_size_mode, int):
+                    tick_size_mode = 4
+                if not isinstance(decimal_places_mode, int):
+                    decimal_places_mode = 2
+                if not isinstance(significant_digits_mode, int):
+                    significant_digits_mode = 3
                 if precision_mode == tick_size_mode and precision is not None:
-                    tolerances[base] = Decimal(str(precision)) / 2
+                    amount_steps[base] = Decimal(str(precision))
+                elif precision_mode == decimal_places_mode and precision is not None:
+                    amount_steps[base] = Decimal(1).scaleb(-int(precision))
+                elif precision_mode == significant_digits_mode and precision is not None:
+                    reference = Decimal(str(
+                        self.risk_manager.open_positions[symbol].amount
+                        if symbol in self.risk_manager.open_positions
+                        else totals.get(base) or 1
+                    ))
+                    if not reference.is_finite() or reference <= 0:
+                        reference = Decimal("1")
+                    normalized = Decimal(str(self.exchange.amount_to_precision(symbol, reference)))
+                    if not normalized.is_finite() or normalized <= 0 or int(precision) <= 0:
+                        raise ValueError(f"invalid significant-digit amount precision for {base}")
+                    amount_steps[base] = Decimal(1).scaleb(normalized.adjusted() - int(precision) + 1)
                 else:
-                    precision_sample = self.exchange.amount_to_precision(symbol, "1")
-                    precision_exponent = Decimal(str(precision_sample)).as_tuple().exponent
-                    tolerances[base] = Decimal(1).scaleb(precision_exponent) / 2
+                    raise ValueError(f"unsupported amount precision mode for configured asset {base}")
+                if not amount_steps[base].is_finite() or amount_steps[base] <= 0:
+                    raise ValueError(f"invalid amount precision for configured asset {base}")
+                tolerances[base] = amount_steps[base] / 2
             expected_stop_ids = {
                 str(position.stop_order_id): symbol
                 for symbol, position in self.risk_manager.open_positions.items()
@@ -724,13 +748,42 @@ class TradingBot:
                 stop = self.exchange.fetch_order(position.stop_order_id, symbol)
                 if str(stop.get("status", "")).lower() == "closed":
                     filled = Decimal(str(stop.get("filled") or 0))
-                    if filled >= Decimal(str(position.amount)):
+                    ordered = Decimal(str(stop.get("amount") or 0))
+                    stop_side = str(stop.get("side", "")).lower()
+                    local_amount = Decimal(str(position.amount))
+                    expected_order_amount = Decimal(str(self.exchange.amount_to_precision(symbol, position.amount)))
+                    if (not filled.is_finite() or not ordered.is_finite()
+                            or filled <= 0 or ordered <= 0
+                            or stop_side != "sell"
+                            or ordered != expected_order_amount
+                            or ordered > local_amount
+                            or filled > ordered + tolerances[base]):
+                        raise ValueError(f"filled stop order quantity is invalid for {symbol}")
+                    if filled >= ordered * Decimal("0.99999999"):
                         price = float(stop.get("average") or stop.get("price") or 0)
                         if not math.isfinite(price) or price <= 0:
                             raise ValueError(f"triggered stop for {symbol} lacks a valid fill price")
+                        base_total = Decimal(str(totals.get(base) or 0))
+                        baseline_total = Decimal(str(baseline.get(base, "0")))
+                        residual = base_total - baseline_total
+                        expected_residual = local_amount - filled
+                        if (not base_total.is_finite() or not residual.is_finite()
+                                or not expected_residual.is_finite()
+                                or base_total < baseline_total
+                                or expected_residual < 0
+                                or expected_residual > amount_steps[base] + tolerances[base]):
+                            raise ValueError(f"filled stop for {symbol} left an unexpected remaining balance")
+                        # Binance quantizes the stop down to the market's amount
+                        # step. After verifying that full order fill, preserve any
+                        # remaining account inventory as baseline before closing;
+                        # this also makes the write sequence safe to retry on restart.
+                        updated_baseline = dict(baseline)
+                        updated_baseline[base] = str(base_total)
+                        self.risk_manager.store.write_state("baseline_asset_balances", updated_baseline)
                         fee_cost = self._resolve_fee_quote_cost(stop, symbol, price)
                         record = self.risk_manager.close_position(
-                            symbol, price, "Exchange-native stop-loss filled", fee_cost=fee_cost
+                            symbol, price, "Exchange-native stop-loss filled", fee_cost=fee_cost,
+                            closed_amount=float(filled),
                         )
                         if not record:
                             raise ValueError(f"triggered stop for {symbol} could not be persisted")
@@ -738,6 +791,8 @@ class TradingBot:
                         self.risk_manager.store.append_event("protective_stop_filled", {
                             "symbol": symbol, "order_id": str(stop.get("id", position.stop_order_id)),
                             "filled": str(filled), "average": str(price),
+                            "remaining": str(residual),
+                            "baseline_updated": True,
                             "accounting_complete": record.accounting_complete,
                         })
                         self.risk_manager.halt(f"Exchange stop filled for {symbol}; manual review required before resuming")
@@ -759,15 +814,35 @@ class TradingBot:
             return True
         except Exception as exc:
             self._last_reconciliation_ok = False
+            safe_value_error_prefixes = (
+                "Paper environment changed while positions or orders exist",
+                "New paper account has no valid USDT equity",
+                "baseline asset balances are missing while local positions exist",
+                "invalid amount precision for configured asset ",
+                "unreconciled open order exists on the account",
+                "tracked position ",
+                "filled stop order quantity is invalid for ",
+                "triggered stop for ",
+                "filled stop for ",
+                "persisted exchange stop for ",
+                "balance mismatch for configured asset ",
+                "unresolved local order intent exists",
+            )
+            error_message = str(exc)
+            safe_detail = (
+                error_message[:240]
+                if isinstance(exc, ValueError) and error_message.startswith(safe_value_error_prefixes)
+                else type(exc).__name__
+            )
             if isinstance(exc, AccountAccessError):
                 self._last_account_error = str(exc)
                 # Keep the durable halt in the reconciliation class so a
                 # later clean private-account check can clear this transient
                 # connectivity/authentication halt safely.
-                reason = f"Exchange reconciliation failed: {type(exc).__name__}"
+                reason = f"Exchange reconciliation failed: {safe_detail}"
             else:
                 self._last_account_error = "Account reconciliation failed. Check exchange permissions and service logs."
-                reason = f"Exchange reconciliation failed: {type(exc).__name__}"
+                reason = f"Exchange reconciliation failed: {safe_detail}"
             current_halt = self.risk_manager._halt_reason
             if self.risk_manager._is_halted and not current_halt.startswith("Exchange reconciliation failed:"):
                 # A transient API failure must not erase an earlier circuit
@@ -1747,6 +1822,7 @@ class TradingBot:
             reason = self.risk_manager._halt_reason
             reviewable_halt = self.risk_manager._is_halted and reason.startswith((
                 "Emergency stop",
+                "Exchange stop filled",
                 "Consecutive loss limit reached",
                 "Consecutive loss limit persists",
             ))

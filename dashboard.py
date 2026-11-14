@@ -629,6 +629,7 @@ class WebDashboard:
             "manual_resume_available": (
                 risk._is_halted and risk._halt_reason.startswith((
                     "Emergency stop",
+                    "Exchange stop filled",
                     "Consecutive loss limit reached",
                     "Consecutive loss limit persists",
                 )) and not positions and
@@ -766,10 +767,38 @@ class WebDashboard:
                 "source": str(details.get("source", ""))[:40],
             }
         if event_type in {"protective_stop_placed", "protective_stop_filled", "protective_stop_cancelled", "partial_entry_fill", "partial_exit_reconciled"}:
-            allowed = ("symbol", "amount", "filled", "remaining", "stop_price", "average")
+            allowed = ("symbol", "amount", "filled", "remaining", "stop_price", "average", "dust_amount", "baseline_updated", "accounting_complete")
             return {key: str(details[key])[:80] for key in allowed if details.get(key) is not None}
+        if event_type == "protective_stop_review_acknowledged":
+            return {"message": "Protective-stop review acknowledged after account reconciliation."}
         if event_type == "reconciliation_failed":
-            return {"message": "Account reconciliation failed; new entries remained blocked."}
+            reason = details.get("reason", "")
+            prefix = "Exchange reconciliation failed: "
+            safe_reasons = (
+                "AccountAccessError",
+                "ValueError",
+                "Paper environment changed while positions or orders exist",
+                "New paper account has no valid USDT equity",
+                "baseline asset balances are missing while local positions exist",
+                "invalid amount precision for configured asset ",
+                "unreconciled open order exists on the account",
+                "tracked position ",
+                "filled stop order quantity is invalid for ",
+                "triggered stop for ",
+                "filled stop for ",
+                "persisted exchange stop for ",
+                "balance mismatch for configured asset ",
+                "unresolved local order intent exists",
+            )
+            message = (
+                str(reason)[:280]
+                if isinstance(reason, str) and reason.startswith(prefix)
+                and (reason[len(prefix):] == "AccountAccessError"
+                     or reason[len(prefix):] == "ValueError"
+                     or reason[len(prefix):].startswith(safe_reasons[2:]))
+                else "Account reconciliation failed; new entries remained blocked."
+            )
+            return {"message": message}
         if event_type == "emergency_stop_review_acknowledged":
             return {"message": "Emergency-stop review acknowledged."}
         if event_type == "testnet_smoke_trade_completed":
