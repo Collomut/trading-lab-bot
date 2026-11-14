@@ -1356,7 +1356,7 @@ class TradingBot:
             tp_text = (
                 f"${pos.take_profit_price:,.2f} (100×ATR backstop)" if pos and pos.exit_policy == "ema72_signal" and pos.take_profit_price is not None
                 else "EMA72 completed-candle exit" if pos and pos.exit_policy == "ema72_signal"
-                else f"${pos.take_profit_price:,.2f} (2×ATR Testnet target)" if pos and pos.exit_policy == "downtrend_rsi_recovery" and pos.take_profit_price is not None
+                else f"${pos.take_profit_price:,.2f} (2×ATR target)" if pos and pos.exit_policy == "downtrend_rsi_recovery" and pos.take_profit_price is not None
                 else f"${pos.take_profit_price:,.2f}" if pos and pos.take_profit_price is not None
                 else "N/A"
             )
@@ -1597,9 +1597,11 @@ class TradingBot:
         """Print current bot status including open positions and P&L."""
         balance = self.exchange.get_usdt_balance()
         positions = self.risk_manager.open_positions
+        mode = self._trading_mode_label()
 
         print(f"\n{'─' * 60}")
         print(f"  Cycle #{self._cycle_count} | "
+              f"Mode: {mode} | "
               f"USDT Balance: ${balance:,.2f} | "
               f"Positions: {len(positions)}/{self.config.risk.max_open_positions}")
 
@@ -1608,7 +1610,7 @@ class TradingBot:
                 current = self.exchange.get_current_price(symbol)
                 if current is None or current <= 0:
                     target = ("EMA72 close exit" if pos.exit_policy == "ema72_signal"
-                              else f"${pos.take_profit_price:,.2f} (2×ATR Testnet target)" if pos.exit_policy == "downtrend_rsi_recovery"
+                              else f"${pos.take_profit_price:,.2f} (2×ATR target)" if pos.exit_policy == "downtrend_rsi_recovery"
                               else f"${pos.take_profit_price:,.2f}")
                     print(f"    ⚠️ {symbol}: price unavailable | SL: ${pos.stop_loss_price:,.2f} | TP/exit: {target}")
                     continue
@@ -1617,7 +1619,7 @@ class TradingBot:
                 emoji = "📈" if pnl >= 0 else "📉"
                 be_tag = " [BREAK-EVEN]" if pos.break_even_activated else ""
                 target = ("EMA72 close exit" if pos.exit_policy == "ema72_signal"
-                          else f"${pos.take_profit_price:,.2f} (2×ATR Testnet target)" if pos.exit_policy == "downtrend_rsi_recovery"
+                          else f"${pos.take_profit_price:,.2f} (2×ATR target)" if pos.exit_policy == "downtrend_rsi_recovery"
                           else f"${pos.take_profit_price:,.2f}")
                 print(
                     f"    {emoji} {symbol}: ${pos.entry_price:,.2f} → "
@@ -1626,6 +1628,19 @@ class TradingBot:
                 )
 
         print(f"{'─' * 60}")
+
+    def _trading_mode_label(self) -> str:
+        """Describe the exchange mode actually configured for this worker."""
+        if not self.config.exchange.paper_trading:
+            return "Live trading"
+        if getattr(self.exchange, "is_fallback_simulated", False):
+            return "Simulated paper fallback"
+        environment = str(self.config.exchange.paper_environment).strip().lower()
+        return {
+            "demo": "Binance Demo",
+            "testnet": "Spot Testnet",
+            "simulated": "Simulated paper",
+        }.get(environment, f"Paper ({environment or 'unknown'})")
 
     def emergency_stop(self) -> tuple[bool, str]:
         """Pause entries, cancel exchange orders, close tracked spot positions, and latch halt."""

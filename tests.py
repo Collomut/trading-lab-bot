@@ -1686,6 +1686,37 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
 class TestBotEngineOrderLifecycle(unittest.TestCase):
     """Verifies complete order execution, fee deduction, stop loss synchronization, recovery, and alerts."""
 
+    def test_status_log_reports_selected_environment_and_neutral_atr_target(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(
+            exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+            risk=SimpleNamespace(max_open_positions=3),
+        )
+        bot.exchange = Mock()
+        bot.exchange.get_usdt_balance.return_value = 4487.76
+        bot.exchange.get_current_price.return_value = 0.99
+        bot.exchange.is_fallback_simulated = False
+        position = SimpleNamespace(
+            entry_price=0.9943,
+            stop_loss_price=0.98,
+            take_profit_price=1.02,
+            exit_policy="downtrend_rsi_recovery",
+            break_even_activated=False,
+            unrealized_pnl=Mock(return_value=-2.66),
+            unrealized_pnl_pct=Mock(return_value=-0.53),
+        )
+        bot.risk_manager = SimpleNamespace(open_positions={"XRP/USDT": position})
+        bot._cycle_count = 9
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            bot.print_status()
+
+        rendered = output.getvalue()
+        self.assertIn("Mode: Binance Demo", rendered)
+        self.assertIn("2×ATR target", rendered)
+        self.assertNotIn("Testnet target", rendered)
+
     def test_dynamic_profile_executes_candidate_only_after_router_selects_it(self):
         bot = object.__new__(TradingBot)
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 3_600_000
