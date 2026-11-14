@@ -61,7 +61,7 @@ class StrategyConfig:
     timeframe: str = os.getenv("TIMEFRAME", "1h")
     lookback_candles: int = int(os.getenv(
         "LOOKBACK_CANDLES",
-        "2501" if os.getenv("STRATEGY", "combined").strip().lower() in {"macro_donchian_ema72", "dynamic_regime"} else "150",
+        "2500" if os.getenv("STRATEGY", "combined").strip().lower() in {"macro_donchian_ema72", "dynamic_regime"} else "150",
     ))
     regime_filter_enabled: bool = field(default_factory=lambda: _env_bool("REGIME_FILTER_ENABLED", True))
     min_trend_adx: float = float(os.getenv("MIN_TREND_ADX", "20"))
@@ -205,8 +205,8 @@ class BotConfig:
                 errors.append(f"{self.strategy.name} requires Binance Spot Testnet or Binance Demo paper trading")
             if self.strategy.timeframe != "1h":
                 errors.append(f"{self.strategy.name} requires TIMEFRAME=1h")
-            if self.strategy.lookback_candles < 2501:
-                errors.append(f"{self.strategy.name} requires LOOKBACK_CANDLES >= 2501 for a stable EMA480 warmup")
+            if self.strategy.lookback_candles < 2500:
+                errors.append(f"{self.strategy.name} requires LOOKBACK_CANDLES >= 2500 for its contiguous EMA480 warmup")
             if self.max_testnet_price_divergence_pct > 0.5:
                 errors.append(f"{self.strategy.name} caps MAX_TESTNET_PRICE_DIVERGENCE_PCT at 0.5%")
             if self.risk.max_risk_per_trade > 1.0:

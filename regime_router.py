@@ -17,7 +17,11 @@ from ta.volatility import AverageTrueRange
 
 
 ROUTER_ID = "rule_dynamic_regime_router_v1"
-MIN_CANDLES = 2501
+# The active EMA72 candidate requires 2,500 contiguous closed candles. The
+# exchange connector separately requests one extra raw candle before filtering
+# the still-forming bar, so requiring a 2,501st closed candle here can block a
+# valid strategy evaluation (and did so when the service returned exactly 2,500).
+MIN_CANDLES = 2500
 HOUR_MS = 3_600_000
 ACTIVE_CANDIDATE = "macro_donchian_ema72"
 DYNAMIC_PROFILE = "dynamic_regime"

@@ -26,7 +26,7 @@ These strategy-only results show that the current regime gate reduces activity a
 
 ## Classification rules
 
-- Input must contain at least 2,501 valid, contiguous, closed 1-hour OHLCV candles. Invalid values, duplicates, gaps, or incomplete indicator warmup fail closed to `uncertain`.
+- Input must contain at least 2,500 valid, contiguous, closed 1-hour OHLCV candles. The exchange connector requests one extra raw row internally before excluding the still-open bar. Invalid values, duplicates, gaps, or incomplete indicator warmup fail closed to `uncertain`.
 - High volatility: ATR(14) greater than 3% of close.
 - Uptrend: ADX(14) at least 25, close above EMA(200), and EMA(200) rising over 24 bars.
 - Downtrend: ADX(14) at least 25, close below EMA(200), and EMA(200) falling over 24 bars.

@@ -170,9 +170,13 @@ class TestShadowRegimeRouter(unittest.TestCase):
         short = evaluate_regime_router(self.candles()[:100], "macro_donchian_ema72")
         self.assertEqual(short["status"], "unavailable")
         self.assertEqual(short["regime"], "uncertain")
-        self.assertEqual(short["reason_code"], "needs_2501_closed_hourly_candles_received_100")
-        self.assertEqual(short["reason"], "Need 2,501 completed hourly candles; received 100.")
+        self.assertEqual(short["reason_code"], "needs_2500_closed_hourly_candles_received_100")
+        self.assertEqual(short["reason"], "Need 2,500 completed hourly candles; received 100.")
         self.assertNotIn("_", short["reason"])
+        exact_warmup = evaluate_regime_router(self.candles()[:2500], "dynamic_regime")
+        self.assertNotIn("reason_code", exact_warmup)
+        self.assertEqual(exact_warmup["status"], "dynamic_testnet")
+        self.assertTrue(exact_warmup["entry_route_enabled"])
         gapped = self.candles()
         gapped[100][0] += 3_600_000
         result = evaluate_regime_router(gapped, "macro_donchian_ema72")
@@ -269,13 +273,13 @@ class TestConfigurationAndValidation(unittest.TestCase):
         cfg.dashboard_token = "test-token"
         cfg.strategy.name = "macro_donchian_ema72"
         cfg.strategy.timeframe = "1h"
-        cfg.strategy.lookback_candles = 2501
+        cfg.strategy.lookback_candles = 2500
         structural_errors = [e for e in cfg.validate() if "API_KEY" not in e and "API_SECRET" not in e]
         self.assertEqual(structural_errors, [])
 
+        cfg.strategy.lookback_candles = 2499
+        self.assertTrue(any("LOOKBACK_CANDLES >= 2500" in e for e in cfg.validate()))
         cfg.strategy.lookback_candles = 2500
-        self.assertTrue(any("LOOKBACK_CANDLES >= 2501" in e for e in cfg.validate()))
-        cfg.strategy.lookback_candles = 2501
         cfg.exchange.paper_trading = False
         self.assertTrue(any("requires Binance Spot Testnet or Binance Demo" in e for e in cfg.validate()))
         cfg.exchange.paper_trading = True
@@ -287,13 +291,13 @@ class TestConfigurationAndValidation(unittest.TestCase):
         cfg.dashboard_token = "test-token"
         cfg.strategy.name = "dynamic_regime"
         cfg.strategy.timeframe = "1h"
-        cfg.strategy.lookback_candles = 2501
+        cfg.strategy.lookback_candles = 2500
         structural_errors = [e for e in cfg.validate() if "API_KEY" not in e and "API_SECRET" not in e]
         self.assertEqual(structural_errors, [])
 
+        cfg.strategy.lookback_candles = 2499
+        self.assertTrue(any("LOOKBACK_CANDLES >= 2500" in e for e in cfg.validate()))
         cfg.strategy.lookback_candles = 2500
-        self.assertTrue(any("LOOKBACK_CANDLES >= 2501" in e for e in cfg.validate()))
-        cfg.strategy.lookback_candles = 2501
         cfg.exchange.paper_trading = False
         self.assertTrue(any("requires Binance Spot Testnet or Binance Demo" in e for e in cfg.validate()))
         cfg.exchange.paper_trading = True
@@ -1352,6 +1356,24 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         self.assertEqual(len(closed), 2501)
         self.assertLess(closed[-1][0], latest_open)
         connector.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", 2502)
+
+    def test_ema72_warmup_gets_2500_closed_bars_with_open_bar_filtered(self):
+        connector = object.__new__(ExchangeConnector)
+        connector._lock_obj = threading.RLock()
+        connector._candle_sequence_issues = {}
+        connector.exchange = Mock()
+        connector.exchange.parse_timeframe.return_value = 3600
+        now = int(datetime.now(timezone.utc).timestamp() * 1000)
+        latest_open = now // 3_600_000 * 3_600_000
+        start = latest_open - 2500 * 3_600_000
+        connector.fetch_ohlcv = Mock(return_value=[
+            [start + i * 3_600_000, 100, 101, 99, 100, 10]
+            for i in range(2501)
+        ])
+        closed = connector.fetch_closed_ohlcv("BTC/USDT", "1h", 2500)
+        self.assertEqual(len(closed), 2500)
+        self.assertLess(closed[-1][0], latest_open)
+        connector.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", 2501)
 
     def test_closed_candle_return_correlation_is_aligned_by_timestamp(self):
         candles_a, candles_b = [], []

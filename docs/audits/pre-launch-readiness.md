@@ -10,7 +10,11 @@ This closes a monitoring blind spot; it does **not** close the live launch gates
 
 ## Follow-up audit — 2026-11-12
 
-The Strategy page had a misleading fallback: it selected the EMA72 display from per-signal indicators, so a valid HOLD/data-check result with an empty indicator payload showed “Signal agreement unavailable.” It now uses the configured strategy from `/api/status` to select the EMA72 view and presents missing data as warmup/data-check status. Earlier Railway logs also contained a warning that only 867 of 2,501 requested candles were available; this was from an earlier runtime window. The current deployment's latest sampled cycles did not show that warning, but candle sufficiency remains an operational signal to monitor because the EMA72 strategy intentionally refuses to trade without its required history.
+The Strategy page had a misleading fallback: it selected the EMA72 display from per-signal indicators, so a valid HOLD/data-check result with an empty indicator payload showed “Signal agreement unavailable.” It now uses the configured strategy from `/api/status` to select the EMA72 view and presents missing data as warmup/data-check status. Earlier Railway logs also contained a warning that only 867 of 2,501 requested candles were available; this was from an earlier runtime window. The latest sampled cycles at the time did not show that warning, but candle sufficiency remained an operational signal to monitor.
+
+## Follow-up audit — 2026-11-14
+
+A later dashboard showed 2,500 candles received while the router still required 2,501, although the active EMA72 strategy requires 2,500 contiguous closed candles. The router and config validation are now aligned at 2,500 closed bars; `fetch_closed_ohlcv` requests one extra raw row internally before excluding the still-open candle. This removes the observed one-candle false block while retaining the full contiguous history requirement. A regression test covers both the exact 2,500-bar route and the connector's 2,501-raw-to-2,500-closed behavior.
 
 The active Railway deployment was inspected: it is live with one replica, the configured Testnet candidate, a $10,000 virtual balance, and no tracked positions. Its runtime logs showed normal worker cycles and no order activity in the sampled window. Health and a running worker do not validate the strategy's edge or authorize live trading.
 
