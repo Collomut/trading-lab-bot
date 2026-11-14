@@ -67,7 +67,7 @@ class StrategyConfig:
     min_trend_adx: float = float(os.getenv("MIN_TREND_ADX", "20"))
     max_atr_pct: float = float(os.getenv("MAX_ATR_PCT", "3.0"))
     trading_pairs: list = field(default_factory=lambda: os.getenv(
-        "TRADING_PAIRS", "BTC/USDT,ETH/USDT,SOL/USDT"
+        "TRADING_PAIRS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT"
     ).split(","))
 
 

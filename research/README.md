@@ -4,6 +4,8 @@ This folder contains the reproducible strategy comparison used to decide whether
 
 `REGIME_ROUTER_REVIEW.md` documents the guarded `dynamic_regime` Testnet router. Its executable allowlist contains `macro_donchian_ema72` for stable uptrends and `downtrend_rsi_recovery_testnet` for stable downtrends. The recovery route uses one fifth of the configured risk per trade and one open recovery position at most; it remains an unvalidated Testnet experiment because its historical stress-cost checks lost money. Range, high-volatility, transition, and invalid-data conditions still route to no new entry. No route has been established as profitable or ready for live orders.
 
+`backtest_downtrend_rsi_recovery.py` compares the recovery candidate on the three-pair and eight-pair universes. `backtest_rsi_recovery_thresholds.py` screens RSI recovery levels 30, 35, 40, 45, and 50 with the same costs and risk rules; the results are in `results/rsi_recovery_thresholds.json`. The eight-pair universe created more historical opportunities in some periods, but did not produce a robust profitable result. The broader list is enabled on Binance Testnet only to gather prospective observations under the same strict risk controls.
+
 ## Reproduction
 
 1. Use Python with the application's pinned requirements installed.

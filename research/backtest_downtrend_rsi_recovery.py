@@ -29,7 +29,7 @@ BASE_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
 EXPANDED_SYMBOLS = BASE_SYMBOLS + ("BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "LINKUSDT")
 
 
-def build_signals(symbol: str) -> pd.DataFrame:
+def build_signals(symbol: str, rsi_recovery_level: float = 40.0) -> pd.DataFrame:
     raw = (pd.read_csv(DATA / f"{symbol}_1h.csv").drop_duplicates("timestamp_ms")
            .sort_values("timestamp_ms").reset_index(drop=True))
     close, high, low = raw.close, raw.high, raw.low
@@ -44,7 +44,7 @@ def build_signals(symbol: str) -> pd.DataFrame:
     atr_pct = atr / close * 100.0
     raw_down = valid & (adx >= 25.0) & (atr_pct <= 3.0) & (close < ema200) & (ema200 < ema200.shift(24))
     stable_down = raw_down & raw_down.shift(1, fill_value=False) & raw_down.shift(2, fill_value=False)
-    buy = stable_down & (rsi.shift(1) < 40.0) & (rsi >= 40.0)
+    buy = stable_down & (rsi.shift(1) < rsi_recovery_level) & (rsi >= rsi_recovery_level)
     sell = (close > ema20) | (rsi > 70.0)
     result = raw[["timestamp_ms", "open", "high", "low", "close", "volume"]].copy()
     result["atr"] = atr

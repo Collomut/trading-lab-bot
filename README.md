@@ -15,7 +15,7 @@ python tests.py
 python main.py --once
 ```
 
-`--once` runs one strategy cycle and may place Testnet orders. The `dynamic_regime` profile selects the EMA72/Donchian candidate after three completed hourly bars confirm an uptrend. In stable downtrends it can evaluate a separate RSI recovery experiment, sized at no more than 0.20% of equity risk per trade with one such position at a time. That experiment has not passed historical cost checks and is for Binance Testnet forward evaluation only; live orders remain disabled. Range, high-volatility, transition, and invalid-data states stay flat. Open positions retain their original exit policy. The generic `--backtest` replay does not model this profile. Continuous paper trading with `--interval 60` may place Testnet orders.
+`--once` runs one strategy cycle and may place Testnet orders. The `dynamic_regime` profile selects the EMA72/Donchian candidate after three completed hourly bars confirm an uptrend. In stable downtrends it can evaluate a separate RSI recovery experiment, sized at no more than 0.20% of equity risk per trade with one such position at a time. That experiment has not passed historical cost checks and is for Binance Testnet forward evaluation only; live orders remain disabled. The Testnet watchlist contains BTC, ETH, SOL, BNB, XRP, ADA, DOGE, and LINK against USDT. Range, high-volatility, transition, and invalid-data states stay flat. Open positions retain their original exit policy. The generic `--backtest` replay does not model this profile. Continuous paper trading with `--interval 60` may place Testnet orders.
 
 ## Railway
 

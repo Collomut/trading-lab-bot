@@ -271,7 +271,10 @@ class TestConfigurationAndValidation(unittest.TestCase):
         strategy = StrategyConfig()
         self.assertEqual(strategy.timeframe, "1h")
         self.assertEqual(strategy.lookback_candles, 150)
-        self.assertEqual(strategy.trading_pairs, ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+        self.assertEqual(strategy.trading_pairs, [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
+            "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT",
+        ])
         self.assertEqual(strategy.min_trend_adx, 20.0)
 
     def test_fallback_simulation_is_disabled_by_default(self):
