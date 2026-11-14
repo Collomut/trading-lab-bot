@@ -626,14 +626,12 @@ class WebDashboard:
             "entry_mode": risk.entry_mode(),
             "exchange_reconciled": self.bot._last_reconciliation_ok,
             "resume_available": risk.entry_mode() == "EXIT_ONLY" and not risk._is_halted and account_available and self.bot._last_reconciliation_ok,
-            "manual_resume_available": (
-                risk._is_halted and risk._halt_reason.startswith((
-                    "Emergency stop",
-                    "Exchange stop filled",
-                    "Consecutive loss limit reached",
-                    "Consecutive loss limit persists",
-                )) and not positions and
-                not risk.store.unresolved_orders() and account_available and self.bot._last_reconciliation_ok
+            "manual_resume_available": self._manual_resume_available(
+                risk,
+                positions,
+                account_available=account_available,
+                exchange_reconciled=self.bot._last_reconciliation_ok,
+                unresolved_orders=risk.store.unresolved_orders(),
             ),
             "testnet_smoke_attempted": risk.store.read_state("testnet_smoke_trade") is not None,
             "prices": prices,
@@ -818,6 +816,29 @@ class WebDashboard:
         if event_type == "testnet_reset_recovery":
             return {"message": "Testnet state reset was recorded; review the operator recovery notes."}
         return {}
+
+    @staticmethod
+    def _manual_resume_available(risk, positions, *, account_available, exchange_reconciled, unresolved_orders):
+        """Keep protective-stop review reachable when that review must repair reconciliation."""
+        reason = getattr(risk, "_halt_reason", "")
+        reviewable_reason = reason.startswith((
+            "Emergency stop",
+            "Exchange stop filled",
+            "Consecutive loss limit reached",
+            "Consecutive loss limit persists",
+        ))
+        # A stop-fill review is specifically the guarded path for reconciling
+        # its final account balance; it must be available when that balance
+        # currently fails the ordinary readiness check.
+        stop_review = reason.startswith("Exchange stop filled")
+        return bool(
+            getattr(risk, "_is_halted", False)
+            and reviewable_reason
+            and not positions
+            and not unresolved_orders
+            and account_available
+            and (exchange_reconciled or stop_review)
+        )
 
     @staticmethod
     def _summarize_market_activity(market_events, audit_events, *, now=None):

@@ -2885,6 +2885,25 @@ class TestDashboardAuthMiddleware(unittest.TestCase):
         self.assertFalse(verify_token(req, ""))
         self.assertFalse(verify_token(req, "secret123"))
 
+    def test_protective_stop_review_remains_available_when_balance_reconciliation_fails(self):
+        risk = SimpleNamespace(
+            _is_halted=True,
+            _halt_reason="Exchange stop filled for XRP/USDT; manual review required before resuming",
+        )
+        self.assertTrue(WebDashboard._manual_resume_available(
+            risk, [], account_available=True, exchange_reconciled=False, unresolved_orders=[]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, [object()], account_available=True, exchange_reconciled=False, unresolved_orders=[]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, [], account_available=True, exchange_reconciled=False, unresolved_orders=[object()]
+        ))
+        risk._halt_reason = "Emergency stop failed; operator review required"
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, [], account_available=True, exchange_reconciled=False, unresolved_orders=[]
+        ))
+
 class TestTemplatesWordingAndMobileUx(unittest.TestCase):
     """Verifies plain-English wording, absence of misleading claims, glossary clarity, and mobile UI responsiveness."""
 
