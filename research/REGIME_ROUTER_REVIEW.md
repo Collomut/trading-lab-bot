@@ -7,7 +7,22 @@
 
 The predeclared family screen found every tested family net-negative after modeled fees and slippage; profit factors were below 1. The EMA72/Donchian candidate had positive strategy-only historical slices, but exceeded the 5% training drawdown limit and was stopped after few trades by the configured loss controls. Neither establishes a regime-specific edge, and the historical archive is not an untouched holdout.
 
-The active `dynamic_regime` profile now uses the stable hourly classifier to select `macro_donchian_ema72` for entries only in a confirmed uptrend. In a range, downtrend, high-volatility, transition, invalid-data, or unavailable-data state it generates no new entries. Open positions continue using their entry-time exit policy regardless of regime changes. Existing risk checks, stops, loss halts, market-quality checks, and Testnet-only config restrictions remain authoritative. This is an executable dynamic router, but currently only one strategy candidate has a route; alternative regimes remain cash until another strategy passes prospective and cost-adjusted evaluation.
+The active `dynamic_regime` profile selects `macro_donchian_ema72` in a confirmed uptrend. A follow-up added `downtrend_rsi_recovery_testnet` as a Testnet-only experiment in confirmed downtrends, because the live router was observing downtrend on BTC, ETH, and SOL and had no entry candidate. The recovery route is capped at 0.20% of equity risk per trade, allows at most one recovery position, keeps the four-percent-capped swing stop and 2×ATR target, and does not use trailing stops. It has not passed historical stress costs and is not eligible for live trading. Range, high-volatility, transition, invalid-data, and unavailable-data states still generate no new entries. Open positions retain their entry-time exit policy. Existing risk checks, stops, loss halts, market-quality checks, and Testnet-only config restrictions remain authoritative.
+
+## Downtrend recovery experiment
+
+`python research/backtest_downtrend_rsi_recovery.py` reproduces the executable entry and exit rules with the shared portfolio simulator. It uses 1h closed candles, stable three-bar downtrend classification (ADX ≥25, ATR ≤3%, close below falling EMA200), RSI14 recovery across 40, EMA20/RSI70 exits, next-bar fills, a prior-five-bar swing low with a 4% maximum stop distance, a 2×ATR target, 0.20× normal risk sizing, current loss halts, and base/stress costs. It screens both the current three-pair universe and an eight-pair historical universe.
+
+| Period | Universe | Base trades / net P&L / PF | Stress trades / net P&L / PF |
+|---|---|---:|---:|
+| 2021–2023 | 3 pairs | 4 / −$12.84 / 0.095 | 4 / −$15.20 / 0.047 |
+| 2021–2023 | 8 pairs | 5 / −$12.87 / 0.156 | 5 / −$15.82 / 0.069 |
+| 2024–2025 | 3 pairs | 17 / −$5.33 / 0.765 | 12 / −$9.83 / 0.515 |
+| 2024–2025 | 8 pairs | 8 / −$11.98 / 0.294 | 8 / −$16.58 / 0.162 |
+| Jan–Oct 2026 | 3 pairs | 3 / −$6.36 / 0.000 | 3 / −$8.13 / 0.000 |
+| Jan–Oct 2026 | 8 pairs | 14 / +$0.06 / 1.006 | 3 / −$1.16 / 0.000 |
+
+The recent eight-pair base result is approximately breakeven and its stress replay loses; older periods lose at both cost levels. It is not a profitable edge. This route exists only to gather low-risk Testnet order-path and forward evidence in a regime where the earlier router had no candidate. Do not copy this route to a live profile. Its exact state and selected candidate are included in sanitized dashboard market-check logs.
 
 ## Paired router replay
 

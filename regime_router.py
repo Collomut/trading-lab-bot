@@ -2,9 +2,10 @@
 
 This module is deliberately unable to place orders. Regime labels are a
 diagnostic hypothesis, not evidence that a strategy has an edge. Dynamic
-routing currently selects only the EMA72 trend candidate after a stable
-uptrend classification. Other regimes deliberately route to cash because no
-alternative has passed the project's cost-adjusted screen.
+routing selects EMA72/Donchian in a stable uptrend and a low-risk experimental
+RSI recovery candidate in a stable downtrend. The latter is restricted to the
+Binance paper-trading profile and has not passed the cost-adjusted screen.
+Range, high-volatility, transition, and invalid-data states route to no entry.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ ROUTER_ID = "rule_dynamic_regime_router_v1"
 MIN_CANDLES = 2500
 HOUR_MS = 3_600_000
 ACTIVE_CANDIDATE = "macro_donchian_ema72"
+DOWN_TREND_TESTNET_CANDIDATE = "downtrend_rsi_recovery_testnet"
 DYNAMIC_PROFILE = "dynamic_regime"
 # Executable strategy routes are an explicit allowlist. A market-regime label
 # by itself never activates a strategy. Candidates in other regimes stay
@@ -40,9 +42,9 @@ REGIME_ROUTE_POLICY = {
         "entry_enabled": False,
     },
     "downtrend": {
-        "strategy": None,
-        "state": "no_validated_long_only_candidate",
-        "entry_enabled": False,
+        "strategy": DOWN_TREND_TESTNET_CANDIDATE,
+        "state": "experimental_testnet_candidate",
+        "entry_enabled": True,
     },
     "high_volatility": {
         "strategy": None,
@@ -221,7 +223,17 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
     elif regime == "range":
         result["reason"] = "No range candidate passed cost-adjusted research; no entry strategy is selected."
     elif regime == "downtrend":
-        result["reason"] = "No validated long-only entry strategy is available in a downtrend; existing position exits remain unchanged."
+        if dynamic_mode:
+            result.update(
+                candidate_strategy=policy["strategy"],
+                selected_strategy=policy["strategy"],
+                route=policy["strategy"],
+                entry_route_enabled=policy["entry_enabled"],
+                route_state=policy["state"],
+                reason="Stable downtrend confirmed; the low-risk RSI recovery experiment may evaluate on Testnet only. It has not passed live-market validation.",
+            )
+        else:
+            result["reason"] = "The downtrend RSI recovery route is restricted to the dynamic Binance Testnet profile."
     elif regime == "high_volatility":
         result["reason"] = "Volatility is above the configured 3% ATR threshold; no new-entry strategy is selected."
     else:

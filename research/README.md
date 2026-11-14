@@ -2,7 +2,7 @@
 
 This folder contains the reproducible strategy comparison used to decide whether a higher-frequency strategy was justified. The result was negative: no evaluated variant had sufficiently positive evidence to change production entry rules.
 
-`REGIME_ROUTER_REVIEW.md` documents the guarded `dynamic_regime` Testnet router. Its executable allowlist currently contains one candidate, `macro_donchian_ema72`, for stable uptrends. Range, downtrend, high-volatility, transition, and invalid-data conditions route to no new entry. The candidate is not proven profitable and the router has not established a live edge. Other strategy families remain research-only because their cost-adjusted screens failed.
+`REGIME_ROUTER_REVIEW.md` documents the guarded `dynamic_regime` Testnet router. Its executable allowlist contains `macro_donchian_ema72` for stable uptrends and `downtrend_rsi_recovery_testnet` for stable downtrends. The recovery route uses one fifth of the configured risk per trade and one open recovery position at most; it remains an unvalidated Testnet experiment because its historical stress-cost checks lost money. Range, high-volatility, transition, and invalid-data conditions still route to no new entry. No route has been established as profitable or ready for live orders.
 
 ## Reproduction
 

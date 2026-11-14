@@ -1,0 +1,256 @@
+{
+  "candidate": "downtrend_rsi_recovery_testnet",
+  "implementation": "Three consecutive completed hourly downtrend classifications; RSI14 crosses above 40; EMA20/RSI70 exits; swing-low stop capped at 4%; 2x ATR take-profit; 0.20x normal risk budget; same shared simulator portfolio caps and halts.",
+  "costs_per_side_bps": {
+    "base": {
+      "fee": 10.0,
+      "slippage": 5.0
+    },
+    "stress": {
+      "fee": 20.0,
+      "slippage": 10.0
+    }
+  },
+  "limitations": [
+    "Fixed 8-coin universe is survivorship-biased",
+    "2026 review data has already been used in project research",
+    "OHLCV cannot recreate spread, queue position, or exact intrabar execution",
+    "Positive historical sample does not establish an edge"
+  ],
+  "results": {
+    "train_2021_02_to_2023": {
+      "base": {
+        "three_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 4,
+          "wins": 1,
+          "losses": 3,
+          "win_rate_pct": 25.0,
+          "net_pnl_usdt": -12.84,
+          "avg_trade_pnl_usdt": -3.21,
+          "profit_factor": 0.095,
+          "mean_trade_return_pct": -1.622,
+          "portfolio_return_pct": -0.128,
+          "max_drawdown_pct": 0.145,
+          "ending_equity_usdt": 9987.16,
+          "period_end_equity_points": 25522,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1642496400000
+        },
+        "eight_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 5,
+          "wins": 2,
+          "losses": 3,
+          "win_rate_pct": 40.0,
+          "net_pnl_usdt": -12.87,
+          "avg_trade_pnl_usdt": -2.57,
+          "profit_factor": 0.156,
+          "mean_trade_return_pct": -1.31,
+          "portfolio_return_pct": -0.129,
+          "max_drawdown_pct": 0.172,
+          "ending_equity_usdt": 9987.13,
+          "period_end_equity_points": 25522,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1642453200000
+        }
+      },
+      "stress": {
+        "three_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 4,
+          "wins": 1,
+          "losses": 3,
+          "win_rate_pct": 25.0,
+          "net_pnl_usdt": -15.2,
+          "avg_trade_pnl_usdt": -3.8,
+          "profit_factor": 0.047,
+          "mean_trade_return_pct": -1.919,
+          "portfolio_return_pct": -0.152,
+          "max_drawdown_pct": 0.166,
+          "ending_equity_usdt": 9984.8,
+          "period_end_equity_points": 25522,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1642496400000
+        },
+        "eight_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 5,
+          "wins": 2,
+          "losses": 3,
+          "win_rate_pct": 40.0,
+          "net_pnl_usdt": -15.82,
+          "avg_trade_pnl_usdt": -3.16,
+          "profit_factor": 0.069,
+          "mean_trade_return_pct": -1.608,
+          "portfolio_return_pct": -0.158,
+          "max_drawdown_pct": 0.192,
+          "ending_equity_usdt": 9984.18,
+          "period_end_equity_points": 25522,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1642453200000
+        }
+      }
+    },
+    "validation_2024_to_2025": {
+      "base": {
+        "three_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 17,
+          "wins": 9,
+          "losses": 8,
+          "win_rate_pct": 52.94,
+          "net_pnl_usdt": -5.33,
+          "avg_trade_pnl_usdt": -0.31,
+          "profit_factor": 0.765,
+          "mean_trade_return_pct": -0.168,
+          "portfolio_return_pct": -0.053,
+          "max_drawdown_pct": 0.157,
+          "ending_equity_usdt": 9994.67,
+          "period_end_equity_points": 17544,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1705935600000
+        },
+        "eight_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 8,
+          "wins": 3,
+          "losses": 5,
+          "win_rate_pct": 37.5,
+          "net_pnl_usdt": -11.98,
+          "avg_trade_pnl_usdt": -1.5,
+          "profit_factor": 0.294,
+          "mean_trade_return_pct": -0.753,
+          "portfolio_return_pct": -0.12,
+          "max_drawdown_pct": 0.147,
+          "ending_equity_usdt": 9988.02,
+          "period_end_equity_points": 17544,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1704474000000
+        }
+      },
+      "stress": {
+        "three_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 12,
+          "wins": 4,
+          "losses": 8,
+          "win_rate_pct": 33.33,
+          "net_pnl_usdt": -9.83,
+          "avg_trade_pnl_usdt": -0.82,
+          "profit_factor": 0.515,
+          "mean_trade_return_pct": -0.429,
+          "portfolio_return_pct": -0.098,
+          "max_drawdown_pct": 0.164,
+          "ending_equity_usdt": 9990.17,
+          "period_end_equity_points": 17544,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1705676400000
+        },
+        "eight_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 8,
+          "wins": 3,
+          "losses": 5,
+          "win_rate_pct": 37.5,
+          "net_pnl_usdt": -16.58,
+          "avg_trade_pnl_usdt": -2.07,
+          "profit_factor": 0.162,
+          "mean_trade_return_pct": -1.046,
+          "portfolio_return_pct": -0.166,
+          "max_drawdown_pct": 0.175,
+          "ending_equity_usdt": 9983.42,
+          "period_end_equity_points": 17544,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1704474000000
+        }
+      }
+    },
+    "review_2026_01_to_10": {
+      "base": {
+        "three_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 3,
+          "wins": 0,
+          "losses": 3,
+          "win_rate_pct": 0.0,
+          "net_pnl_usdt": -6.36,
+          "avg_trade_pnl_usdt": -2.12,
+          "profit_factor": 0.0,
+          "mean_trade_return_pct": -1.065,
+          "portfolio_return_pct": -0.064,
+          "max_drawdown_pct": 0.064,
+          "ending_equity_usdt": 9993.64,
+          "period_end_equity_points": 7296,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1768885200000
+        },
+        "eight_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 14,
+          "wins": 7,
+          "losses": 7,
+          "win_rate_pct": 50.0,
+          "net_pnl_usdt": 0.06,
+          "avg_trade_pnl_usdt": 0.0,
+          "profit_factor": 1.006,
+          "mean_trade_return_pct": -0.003,
+          "portfolio_return_pct": 0.001,
+          "max_drawdown_pct": 0.05,
+          "ending_equity_usdt": 10000.06,
+          "period_end_equity_points": 7296,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1768860000000
+        }
+      },
+      "stress": {
+        "three_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 3,
+          "wins": 0,
+          "losses": 3,
+          "win_rate_pct": 0.0,
+          "net_pnl_usdt": -8.13,
+          "avg_trade_pnl_usdt": -2.71,
+          "profit_factor": 0.0,
+          "mean_trade_return_pct": -1.363,
+          "portfolio_return_pct": -0.081,
+          "max_drawdown_pct": 0.081,
+          "ending_equity_usdt": 9991.87,
+          "period_end_equity_points": 7296,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1768885200000
+        },
+        "eight_symbols": {
+          "variant": "downtrend_rsi_recovery_testnet",
+          "closed_trades": 3,
+          "wins": 0,
+          "losses": 3,
+          "win_rate_pct": 0.0,
+          "net_pnl_usdt": -1.16,
+          "avg_trade_pnl_usdt": -0.39,
+          "profit_factor": 0.0,
+          "mean_trade_return_pct": -0.194,
+          "portfolio_return_pct": -0.012,
+          "max_drawdown_pct": 0.022,
+          "ending_equity_usdt": 9998.84,
+          "period_end_equity_points": 7296,
+          "halts_by_end": true,
+          "halt_reason": "three consecutive losing trades",
+          "halt_timestamp_ms": 1768179600000
+        }
+      }
+    }
+  }
+}

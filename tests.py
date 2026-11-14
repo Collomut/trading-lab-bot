@@ -61,6 +61,7 @@ from strategies import (
     EMA_Crossover_Strategy,
     MACD_Strategy,
     RSI_Mean_Reversion_Strategy,
+    DowntrendRsiRecoveryTestnetStrategy,
     Signal,
     TradeSignal,
     get_strategy,
@@ -107,6 +108,21 @@ class TestShadowLogSafety(unittest.TestCase):
         self.assertEqual(safe["indicators"]["donchian_high168"], 108.0)
         self.assertNotIn("secret", safe["indicators"])
 
+        routed = WebDashboard._safe_log_details("market_check", {
+            "regime_router": {
+                "regime": "downtrend", "route_state": "experimental_testnet_candidate",
+                "selected_strategy": "downtrend_rsi_recovery_testnet",
+                "entry_route_enabled": True,
+                "reason": "Testnet route only", "private": "must not pass",
+            },
+            "indicators": {"strategy": "downtrend_rsi_recovery_testnet", "rsi": 42, "ema20": 99, "private": "omit"},
+        })
+        self.assertEqual(routed["regime_router"]["selected_strategy"], "downtrend_rsi_recovery_testnet")
+        self.assertTrue(routed["regime_router"]["entry_route_enabled"])
+        self.assertNotIn("private", routed["regime_router"])
+        self.assertEqual(routed["indicators"]["rsi"], 42)
+        self.assertNotIn("private", routed["indicators"])
+
         gap_safe = WebDashboard._safe_log_details("market_data_issue", {
             "symbol": "BTC/USDT", "issue": "candle_sequence_gap",
             "expected_timestamp": 1_700_000_000_000,
@@ -129,6 +145,9 @@ class TestShadowRegimeRouter(unittest.TestCase):
             elif kind == "volatile":
                 close = 100.0
                 spread = 5.0
+            elif kind == "downtrend":
+                close = 100 * (0.999 ** index)
+                spread = close * 0.002
             else:
                 close = 100.0
                 spread = 0.2
@@ -145,11 +164,18 @@ class TestShadowRegimeRouter(unittest.TestCase):
         self.assertFalse(result["entry_authorized"])
         self.assertEqual(result["raw_regimes"], ["uptrend"] * 3)
 
-    def test_dynamic_router_selects_only_the_testnet_trend_candidate(self):
+    def test_dynamic_router_selects_regime_specific_testnet_candidates(self):
         uptrend = evaluate_regime_router(self.candles(), "dynamic_regime")
         self.assertEqual(uptrend["status"], "dynamic_testnet")
         self.assertEqual(uptrend["selected_strategy"], "macro_donchian_ema72")
         self.assertTrue(uptrend["entry_route_enabled"])
+
+        downtrend = evaluate_regime_router(self.candles("downtrend"), "dynamic_regime")
+        self.assertEqual(downtrend["regime"], "downtrend")
+        self.assertEqual(downtrend["selected_strategy"], "downtrend_rsi_recovery_testnet")
+        self.assertEqual(downtrend["route_state"], "experimental_testnet_candidate")
+        self.assertTrue(downtrend["entry_route_enabled"])
+        self.assertIn("not passed live-market validation", downtrend["reason"])
 
         sideways = evaluate_regime_router(self.candles("range"), "dynamic_regime")
         self.assertEqual(sideways["selected_strategy"], None)
@@ -183,14 +209,17 @@ class TestShadowRegimeRouter(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["route"], "no_validated_strategy")
 
-    def test_dynamic_policy_is_an_explicit_allowlist_with_one_candidate(self):
+    def test_dynamic_policy_is_an_explicit_allowlist_with_two_testnet_candidates(self):
         enabled = [
             (regime, route["strategy"])
             for regime, route in REGIME_ROUTE_POLICY.items()
             if route["entry_enabled"]
         ]
-        self.assertEqual(enabled, [("uptrend", "macro_donchian_ema72")])
-        for regime in ("range", "downtrend", "high_volatility", "transition"):
+        self.assertEqual(enabled, [
+            ("uptrend", "macro_donchian_ema72"),
+            ("downtrend", "downtrend_rsi_recovery_testnet"),
+        ])
+        for regime in ("range", "high_volatility", "transition"):
             self.assertIsNone(REGIME_ROUTE_POLICY[regime]["strategy"])
             self.assertFalse(REGIME_ROUTE_POLICY[regime]["entry_enabled"])
 
@@ -205,6 +234,23 @@ class TestShadowRegimeRouter(unittest.TestCase):
             self.assertEqual(routed["route_state"], expected_state)
             self.assertFalse(routed["entry_route_enabled"])
             self.assertIsNone(routed["selected_strategy"])
+
+    def test_downtrend_recovery_requires_confirmed_price_context_and_rsi_cross(self):
+        close = [100.0 * (0.999 ** i) for i in range(2500)]
+        idx = pd.date_range("2020-01-01", periods=2500, freq="h")
+        df = pd.DataFrame({"close": close, "high": [v * 1.002 for v in close],
+                           "low": [v * 0.998 for v in close]}, index=idx)
+        strategy = DowntrendRsiRecoveryTestnetStrategy()
+        with patch("strategies.RSIIndicator") as rsi_mock:
+            rsi_mock.return_value.rsi.return_value = pd.Series([38.0] * 2498 + [39.0, 42.0])
+            signal = strategy.analyze(df, "BTC/USDT")
+        self.assertEqual(signal.signal, Signal.BUY)
+        self.assertEqual(signal.indicators["risk_multiplier"], 0.20)
+        self.assertEqual(signal.indicators["strategy"], "downtrend_rsi_recovery_testnet")
+        with patch("strategies.RSIIndicator") as rsi_mock:
+            rsi_mock.return_value.rsi.return_value = pd.Series([38.0] * 2499 + [71.0])
+            signal = strategy.analyze(df, "BTC/USDT", in_position=True)
+        self.assertEqual(signal.signal, Signal.SELL)
 
 
 # ==============================================================================
@@ -689,6 +735,31 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             rm = RiskManager(config, persistence_dir=tmpdir)
             size = rm.calculate_position_size(10000.0, 100.0, 98.0)
             self.assertAlmostEqual(size, 10.0)
+
+    def test_experimental_position_sizing_multiplier_reduces_risk(self):
+        with TemporaryDirectory() as tmpdir:
+            rm = RiskManager(RiskConfig(max_risk_per_trade=1.0, position_size_pct=10.0), persistence_dir=tmpdir)
+            standard = rm.calculate_position_size(10000.0, 100.0, 90.0)
+            experimental = rm.calculate_position_size(10000.0, 100.0, 90.0, risk_multiplier=0.25)
+            self.assertAlmostEqual(standard, 10.0)
+            self.assertAlmostEqual(experimental, 2.5)
+            self.assertEqual(rm.calculate_position_size(10000.0, 100.0, 90.0, risk_multiplier=0), 0.0)
+            fee_adjusted = rm.calculate_position_size(
+                10000.0, 100.0, 96.0, risk_multiplier=0.20, entry_fee_rate=0.001,
+            )
+            self.assertAlmostEqual(fee_adjusted, 20.0 / 4.1)
+
+    def test_downtrend_recovery_position_keeps_fixed_stop_and_target(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            pos = rm.open_position("BTC/USDT", 100.0, 1.0,
+                                   stop_loss_override=96.0, take_profit_override=104.0,
+                                   exit_policy="downtrend_rsi_recovery")
+            self.assertEqual(pos.exit_policy, "downtrend_rsi_recovery")
+            self.assertEqual(rm.check_positions(lambda _: 101.5), [])
+            self.assertFalse(pos.break_even_activated)
+            restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertEqual(restored.open_positions["BTC/USDT"].exit_policy, "downtrend_rsi_recovery")
 
     def test_position_sizing_with_zero_or_negative_balance(self):
         with TemporaryDirectory() as tmpdir:
@@ -1651,6 +1722,39 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             "macro_donchian_ema72",
         )
 
+    def test_dynamic_profile_routes_downtrend_to_experimental_recovery_strategy(self):
+        bot = object.__new__(TradingBot)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 3_600_000
+        candles = []
+        for index in range(2501):
+            close = 100 * (0.999 ** index)
+            candles.append([
+                now_ms - (2500 - index) * 3_600_000,
+                close, close * 1.002, close * 0.998, close, 100.0,
+            ])
+        bot.config = SimpleNamespace(strategy=SimpleNamespace(
+            name="dynamic_regime", timeframe="1h", lookback_candles=2501,
+        ), enable_notifications=False)
+        bot.exchange = Mock()
+        bot.exchange.fetch_closed_ohlcv.return_value = candles
+        bot.exchange.get_ticker.return_value = {"bid": 70.0, "ask": 70.1}
+        bot.strategy = Mock()
+        bot.downtrend_recovery_strategy = Mock()
+        bot.downtrend_recovery_strategy.analyze.return_value = TradeSignal(
+            Signal.HOLD, "BTC/USDT", 0.0, "No RSI recovery entry", {"strategy": "downtrend_rsi_recovery_testnet"}
+        )
+        bot.risk_manager = SimpleNamespace(open_positions={}, store=Mock())
+        bot._last_analyzed_candle = {}
+        bot._analysis_error_states = {}
+        bot.last_signals = {}
+        bot._handle_buy_signal = Mock()
+        bot._handle_sell_signal = Mock()
+        with patch("bot_engine.evaluate_shadow_candidate", return_value={"signal": "HOLD", "status": "test"}):
+            bot.analyze_market("BTC/USDT")
+        bot.downtrend_recovery_strategy.analyze.assert_called_once()
+        bot.strategy.analyze.assert_not_called()
+        self.assertEqual(bot.last_signals["BTC/USDT"]["regime_router"]["selected_strategy"], "downtrend_rsi_recovery_testnet")
+
     def test_candle_gap_is_saved_as_an_auditable_market_data_issue(self):
         bot = object.__new__(TradingBot)
         bot.config = SimpleNamespace(strategy=SimpleNamespace(timeframe="1h", lookback_candles=150))
@@ -2114,6 +2218,59 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(bot.risk_manager.check_positions(lambda _symbol: 105.0), [])
             self.assertEqual(position.stop_loss_price, 97.0)
             self.assertFalse(position.break_even_activated)
+
+    def test_downtrend_recovery_testnet_buy_applies_extra_risk_cap(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.strategy.name = "dynamic_regime"
+            cfg.strategy.timeframe = "1h"
+            cfg.strategy.lookback_candles = 2500
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(max_risk_per_trade=1.0), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_usdt_balance.return_value = 10000.0
+            bot.exchange.get_current_price.return_value = 100.0
+            bot.exchange.get_public_market_data_price.return_value = 100.2
+            bot.exchange.amount_to_precision.return_value = "4.75"
+            bot.exchange.get_market_limits.return_value = {"min_amount": 0.1, "min_cost": 10.0, "active": True}
+            bot.exchange.get_order_book.return_value = {"bids": [[99.9, 100.0]], "asks": [[100.0, 100.0]]}
+            bot._has_correlated_open_position = lambda _symbol: (False, "")
+            buy_order = {
+                "id": "recovery-buy-1", "status": "closed", "filled": "4.75",
+                "average": "100", "fees": [{"currency": "USDT", "cost": "1"}],
+            }
+            bot._submit_market_order = Mock(return_value=(buy_order, "recovery-client-1"))
+            bot._resolve_fee_quote_cost = Mock(return_value=1.0)
+            bot._place_and_persist_native_stop = Mock(return_value=True)
+            bot.send_notification = Mock()
+            bot._log_trade = Mock()
+            bot.risk_manager.store.create_order_intent(
+                "recovery-client-1", "BTC/USDT", "buy", "4.75", {"test": True}
+            )
+            bot.risk_manager.store.update_order("recovery-client-1", "SUBMITTED")
+            bot.risk_manager.store.update_order(
+                "recovery-client-1", "FILLED", exchange_order_id="recovery-buy-1",
+                filled="4.75", average="100",
+            )
+
+            signal = TradeSignal(
+                Signal.BUY, "BTC/USDT", 0.65, "RSI recovery test",
+                {"strategy": "downtrend_rsi_recovery_testnet", "atr": 1.0, "swing_low_5": 95.0},
+            )
+            bot._handle_buy_signal(signal, decision_key="recovery-candle")
+            position = bot.risk_manager.open_positions["BTC/USDT"]
+            self.assertEqual(position.exit_policy, "downtrend_rsi_recovery")
+            self.assertEqual(position.stop_loss_price, 96.0)
+            self.assertEqual(position.take_profit_price, 102.0)
+            risk, within_cap = bot._post_fill_stop_risk(
+                position.amount, position.entry_price, position.stop_loss_price,
+                position.entry_fee_quote, 20.0,
+            )
+            self.assertEqual(risk, Decimal("20.00"))
+            self.assertTrue(within_cap)
+            self.assertFalse(bot.risk_manager._is_halted)
+            self.assertEqual(bot._place_and_persist_native_stop.call_args.kwargs["fallback_sl"], 96.0)
 
     def test_f03_missing_fee_data_still_protects_and_records_position(self):
         """F-03: Missing fee/fill array must not abandon acquired coins unprotected."""

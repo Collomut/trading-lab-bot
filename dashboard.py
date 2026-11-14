@@ -695,13 +695,23 @@ class WebDashboard:
             for key in (
                 "market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend",
                 "consensus_required", "entry_gates", "close", "ema480", "ema72",
-                "donchian_high168", "entry_ready", "exit_ready",
+                "ema20", "rsi", "donchian_high168", "swing_low_5", "entry_ready", "exit_ready",
             ):
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):
                     safe_indicators[key] = value
             if indicators.get("strategy") is not None:
                 safe_indicators["strategy"] = str(indicators["strategy"])[:48]
+            router = details.get("regime_router", {})
+            router = router if isinstance(router, dict) else {}
+            safe_router = {
+                key: router.get(key)
+                for key in ("regime", "route_state", "entry_route_enabled")
+                if isinstance(router.get(key), (str, bool))
+            }
+            for key in ("selected_strategy", "reason"):
+                if router.get(key) is not None:
+                    safe_router[key] = str(router[key])[:240]
             return {
                 "symbol": str(details.get("symbol", ""))[:32],
                 "timeframe": str(details.get("timeframe", ""))[:12],
@@ -715,6 +725,7 @@ class WebDashboard:
                 "spread_sample_status": str(details.get("spread_sample_status", "unknown"))[:32],
                 "votes": safe_votes,
                 "indicators": safe_indicators,
+                "regime_router": safe_router,
             }
         if event_type == "order_status":
             return {

@@ -1,0 +1,135 @@
+{
+  "method": "15m execution candidate; exact 168h channel, 480h EMA, 72h exit, stable hourly uptrend regime; same costs, stops, sizing, correlation and halts as hourly production replay.",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "limitations": [
+    "15m archive has only BTC/ETH/SOL",
+    "historical period is reused and not a clean holdout",
+    "intrabar spread and fills are not reconstructed"
+  ],
+  "results": {
+    "train_2021_02_to_2023": {
+      "base": {
+        "variant": "15m_train_2021_02_to_2023_base",
+        "closed_trades": 3,
+        "wins": 0,
+        "losses": 3,
+        "win_rate_pct": 0.0,
+        "net_pnl_usdt": -54.32,
+        "avg_trade_pnl_usdt": -18.11,
+        "profit_factor": 0.0,
+        "mean_trade_return_pct": -1.814,
+        "portfolio_return_pct": -0.543,
+        "max_drawdown_pct": 0.543,
+        "ending_equity_usdt": 9945.68,
+        "period_end_equity_points": 102074,
+        "halts_by_end": true,
+        "halt_reason": "three consecutive losing trades",
+        "halt_timestamp_ms": 1628541000000,
+        "trades_per_month": 0.086
+      },
+      "stress": {
+        "variant": "15m_train_2021_02_to_2023_stress",
+        "closed_trades": 3,
+        "wins": 0,
+        "losses": 3,
+        "win_rate_pct": 0.0,
+        "net_pnl_usdt": -63.18,
+        "avg_trade_pnl_usdt": -21.06,
+        "profit_factor": 0.0,
+        "mean_trade_return_pct": -2.11,
+        "portfolio_return_pct": -0.632,
+        "max_drawdown_pct": 0.632,
+        "ending_equity_usdt": 9936.82,
+        "period_end_equity_points": 102074,
+        "halts_by_end": true,
+        "halt_reason": "three consecutive losing trades",
+        "halt_timestamp_ms": 1628541000000,
+        "trades_per_month": 0.086
+      }
+    },
+    "validation_2024_to_2025": {
+      "base": {
+        "variant": "15m_validation_2024_to_2025_base",
+        "closed_trades": 15,
+        "wins": 5,
+        "losses": 10,
+        "win_rate_pct": 33.33,
+        "net_pnl_usdt": 71.93,
+        "avg_trade_pnl_usdt": 4.8,
+        "profit_factor": 1.437,
+        "mean_trade_return_pct": 0.49,
+        "portfolio_return_pct": 0.719,
+        "max_drawdown_pct": 1.36,
+        "ending_equity_usdt": 10071.93,
+        "period_end_equity_points": 70176,
+        "halts_by_end": true,
+        "halt_reason": "three consecutive losing trades",
+        "halt_timestamp_ms": 1708095600000,
+        "trades_per_month": 0.625
+      },
+      "stress": {
+        "variant": "15m_validation_2024_to_2025_stress",
+        "closed_trades": 15,
+        "wins": 5,
+        "losses": 10,
+        "win_rate_pct": 33.33,
+        "net_pnl_usdt": 29.57,
+        "avg_trade_pnl_usdt": 1.97,
+        "profit_factor": 1.154,
+        "mean_trade_return_pct": 0.189,
+        "portfolio_return_pct": 0.296,
+        "max_drawdown_pct": 1.484,
+        "ending_equity_usdt": 10029.57,
+        "period_end_equity_points": 70176,
+        "halts_by_end": true,
+        "halt_reason": "three consecutive losing trades",
+        "halt_timestamp_ms": 1708095600000,
+        "trades_per_month": 0.625
+      }
+    },
+    "review_2026_01_to_10": {
+      "base": {
+        "variant": "15m_review_2026_01_to_10_base",
+        "closed_trades": 8,
+        "wins": 2,
+        "losses": 6,
+        "win_rate_pct": 25.0,
+        "net_pnl_usdt": -84.56,
+        "avg_trade_pnl_usdt": -10.57,
+        "profit_factor": 0.346,
+        "mean_trade_return_pct": -1.08,
+        "portfolio_return_pct": -0.846,
+        "max_drawdown_pct": 1.402,
+        "ending_equity_usdt": 9915.44,
+        "period_end_equity_points": 29184,
+        "halts_by_end": true,
+        "halt_reason": "three consecutive losing trades",
+        "halt_timestamp_ms": 1773470700000,
+        "trades_per_month": 0.801
+      },
+      "stress": {
+        "variant": "15m_review_2026_01_to_10_stress",
+        "closed_trades": 8,
+        "wins": 2,
+        "losses": 6,
+        "win_rate_pct": 25.0,
+        "net_pnl_usdt": -107.91,
+        "avg_trade_pnl_usdt": -13.49,
+        "profit_factor": 0.263,
+        "mean_trade_return_pct": -1.378,
+        "portfolio_return_pct": -1.079,
+        "max_drawdown_pct": 1.59,
+        "ending_equity_usdt": 9892.09,
+        "period_end_equity_points": 29184,
+        "halts_by_end": true,
+        "halt_reason": "three consecutive losing trades",
+        "halt_timestamp_ms": 1773470700000,
+        "trades_per_month": 0.801
+      }
+    }
+  }
+}

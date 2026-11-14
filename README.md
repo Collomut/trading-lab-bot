@@ -15,7 +15,7 @@ python tests.py
 python main.py --once
 ```
 
-`--once` runs one strategy cycle and may place Testnet orders. The `dynamic_regime` profile selects the EMA72/Donchian candidate only after three completed hourly bars confirm an uptrend; other regimes remain flat while no alternative has passed the cost-adjusted screen. Open trades retain their original exit policy. The generic `--backtest` replay does not model this profile. Continuous paper trading with `--interval 60` may place Testnet orders.
+`--once` runs one strategy cycle and may place Testnet orders. The `dynamic_regime` profile selects the EMA72/Donchian candidate after three completed hourly bars confirm an uptrend. In stable downtrends it can evaluate a separate RSI recovery experiment, sized at no more than 0.20% of equity risk per trade with one such position at a time. That experiment has not passed historical cost checks and is for Binance Testnet forward evaluation only; live orders remain disabled. Range, high-volatility, transition, and invalid-data states stay flat. Open positions retain their original exit policy. The generic `--backtest` replay does not model this profile. Continuous paper trading with `--interval 60` may place Testnet orders.
 
 ## Railway
 
@@ -29,8 +29,8 @@ python main.py --once
 
 ## Operating boundaries
 
-- The configured `dynamic_regime` profile is a guarded Testnet research router, not a validated profitable strategy. It currently has one screened candidate, not a proven profitable multi-strategy portfolio.
-- The EMA72/Donchian candidate was positive in strategy-only historical slices but breached the training drawdown screen and quickly reached existing loss halts. No range or other regime strategy passed the cost-adjusted screen, so those regimes are deliberately not traded.
+- The configured `dynamic_regime` profile is a guarded Testnet research router, not a validated profitable strategy. It routes stable uptrends to EMA72/Donchian and stable downtrends to a separate low-risk RSI recovery experiment. The recovery experiment failed historical cost checks and is enabled only to collect low-risk Testnet execution evidence; it is not eligible for live orders.
+- The EMA72/Donchian candidate was positive in strategy-only historical slices but breached the training drawdown screen and quickly reached existing loss halts. No range or high-volatility strategy passed the cost-adjusted screen, so those regimes are deliberately not traded.
 - `python main.py --once` can place Testnet orders when configured with Testnet keys. Do not use it as a read-only health check.
 - `python main.py --backtest` is an exploratory replay for legacy strategies; it does not simulate the EMA72 candidate or dynamic routing. Use dedicated research scripts and documented historical data for candidate evaluation.
 - SQLite remains the default local store. Setting `DATABASE_URL` enables the guarded Postgres/Supabase store and import check.

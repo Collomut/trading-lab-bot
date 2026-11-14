@@ -266,7 +266,7 @@ class RiskManager:
                             not all(math.isfinite(float(value)) for value in numeric_values) or
                             position.entry_price <= 0 or position.amount <= 0 or
                             position.stop_loss_price <= 0 or
-                            not valid_target or position.exit_policy not in {"risk_managed", "ema72_signal"}):
+                            not valid_target or position.exit_policy not in {"risk_managed", "ema72_signal", "downtrend_rsi_recovery"}):
                         raise ValueError(f"invalid persisted position for {sym}")
                     self.open_positions[sym] = position
                 if self.open_positions:
@@ -505,19 +505,23 @@ class RiskManager:
         self,
         portfolio_value: float,
         entry_price: float,
-        stop_loss_price: float
+        stop_loss_price: float,
+        *,
+        risk_multiplier: float = 1.0,
+        entry_fee_rate: float = 0.0,
     ) -> float:
         """
         Conservative position sizing:
         Ensures max capital at risk on stop-loss is <= max_risk_per_trade%.
         """
-        if not all(math.isfinite(value) for value in (portfolio_value, entry_price, stop_loss_price)):
+        if not all(math.isfinite(value) for value in (portfolio_value, entry_price, stop_loss_price, risk_multiplier, entry_fee_rate)):
             return 0.0
-        if portfolio_value <= 0 or entry_price <= 0 or stop_loss_price <= 0:
+        if (portfolio_value <= 0 or entry_price <= 0 or stop_loss_price <= 0
+                or not 0 < risk_multiplier <= 1 or not 0 <= entry_fee_rate <= 0.05):
             return 0.0
 
-        risk_amount = portfolio_value * (self.config.max_risk_per_trade / 100)
-        risk_per_unit = abs(entry_price - stop_loss_price)
+        risk_amount = portfolio_value * (self.config.max_risk_per_trade / 100) * risk_multiplier
+        risk_per_unit = abs(entry_price - stop_loss_price) + entry_price * entry_fee_rate
 
         if risk_per_unit == 0:
             return 0.0
@@ -556,7 +560,7 @@ class RiskManager:
         exit_policy: str = "risk_managed",
     ) -> Position:
         """Record and persist a new open position."""
-        if exit_policy not in {"risk_managed", "ema72_signal"}:
+        if exit_policy not in {"risk_managed", "ema72_signal", "downtrend_rsi_recovery"}:
             raise ValueError("Unsupported position exit policy")
         selected_stop = self.calculate_stop_loss(entry_price, atr) if stop_loss_override is None else float(stop_loss_override)
         selected_target = (
@@ -743,7 +747,7 @@ class RiskManager:
 
             # Signal-managed trend positions keep their strategy stop and use
             # completed-candle exits; do not add an untested break-even/trail.
-            if position.exit_policy == "ema72_signal":
+            if position.exit_policy in {"ema72_signal", "downtrend_rsi_recovery"}:
                 if position.should_stop_loss(current_price):
                     to_close.append((symbol, "STOP-LOSS triggered"))
                 elif position.should_take_profit(current_price):

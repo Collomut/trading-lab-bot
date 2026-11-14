@@ -30,6 +30,10 @@ No strategy-rule change earned promotion into the executable strategy. Removing 
 
 Keep the current strategy and risk limits unchanged while gathering valid Testnet observations. If frequency remains too low, the next defensible work is a separately specified strategy family or a point-in-time liquidity-ranked universe, evaluated on fresh out-of-sample data with realistic fills, delisted assets, and the same portfolio/risk simulator. A higher order count alone is not evidence of a better system.
 
+### Follow-up experiment: stable downtrend recovery
+
+The live router was subsequently observed in a stable downtrend on BTC, ETH, and SOL, where the long-only uptrend candidate correctly had no entries. A separate RSI14 recovery-through-40 candidate was implemented for Binance Testnet only, with EMA20/RSI70 signal exits, a four-percent-capped swing stop, a 2×ATR target, one open recovery position maximum, and 0.20× configured risk. The backtest is in `REGIME_ROUTER_REVIEW.md` and `results/downtrend_rsi_recovery_results.json`: all three-pair periods were negative; the eight-pair recent base sample was nearly flat and failed stress costs. This raises the chance of seeing a Testnet order during a downtrend, but it is not a validated edge and must not be enabled with real funds. The 15-minute trend candidate was also tested in `backtest_15m_trend_entry.py`; it did not improve risk-adjusted results.
+
 ## Limits
 
 - Historical candle fills cannot recreate queue position, spread changes, market impact, outages, or exact stop execution.

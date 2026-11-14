@@ -419,6 +419,78 @@ class MacroDonchianEma72Strategy:
         return TradeSignal(Signal.HOLD, symbol, 0.0, "No 168-bar breakout above EMA480", indicators)
 
 
+class DowntrendRsiRecoveryTestnetStrategy:
+    """Low-risk, experimental long-only downtrend recovery route for Testnet.
+
+    The regime router must first confirm a stable downtrend. Entry then waits
+    for RSI(14) to recover through 40. The execution layer applies a 0.20%
+    equity risk budget, a four-percent-capped swing stop, and a 2-ATR target.
+    This is not a validated live-market strategy.
+    """
+
+    MIN_CANDLES = 2500
+    INTERVAL = pd.Timedelta(hours=1)
+    STRATEGY_ID = "downtrend_rsi_recovery_testnet"
+
+    def analyze(self, df: pd.DataFrame, symbol: str, *, in_position: bool = False) -> TradeSignal:
+        if df is None or len(df) < self.MIN_CANDLES or not {"high", "low", "close"}.issubset(df.columns):
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "Waiting for 2,500 contiguous hourly candles", {})
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "Hourly candle timestamps are unavailable", {})
+        window = df.iloc[-self.MIN_CANDLES:]
+        if window.index.has_duplicates or not window.index.is_monotonic_increasing or not window.index.to_series().diff().iloc[1:].eq(self.INTERVAL).all():
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "A gap exists in the 2,500-candle strategy warmup", {})
+        try:
+            close = pd.to_numeric(window["close"], errors="raise")
+            high = pd.to_numeric(window["high"], errors="raise")
+            low = pd.to_numeric(window["low"], errors="raise")
+            values = np.concatenate((close.to_numpy(), high.to_numpy(), low.to_numpy()))
+            if not np.isfinite(values).all() or (close <= 0).any() or (high <= 0).any() or (low <= 0).any() or (high < low).any() or (close > high).any() or (close < low).any():
+                raise ValueError("invalid OHLC values")
+            rsi = RSIIndicator(close, window=14).rsi()
+            ema20 = EMAIndicator(close, window=20).ema_indicator()
+            ema200 = EMAIndicator(close, window=200).ema_indicator()
+            adx = ADXIndicator(high, low, close, window=14).adx()
+            atr = AverageTrueRange(high, low, close, window=14).average_true_range()
+            swing_low = low.shift(1).rolling(5, min_periods=5).min()
+            i = len(window) - 1
+            vals = [float(series.iloc[i]) for series in (rsi, rsi.shift(1), ema20, ema200, ema200.shift(24), adx, atr, swing_low)]
+            if not all(math.isfinite(value) and value > 0 for value in vals):
+                raise ValueError("indicator warmup is incomplete")
+            rsi_now, rsi_prev, ema20_now, ema200_now, ema200_prev, adx_now, atr_now, swing_now = vals
+            close_now = float(close.iloc[i])
+        except (TypeError, ValueError, OverflowError, IndexError) as exc:
+            return TradeSignal(Signal.HOLD, symbol, 0.0, f"Invalid recovery-strategy data ({type(exc).__name__})", {})
+
+        atr_pct = atr_now / close_now * 100.0
+        trend_ok = close_now < ema200_now and ema200_now < ema200_prev
+        regime_ok = adx_now >= 25.0 and atr_pct <= 3.0
+        entry_ready = trend_ok and regime_ok and rsi_prev < 40.0 <= rsi_now
+        exit_ready = close_now > ema20_now or rsi_now > 70.0
+        indicators = {
+            "strategy": self.STRATEGY_ID,
+            "close": close_now,
+            "rsi": rsi_now,
+            "ema20": ema20_now,
+            "ema200": ema200_now,
+            "ema200_24h_slope_pct": (ema200_now / ema200_prev - 1.0) * 100.0,
+            "adx": adx_now,
+            "atr": atr_now,
+            "atr_pct": atr_pct,
+            "swing_low_5": swing_now,
+            "entry_ready": entry_ready,
+            "exit_ready": exit_ready,
+            "risk_multiplier": 0.20,
+        }
+        if in_position:
+            if exit_ready:
+                return TradeSignal(Signal.SELL, symbol, 0.85, "Completed 1h close above EMA20 or RSI above 70", indicators)
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "Recovery position open; waiting for EMA20 or RSI exit", indicators)
+        if entry_ready:
+            return TradeSignal(Signal.BUY, symbol, 0.65, "Downtrend recovery: RSI crossed above 40 after stable regime confirmation", indicators)
+        return TradeSignal(Signal.HOLD, symbol, 0.0, "No RSI recovery entry in the confirmed downtrend", indicators)
+
+
 class CombinedStrategy:
     """
     Combined rules-based strategy:

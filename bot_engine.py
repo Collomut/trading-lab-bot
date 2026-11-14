@@ -26,7 +26,10 @@ from pathlib import Path
 
 from config import BotConfig
 from exchange import AccountAccessError, ExchangeConnector
-from strategies import get_strategy, ohlcv_to_dataframe, Signal, TradeSignal
+from strategies import (
+    DowntrendRsiRecoveryTestnetStrategy, get_strategy, ohlcv_to_dataframe,
+    Signal, TradeSignal,
+)
 from risk_manager import RiskManager
 from shadow_strategy import CANDIDATE_ID, evaluate_shadow_candidate
 from regime_router import evaluate_regime_router
@@ -51,9 +54,10 @@ class TradingBot:
             min_trend_adx=config.strategy.min_trend_adx,
             max_atr_pct=config.strategy.max_atr_pct,
         )
+        self.downtrend_recovery_strategy = DowntrendRsiRecoveryTestnetStrategy()
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
         if (config.strategy.name in {"macro_donchian_ema72", "dynamic_regime"} and any(
-                position.exit_policy != "ema72_signal"
+                position.exit_policy not in {"ema72_signal", "downtrend_rsi_recovery"}
                 for position in self.risk_manager.open_positions.values()
         )):
             self.risk_manager.halt(
@@ -318,8 +322,9 @@ class TradingBot:
             # Do not let optional telemetry interfere with strategy analysis.
             logger.debug("Could not sample order-book spread for %s (%s)", symbol, type(ticker_exc).__name__)
 
-        # Classify before selecting a strategy. Dynamic mode only enables the
-        # EMA72 candidate on a stable uptrend; every other regime is fail-closed.
+        # Classify before selecting a strategy. Dynamic mode enables the EMA72
+        # candidate in stable uptrends and the separately risk-capped recovery
+        # experiment in stable downtrends. Both routes are Testnet-only.
         strategy_name = str(getattr(self.config.strategy, "name", "combined")).strip().lower()
         dynamic_mode = strategy_name == "dynamic_regime"
         router_observation = {"status": "unavailable", "regime": "uncertain",
@@ -337,7 +342,10 @@ class TradingBot:
         df = ohlcv_to_dataframe(ohlcv)
         has_position = symbol in getattr(self.risk_manager, "open_positions", {})
         ema72_profile = strategy_name in {"macro_donchian_ema72", "dynamic_regime"}
-        if dynamic_mode and not has_position and not router_observation.get("entry_route_enabled", False):
+        open_position = getattr(self.risk_manager, "open_positions", {}).get(symbol)
+        if dynamic_mode and open_position and open_position.exit_policy == "downtrend_rsi_recovery":
+            signal = self.downtrend_recovery_strategy.analyze(df, symbol, in_position=True)
+        elif dynamic_mode and not has_position and not router_observation.get("entry_route_enabled", False):
             reason = str(router_observation.get("reason") or "No validated strategy for this regime.")
             signal = TradeSignal(
                 Signal.HOLD, symbol, 0.0, f"No entry strategy selected · {reason}",
@@ -347,6 +355,8 @@ class TradingBot:
                     "regime": router_observation.get("regime", "uncertain"),
                 },
             )
+        elif dynamic_mode and not has_position and router_observation.get("selected_strategy") == "downtrend_rsi_recovery_testnet":
+            signal = self.downtrend_recovery_strategy.analyze(df, symbol, in_position=False)
         elif ema72_profile:
             # Existing positions always use the exit policy selected at entry,
             # even after a regime change. The router only governs flat-symbol entries.
@@ -394,7 +404,7 @@ class TradingBot:
             for key in (
                 "market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend",
                 "consensus_required", "entry_gates", "close", "ema480", "ema72",
-                "donchian_high168", "swing_low_5", "entry_ready", "exit_ready", "strategy",
+                "ema20", "rsi", "donchian_high168", "swing_low_5", "entry_ready", "exit_ready", "strategy",
             ):
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):
@@ -1036,6 +1046,19 @@ class TradingBot:
             logger.warning(f"No USDT balance available for buying {symbol}")
             return
 
+        # Keep the downtrend experiment to one position across the portfolio.
+        recovery_candidate = (
+            getattr(self.config.strategy, "name", "").strip().lower() == "dynamic_regime"
+            and isinstance(signal.indicators, dict)
+            and signal.indicators.get("strategy") == "downtrend_rsi_recovery_testnet"
+        )
+        if recovery_candidate and any(
+            pos.exit_policy == "downtrend_rsi_recovery"
+            for pos in self.risk_manager.open_positions.values()
+        ):
+            logger.info("Trade blocked for %s: one downtrend-recovery Testnet position is already open", symbol)
+            return
+
         # Risk check: can we open a new position?
         can_trade, reason = self.risk_manager.can_open_position(
             symbol, usdt_balance
@@ -1062,8 +1085,17 @@ class TradingBot:
             return
 
         atr = signal.indicators.get("atr", 0.0)
-        ema72_candidate = getattr(self.config.strategy, "name", "combined") in {"macro_donchian_ema72", "dynamic_regime"}
-        if ema72_candidate:
+        profile_name = getattr(self.config.strategy, "name", "combined").strip().lower()
+        candidate_strategy = signal.indicators.get("strategy") if isinstance(signal.indicators, dict) else None
+        ema72_candidate = profile_name == "macro_donchian_ema72" or (
+            profile_name == "dynamic_regime" and candidate_strategy == "macro_donchian_ema72"
+        )
+        recovery_candidate = profile_name == "dynamic_regime" and candidate_strategy == "downtrend_rsi_recovery_testnet"
+        managed_candidate = ema72_candidate or recovery_candidate
+        # Reserve headroom under the 0.20% strategy cap for entry fees and
+        # rounded exchange quantities before the post-fill risk validation.
+        risk_multiplier = 0.20 if recovery_candidate else 1.0
+        if managed_candidate:
             public_price = self.exchange.get_public_market_data_price(symbol)
             if public_price is None or public_price <= 0:
                 logger.warning("Entry blocked for %s: public market price is unavailable for paper price-parity check", symbol)
@@ -1076,7 +1108,7 @@ class TradingBot:
                 )
                 return
         swing_low = None
-        if ema72_candidate:
+        if managed_candidate:
             try:
                 swing_low = float(signal.indicators["swing_low_5"])
                 if not math.isfinite(swing_low) or swing_low <= 0:
@@ -1090,7 +1122,9 @@ class TradingBot:
         else:
             stop_loss_price = self.risk_manager.calculate_stop_loss(current_price, atr=atr)
         amount = self.risk_manager.calculate_position_size(
-            usdt_balance, current_price, stop_loss_price
+            usdt_balance, current_price, stop_loss_price,
+            risk_multiplier=risk_multiplier,
+            entry_fee_rate=0.001 if recovery_candidate else 0.0,
         )
 
         # Exchange rules and market quality are checked before any entry.
@@ -1126,9 +1160,19 @@ class TradingBot:
                 logger.info("Entry blocked for %s by exchange market limits", symbol)
                 return
             rounded_risk = amount * abs(Decimal(str(current_price)) - Decimal(str(stop_loss_price)))
-            risk_cap = Decimal(str(usdt_balance)) * Decimal(str(self.config.risk.max_risk_per_trade)) / Decimal(100)
+            # The experimental recovery route must enforce its reduced cap
+            # before submission as well as after the exchange fill. Include
+            # estimated entry commission so quantity rounding cannot consume
+            # the entire stop-risk budget before the order is placed.
+            fee_reserve = amount * Decimal(str(current_price)) * (
+                Decimal("0.001") if recovery_candidate else Decimal("0")
+            )
+            risk_cap = (
+                Decimal(str(usdt_balance)) * Decimal(str(self.config.risk.max_risk_per_trade))
+                / Decimal(100) * Decimal(str(risk_multiplier))
+            )
             exposure_cap = Decimal(str(usdt_balance)) * Decimal(str(self.config.risk.position_size_pct)) / Decimal(100)
-            if rounded_risk > risk_cap or needed_quote > exposure_cap:
+            if rounded_risk + fee_reserve > risk_cap or needed_quote > exposure_cap:
                 logger.warning("Rounded amount exceeds configured risk or exposure cap for %s", symbol)
                 return
         except Exception as exc:
@@ -1203,7 +1247,7 @@ class TradingBot:
             strategy_stop_adjusted_after_fill = False
             actual_stop_loss = stop_loss_price
             actual_take_profit = None
-            if ema72_candidate:
+            if managed_candidate:
                 proposed_stop = max(float(swing_low), fill_price * 0.96)
                 if not math.isfinite(proposed_stop) or proposed_stop <= 0:
                     self.risk_manager.halt(f"Candidate stop became invalid after fill for {symbol}; manual reconciliation required")
@@ -1216,7 +1260,8 @@ class TradingBot:
                     strategy_stop_adjusted_after_fill = True
                 else:
                     actual_stop_loss = proposed_stop
-                actual_take_profit = fill_price + 100.0 * float(atr)
+                target_atr_multiple = 2.0 if recovery_candidate else 100.0
+                actual_take_profit = fill_price + target_atr_multiple * float(atr)
                 if not math.isfinite(actual_take_profit) or actual_take_profit <= fill_price:
                     self.risk_manager.halt(f"Candidate target became invalid after fill for {symbol}; manual reconciliation required")
                     return
@@ -1229,9 +1274,10 @@ class TradingBot:
                     order_id=order.get("id", ""),
                     atr=atr,
                     entry_fee_quote=entry_fee_quote,
-                    stop_loss_override=actual_stop_loss if ema72_candidate else None,
-                    take_profit_override=actual_take_profit if ema72_candidate else None,
-                    exit_policy="ema72_signal" if ema72_candidate else "risk_managed",
+                    stop_loss_override=actual_stop_loss if managed_candidate else None,
+                    take_profit_override=actual_take_profit if managed_candidate else None,
+                    exit_policy=("downtrend_rsi_recovery" if recovery_candidate
+                                 else "ema72_signal" if ema72_candidate else "risk_managed"),
                 )
             except Exception as exc:
                 logger.error("Failed to open local position: %s", exc)
@@ -1241,7 +1287,10 @@ class TradingBot:
                 self.risk_manager.mark_position_accounting_incomplete(symbol)
                 position = self.risk_manager.open_positions.get(symbol)
             actual_stop_risk = None
-            actual_risk_cap = Decimal(str(usdt_balance)) * Decimal(str(self.config.risk.max_risk_per_trade)) / Decimal(100)
+            actual_risk_cap = (
+                Decimal(str(usdt_balance)) * Decimal(str(self.config.risk.max_risk_per_trade))
+                / Decimal(100) * Decimal(str(risk_multiplier))
+            )
             risk_within_cap = False
             if position:
                 actual_stop_risk, risk_within_cap = self._post_fill_stop_risk(
@@ -1282,7 +1331,7 @@ class TradingBot:
             if strategy_stop_adjusted_after_fill:
                 self.risk_manager.store.append_event("strategy_stop_adjusted_after_fill", {
                     "symbol": symbol,
-                    "strategy": "macro_donchian_ema72",
+                    "strategy": candidate_strategy,
                     "fill_price": fill_price,
                     "fallback_stop_price": actual_stop_loss,
                     "swing_low_reference": swing_low,
@@ -1307,6 +1356,7 @@ class TradingBot:
             tp_text = (
                 f"${pos.take_profit_price:,.2f} (100×ATR backstop)" if pos and pos.exit_policy == "ema72_signal" and pos.take_profit_price is not None
                 else "EMA72 completed-candle exit" if pos and pos.exit_policy == "ema72_signal"
+                else f"${pos.take_profit_price:,.2f} (2×ATR Testnet target)" if pos and pos.exit_policy == "downtrend_rsi_recovery" and pos.take_profit_price is not None
                 else f"${pos.take_profit_price:,.2f}" if pos and pos.take_profit_price is not None
                 else "N/A"
             )
@@ -1436,7 +1486,7 @@ class TradingBot:
         """Check all open positions for Trailing SL, Breakeven, and TP triggers."""
         # 1. Sync any tightened break-even or trailing stops to Binance exchange (F-05)
         for sym, pos in list(self.risk_manager.open_positions.items()):
-            if pos.exit_policy == "ema72_signal":
+            if pos.exit_policy in {"ema72_signal", "downtrend_rsi_recovery"}:
                 continue
             cur_p = self.exchange.get_current_price(sym)
             if cur_p is not None and cur_p > 0:
@@ -1557,14 +1607,18 @@ class TradingBot:
             for symbol, pos in positions.items():
                 current = self.exchange.get_current_price(symbol)
                 if current is None or current <= 0:
-                    target = "EMA72 close exit" if pos.exit_policy == "ema72_signal" else f"${pos.take_profit_price:,.2f}"
+                    target = ("EMA72 close exit" if pos.exit_policy == "ema72_signal"
+                              else f"${pos.take_profit_price:,.2f} (2×ATR Testnet target)" if pos.exit_policy == "downtrend_rsi_recovery"
+                              else f"${pos.take_profit_price:,.2f}")
                     print(f"    ⚠️ {symbol}: price unavailable | SL: ${pos.stop_loss_price:,.2f} | TP/exit: {target}")
                     continue
                 pnl = pos.unrealized_pnl(current)
                 pnl_pct = pos.unrealized_pnl_pct(current)
                 emoji = "📈" if pnl >= 0 else "📉"
                 be_tag = " [BREAK-EVEN]" if pos.break_even_activated else ""
-                target = "EMA72 close exit" if pos.exit_policy == "ema72_signal" else f"${pos.take_profit_price:,.2f}"
+                target = ("EMA72 close exit" if pos.exit_policy == "ema72_signal"
+                          else f"${pos.take_profit_price:,.2f} (2×ATR Testnet target)" if pos.exit_policy == "downtrend_rsi_recovery"
+                          else f"${pos.take_profit_price:,.2f}")
                 print(
                     f"    {emoji} {symbol}: ${pos.entry_price:,.2f} → "
                     f"${current:,.2f} | P&L: ${pnl:+,.2f} ({pnl_pct:+.2f}%){be_tag} | "
