@@ -21,6 +21,36 @@ MIN_CANDLES = 2501
 HOUR_MS = 3_600_000
 ACTIVE_CANDIDATE = "macro_donchian_ema72"
 DYNAMIC_PROFILE = "dynamic_regime"
+# Executable strategy routes are an explicit allowlist. A market-regime label
+# by itself never activates a strategy. Candidates in other regimes stay
+# disabled until the research process validates their exact runtime behavior.
+REGIME_ROUTE_POLICY = {
+    "uptrend": {
+        "strategy": ACTIVE_CANDIDATE,
+        "state": "testnet_candidate",
+        "entry_enabled": True,
+    },
+    "range": {
+        "strategy": None,
+        "state": "no_validated_candidate",
+        "entry_enabled": False,
+    },
+    "downtrend": {
+        "strategy": None,
+        "state": "no_validated_long_only_candidate",
+        "entry_enabled": False,
+    },
+    "high_volatility": {
+        "strategy": None,
+        "state": "risk_blocked",
+        "entry_enabled": False,
+    },
+    "transition": {
+        "strategy": None,
+        "state": "uncertain_regime",
+        "entry_enabled": False,
+    },
+}
 ROUTER_ERROR_MESSAGES = {
     "non_finite_ohlcv": "Market data contains an invalid number; this check was skipped.",
     "invalid_timestamp": "Market data has an invalid candle time; this check was skipped.",
@@ -125,6 +155,7 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
         "candidate_strategy": None,
         "selected_strategy": None,
         "route": "no_validated_strategy",
+        "route_state": "uncertain_regime",
         "entry_route_enabled": False,
         "entry_authorized": False,
         "reason": "No validated strategy is available for this regime.",
@@ -164,13 +195,15 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
 
     regime = raw_regimes[-1]
     result["regime"] = regime
+    policy = REGIME_ROUTE_POLICY[regime]
+    result["route_state"] = policy["state"]
     if regime == "uptrend" and dynamic_mode:
         result.update(
-            candidate_strategy=ACTIVE_CANDIDATE,
-            selected_strategy=ACTIVE_CANDIDATE,
-            route=ACTIVE_CANDIDATE,
-            entry_route_enabled=True,
-            reason="Stable uptrend confirmed; EMA72 trend candidate may evaluate an entry. Risk checks still control order placement.",
+            candidate_strategy=policy["strategy"],
+            selected_strategy=policy["strategy"],
+            route=policy["strategy"],
+            entry_route_enabled=policy["entry_enabled"],
+            reason="Stable uptrend confirmed; the allowlisted EMA72 trend candidate may evaluate an entry. Risk and execution checks still control order placement.",
         )
     elif regime == "uptrend" and str(active_strategy).strip().lower() == ACTIVE_CANDIDATE:
         result.update(
@@ -182,7 +215,7 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
     elif regime == "uptrend":
         result["reason"] = "The uptrend candidate is not enabled; no strategy change is made in shadow mode."
     elif regime == "range":
-        result["reason"] = "The tested range strategy did not pass cost-adjusted research; no entry strategy is selected."
+        result["reason"] = "No range candidate passed cost-adjusted research; no entry strategy is selected."
     elif regime == "downtrend":
         result["reason"] = "No validated long-only entry strategy is available in a downtrend; existing position exits remain unchanged."
     elif regime == "high_volatility":

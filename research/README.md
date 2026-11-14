@@ -2,7 +2,7 @@
 
 This folder contains the reproducible strategy comparison used to decide whether a higher-frequency strategy was justified. The result was negative: no evaluated variant had sufficiently positive evidence to change production entry rules.
 
-`REGIME_ROUTER_REVIEW.md` records the rule-based regime observer now shown on the Strategy page. It is shadow-only: it does not route orders or change active strategies, exits, or risk controls. Historical evidence did not validate a profitable regime-specific strategy for the bot.
+`REGIME_ROUTER_REVIEW.md` documents the guarded `dynamic_regime` Testnet router. Its executable allowlist currently contains one candidate, `macro_donchian_ema72`, for stable uptrends. Range, downtrend, high-volatility, transition, and invalid-data conditions route to no new entry. The candidate is not proven profitable and the router has not established a live edge. Other strategy families remain research-only because their cost-adjusted screens failed.
 
 ## Reproduction
 
@@ -13,7 +13,7 @@ This folder contains the reproducible strategy comparison used to decide whether
 
 The scripts write compact JSON results under `research/results/`. The methodology, assumptions, findings, and limits are summarized in `STRATEGY_REEVALUATION.md`.
 
-Historical simulations do not establish future profitability. They use hourly OHLCV approximations and cannot fully model order-book execution, exchange outages, or intrabar stop paths.
+Historical simulations do not establish future profitability. They use hourly OHLCV approximations and cannot fully model order-book execution, exchange outages, or intrabar stop paths. The 2025–2026 periods have already been reviewed in multiple candidate screens and must not be described as untouched holdout data. New candidates need a frozen specification, reproducible same-simulator comparison, and prospective Testnet observation before they can be added to the executable route allowlist.
 
 ## Supplied state-plus-trigger blueprint
 
@@ -26,5 +26,7 @@ Historical simulations do not establish future profitability. They use hourly OH
 `SQUEEZE_CANDIDATE_REVIEW.md` records an independent replay of the supplied Keltner squeeze breakout specification. It failed cost-adjusted validation and remains research-only. Reproduce it with `python research/backtest_squeeze.py`; it uses the local, git-ignored Binance hourly archive.
 
 `MACRO_DONCHIAN_REVIEW.md` independently replays the macro-filtered Donchian candidate from the 2026-11-12 handover. Results were positive without halts, but did not match the supplied report and failed the minimum trade-frequency gate in validation and 2026. The candidate remains research-only. Reproduce with `python research/backtest_macro_donchian.py`.
+
+`HANDOVER_REVIEW_2026-11-14.md` records the independent full-history and chronological replay of the latest pullback/ATR-stop handover. All evaluated variants lost after modeled fees and slippage; none were added to the order path. Reproduce with `python research/backtest_handover_pullback.py`.
 
 `EMA72_DONCHIAN_REVIEW.md` independently replays the follow-up EMA72 exit candidate. It outperformed the current strategy in no-halt historical slices but exceeded the 5% drawdown limit in training, traded below the proposed frequency floor in the 2026 review, and was halt-truncated in validation and 2026. Its counts do not match the supplied handover and require reconciliation. Reproduce with `python research/backtest_ema72_donchian.py`. `AI_AGENT_EMA72_RESEARCH_FOLLOWUP.md` gives the other research agent the exact follow-up checks.

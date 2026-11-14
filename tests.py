@@ -66,7 +66,7 @@ from strategies import (
     ohlcv_to_dataframe,
 )
 from shadow_strategy import evaluate_shadow_candidate
-from regime_router import evaluate_regime_router
+from regime_router import REGIME_ROUTE_POLICY, evaluate_regime_router
 
 
 class TestShadowLogSafety(unittest.TestCase):
@@ -137,7 +137,7 @@ class TestShadowRegimeRouter(unittest.TestCase):
             ])
         return candles
 
-    def test_router_is_shadow_only_and_requires_persistent_uptrend(self):
+    def test_static_candidate_profile_does_not_claim_dynamic_entry_authorization(self):
         result = evaluate_regime_router(self.candles(), "macro_donchian_ema72")
         self.assertEqual(result["regime"], "uptrend")
         self.assertEqual(result["route"], "observe_existing_strategy_only")
@@ -177,6 +177,29 @@ class TestShadowRegimeRouter(unittest.TestCase):
         result = evaluate_regime_router(gapped, "macro_donchian_ema72")
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["route"], "no_validated_strategy")
+
+    def test_dynamic_policy_is_an_explicit_allowlist_with_one_candidate(self):
+        enabled = [
+            (regime, route["strategy"])
+            for regime, route in REGIME_ROUTE_POLICY.items()
+            if route["entry_enabled"]
+        ]
+        self.assertEqual(enabled, [("uptrend", "macro_donchian_ema72")])
+        for regime in ("range", "downtrend", "high_volatility", "transition"):
+            self.assertIsNone(REGIME_ROUTE_POLICY[regime]["strategy"])
+            self.assertFalse(REGIME_ROUTE_POLICY[regime]["entry_enabled"])
+
+        uptrend = evaluate_regime_router(self.candles(), "dynamic_regime")
+        self.assertEqual(uptrend["route_state"], "testnet_candidate")
+        self.assertTrue(uptrend["entry_route_enabled"])
+        for kind, expected_state in (
+            ("range", "no_validated_candidate"),
+            ("volatile", "risk_blocked"),
+        ):
+            routed = evaluate_regime_router(self.candles(kind), "dynamic_regime")
+            self.assertEqual(routed["route_state"], expected_state)
+            self.assertFalse(routed["entry_route_enabled"])
+            self.assertIsNone(routed["selected_strategy"])
 
 
 # ==============================================================================
@@ -962,6 +985,31 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertEqual(record.fee, 10.0)
             self.assertAlmostEqual(record.pnl_pct, 0.8)
 
+    def test_profit_factor_uses_gross_profit_divided_by_gross_loss(self):
+        with TemporaryDirectory() as persistence_dir:
+            risk = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            for price in (200.0, 90.0, 90.0):
+                risk.open_position("BTC/USDT", 100.0, 1.0)
+                risk.close_position("BTC/USDT", price, "fixture", fee_cost=0.0)
+            stats = risk.get_performance_summary()
+            self.assertEqual(stats["gross_profit"], 100.0)
+            self.assertEqual(stats["gross_loss"], 20.0)
+            self.assertEqual(stats["profit_factor"], 5.0)
+
+    def test_unknown_exit_fee_is_incomplete_and_halts_entries(self):
+        with TemporaryDirectory() as persistence_dir:
+            risk = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            risk.open_position("BTC/USDT", 100.0, 1.0)
+            record = risk.close_position("BTC/USDT", 110.0, "fee missing", fee_cost=None)
+            self.assertIsNotNone(record)
+            self.assertIsNone(record.pnl)
+            self.assertIsNone(record.pnl_pct)
+            self.assertIsNone(record.fee)
+            self.assertFalse(record.accounting_complete)
+            self.assertTrue(risk._is_halted)
+            self.assertEqual(risk.get_performance_summary()["total_trades"], 0)
+            self.assertEqual(risk.get_performance_summary()["incomplete_trades"], 1)
+
     def test_f12_start_paused_policy(self):
         """F-12: START_PAUSED=true policy defaults to EXIT_ONLY mode."""
         with TemporaryDirectory() as persistence_dir:
@@ -1723,6 +1771,22 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             {"fee": {"currency": "BNB", "cost": "0.01"}}, "BTC/USDT", 50000
         ))
 
+    def test_fee_accounting_recovers_verified_order_fill_fees(self):
+        bot = object.__new__(TradingBot)
+        bot.exchange = Mock()
+        bot.exchange.fetch_order_trades.return_value = [
+            {"amount": "0.4", "fee": {"currency": "USDT", "cost": "0.04"}},
+            {"amount": "0.6", "fee": {"currency": "USDT", "cost": "0.06"}},
+        ]
+        self.assertAlmostEqual(
+            bot._resolve_fee_quote_cost({"id": "order-1", "filled": "1.0"}, "BTC/USDT", 100.0),
+            0.1,
+        )
+        bot.exchange.fetch_order_trades.return_value[1]["amount"] = "0.5"
+        self.assertIsNone(bot._resolve_fee_quote_cost(
+            {"id": "order-1", "filled": "1.0"}, "BTC/USDT", 100.0
+        ))
+
     def test_entry_and_exit_fees_are_both_counted_in_realized_pnl(self):
         with TemporaryDirectory() as persistence_dir:
             rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
@@ -2457,6 +2521,13 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("Practice mode", overview)
         self.assertIn("App-monitored exits can fail during outages", overview)
 
+    def test_trade_history_explains_profit_factor_and_incomplete_accounting(self):
+        history = (Path("templates") / "history.html").read_text(encoding="utf-8")
+        self.assertIn("Profit factor", history)
+        self.assertIn("Gross gains ÷ gross losses", history)
+        self.assertIn("Pending reconciliation", history)
+        self.assertIn("incomplete fee or partial-fill accounting", history)
+
     def test_glossary_definitions_completeness(self):
         glossary = (Path("templates") / "glossary.html").read_text(encoding="utf-8")
         expected_terms = [
@@ -2464,6 +2535,7 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
             "Account value / net worth",
             "Profit and loss (P&amp;L)",
             "Realized and unrealized P&amp;L",
+            "Profit factor",
             "Stop-loss",
             "Take-profit",
             "Fees and slippage",

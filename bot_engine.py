@@ -114,6 +114,23 @@ class TradingBot:
         with open(self.trade_log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(trade_data, allow_nan=False) + "\n")
 
+    def _log_closed_trade(self, record, reason: str, exit_price: float, order_id: str = ""):
+        """Persist every confirmed position close with explicit accounting status."""
+        if not record:
+            return
+        self._log_trade({
+            "action": "SELL",
+            "symbol": record.symbol,
+            "price": exit_price,
+            "amount": record.amount,
+            "pnl": record.pnl,
+            "pnl_pct": record.pnl_pct,
+            "fee": record.fee,
+            "accounting_complete": record.accounting_complete,
+            "order_id": str(order_id or ""),
+            "reason": reason,
+        })
+
     def _send_telegram_notification(self, message: str):
         """Send notification to Telegram bot."""
         if not (self.config.telegram_bot_token and self.config.telegram_chat_id):
@@ -585,8 +602,15 @@ class TradingBot:
                 fill_price = float(order.get("average") or order.get("price") or 0)
                 if not math.isfinite(fill_price) or fill_price <= 0:
                     raise ValueError("partial sell response has no valid average fill price")
-                if not self.risk_manager.close_position(symbol, fill_price, "Partial sell reconciled to zero remaining balance"):
+                if not self.risk_manager.mark_position_accounting_incomplete(symbol):
+                    raise ValueError("incomplete accounting status could not be persisted")
+                fee_cost = self._resolve_fee_quote_cost(order, symbol, fill_price)
+                record = self.risk_manager.close_position(
+                    symbol, fill_price, "Partial sell reconciled to zero remaining balance", fee_cost=fee_cost
+                )
+                if not record:
                     raise ValueError("closed position could not be persisted")
+                self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
             else:
                 if not self.risk_manager.update_position_amount(symbol, float(remaining)):
                     raise ValueError("remaining position quantity could not be persisted")
@@ -596,6 +620,7 @@ class TradingBot:
             self.risk_manager.store.append_event("partial_exit_reconciled", {
                 "symbol": symbol, "order_id": str(order.get("id", "")),
                 "filled": str(filled), "remaining": str(remaining),
+                "accounting_complete": False,
             })
             self.risk_manager.halt(f"Partial sell for {symbol} was reconciled; manual review required")
             return True
@@ -693,12 +718,17 @@ class TradingBot:
                         price = float(stop.get("average") or stop.get("price") or 0)
                         if not math.isfinite(price) or price <= 0:
                             raise ValueError(f"triggered stop for {symbol} lacks a valid fill price")
-                        record = self.risk_manager.close_position(symbol, price, "Exchange-native stop-loss filled")
+                        fee_cost = self._resolve_fee_quote_cost(stop, symbol, price)
+                        record = self.risk_manager.close_position(
+                            symbol, price, "Exchange-native stop-loss filled", fee_cost=fee_cost
+                        )
                         if not record:
                             raise ValueError(f"triggered stop for {symbol} could not be persisted")
+                        self._log_closed_trade(record, record.reason, price, str(stop.get("id", position.stop_order_id)))
                         self.risk_manager.store.append_event("protective_stop_filled", {
                             "symbol": symbol, "order_id": str(stop.get("id", position.stop_order_id)),
                             "filled": str(filled), "average": str(price),
+                            "accounting_complete": record.accounting_complete,
                         })
                         self.risk_manager.halt(f"Exchange stop filled for {symbol}; manual review required before resuming")
                         self._last_account_balance = balance
@@ -900,6 +930,63 @@ class TradingBot:
             return result if math.isfinite(result) else None
         except (InvalidOperation, TypeError, ValueError):
             return None
+
+    def _resolve_fee_quote_cost(self, order: dict, symbol: str, fill_price: float) -> float | None:
+        """Use order fees, then verified per-fill fees; never assume missing fees are zero."""
+        fee_cost = self._fee_quote_cost(order, symbol, fill_price)
+        if fee_cost is not None:
+            return fee_cost
+        if not isinstance(order, dict):
+            return None
+        order_id = order.get("id") or (order.get("info") or {}).get("orderId")
+        filled_value = order.get("filled")
+        if not order_id or filled_value is None:
+            return None
+        try:
+            expected = Decimal(str(filled_value))
+            if not expected.is_finite() or expected <= 0:
+                return None
+            fills = self.exchange.fetch_order_trades(str(order_id), symbol)
+        except Exception as exc:
+            logger.warning("Could not retrieve fills for fee reconciliation on %s (%s)", symbol, type(exc).__name__)
+            return None
+        if not isinstance(fills, list) or not fills:
+            return None
+
+        total_filled = Decimal("0")
+        aggregated: dict[str, Decimal] = {}
+        try:
+            for fill in fills:
+                if not isinstance(fill, dict):
+                    return None
+                amount = Decimal(str(fill.get("amount")))
+                if not amount.is_finite() or amount <= 0:
+                    return None
+                total_filled += amount
+                fees = fill.get("fees")
+                if fees is None:
+                    fee = fill.get("fee")
+                    fees = [fee] if isinstance(fee, dict) else None
+                if not isinstance(fees, list) or not fees:
+                    return None
+                for fee in fees:
+                    if not isinstance(fee, dict) or fee.get("currency") is None or fee.get("cost") is None:
+                        return None
+                    currency = str(fee["currency"])
+                    cost = Decimal(str(fee["cost"]))
+                    if not cost.is_finite() or cost < 0:
+                        return None
+                    aggregated[currency] = aggregated.get(currency, Decimal("0")) + cost
+            tolerance = max(Decimal("0.0000000001"), expected * Decimal("0.00000001"))
+            if abs(total_filled - expected) > tolerance or not aggregated:
+                return None
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+        verified_order = {
+            "fees": [{"currency": currency, "cost": str(cost)} for currency, cost in aggregated.items()]
+        }
+        return self._fee_quote_cost(verified_order, symbol, fill_price)
 
     @staticmethod
     def _return_correlation(candles_a: list, candles_b: list) -> float | None:
@@ -1108,7 +1195,7 @@ class TradingBot:
                 self.risk_manager.halt(f"Invalid buy fill details for {symbol}; reconcile exchange orders and balances")
                 return
 
-            entry_fee_quote = self._fee_quote_cost(order, symbol, fill_price)
+            entry_fee_quote = self._resolve_fee_quote_cost(order, symbol, fill_price)
             if entry_fee_quote is None:
                 fee_ambiguous = True
                 entry_fee_quote = 0.0
@@ -1150,6 +1237,9 @@ class TradingBot:
                 logger.error("Failed to open local position: %s", exc)
 
             position = self.risk_manager.open_positions.get(symbol)
+            if position and fee_ambiguous:
+                self.risk_manager.mark_position_accounting_incomplete(symbol)
+                position = self.risk_manager.open_positions.get(symbol)
             actual_stop_risk = None
             actual_risk_cap = Decimal(str(usdt_balance)) * Decimal(str(self.config.risk.max_risk_per_trade)) / Decimal(100)
             risk_within_cap = False
@@ -1316,11 +1406,7 @@ class TradingBot:
                 self.risk_manager.halt(f"Invalid sell fill details for {symbol}; protective stop restored, reconcile exchange orders and balances")
                 return
 
-            fee_cost = self._fee_quote_cost(order, symbol, fill_price)
-            if fee_cost is None:
-                self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
-                self.risk_manager.halt(f"Sell fee currency could not be valued for {symbol}; trade accounting needs reconciliation")
-                return
+            fee_cost = self._resolve_fee_quote_cost(order, symbol, fill_price)
 
             record = self.risk_manager.close_position(
                 symbol=symbol,
@@ -1331,25 +1417,20 @@ class TradingBot:
 
             if record:
                 self.risk_manager.store.mark_order_applied(client_order_id)
+                pnl_text = (
+                    f"${record.pnl:+,.2f} ({record.pnl_pct:+.2f}%)"
+                    if record.accounting_complete else "pending fee/partial-fill reconciliation"
+                )
                 msg = (
                     f"🔴 *BOT SELL EXECUTED*\n"
                     f"Pair: `{symbol}`\n"
                     f"Exit Price: `${fill_price:,.2f}`\n"
-                    f"P&L: `${record.pnl:+,.2f}` ({record.pnl_pct:+.2f}%)\n"
+                    f"P&L: {pnl_text}\n"
                     f"Reason: {record.reason}"
                 )
-                self.send_notification(msg, subject=f"🔴 Bot SELL: {symbol} (P&L: ${record.pnl:+,.2f})")
-
-                self._log_trade({
-                    "action": "SELL",
-                    "symbol": symbol,
-                    "price": fill_price,
-                    "amount": record.amount,
-                    "pnl": record.pnl,
-                    "pnl_pct": record.pnl_pct,
-                    "fee": record.fee,
-                    "reason": record.reason,
-                })
+                subject_pnl = f"${record.pnl:+,.2f}" if record.accounting_complete else "pending reconciliation"
+                self.send_notification(msg, subject=f"🔴 Bot SELL: {symbol} (P&L: {subject_pnl})")
+                self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
 
     def check_stop_loss_take_profit(self):
         """Check all open positions for Trailing SL, Breakeven, and TP triggers."""
@@ -1443,34 +1524,24 @@ class TradingBot:
                     self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
                     self.risk_manager.halt(f"Invalid stop-exit fill details for {symbol}; protective stop restored, reconcile exchange orders and balances")
                     return
-                fee_cost = self._fee_quote_cost(order, symbol, fill_price)
-                if fee_cost is None:
-                    self._place_and_persist_native_stop(symbol, f"reprotect_{int(time.time()*1000)}", fallback_sl=old_stop_price, fallback_amount=position_amount)
-                    self.risk_manager.halt(f"Sell fee currency could not be valued for {symbol}; trade accounting needs reconciliation")
-                    return
+                fee_cost = self._resolve_fee_quote_cost(order, symbol, fill_price)
 
                 record = self.risk_manager.close_position(symbol, fill_price, reason, fee_cost=fee_cost)
 
                 if record:
                     self.risk_manager.store.mark_order_applied(client_order_id)
+                    pnl_text = (
+                        f"${record.pnl:+,.2f} ({record.pnl_pct:+.2f}%)"
+                        if record.accounting_complete else "pending fee/partial-fill reconciliation"
+                    )
                     msg = (
                         f"🛡️ *POSITION CLOSED ({reason})*\n"
                         f"Pair: `{symbol}`\n"
                         f"Exit Price: `${fill_price:,.2f}`\n"
-                        f"P&L: `${record.pnl:+,.2f}` ({record.pnl_pct:+.2f}%)"
+                        f"P&L: {pnl_text}"
                     )
                     self.send_notification(msg, subject=f"🛡️ Position Closed: {symbol} ({reason})")
-
-                    self._log_trade({
-                        "action": "SELL",
-                        "symbol": symbol,
-                        "price": fill_price,
-                        "amount": record.amount,
-                        "pnl": record.pnl,
-                        "pnl_pct": record.pnl_pct,
-                        "fee": record.fee,
-                        "reason": record.reason,
-                    })
+                    self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
 
     def print_status(self):
         """Print current bot status including open positions and P&L."""
@@ -1559,9 +1630,13 @@ class TradingBot:
                     fill_price = float(order.get("average") or order.get("price") or 0)
                     if not math.isfinite(fill_price) or fill_price <= 0:
                         raise RuntimeError("the exchange returned invalid fill details")
-                    record = self.risk_manager.close_position(symbol, fill_price, "Emergency stop")
+                    fee_cost = self._resolve_fee_quote_cost(order, symbol, fill_price)
+                    record = self.risk_manager.close_position(
+                        symbol, fill_price, "Emergency stop", fee_cost=fee_cost
+                    )
                     if not record:
                         raise RuntimeError("closed-position state could not be persisted")
+                    self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
                     self.risk_manager.store.mark_order_applied(client_id)
                 except Exception as exc:
                     safe_to_reprotect = safe_to_reprotect or self._sell_was_not_submitted(symbol, key)
