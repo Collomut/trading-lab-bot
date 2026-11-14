@@ -2553,7 +2553,9 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
             )
             bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
-            bot.exchange = SimpleNamespace(is_fallback_simulated=False)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.get_current_price.return_value = 110.0
             bot._cycle_lock = threading.Lock()
             bot._reconcile_exchange_state = Mock(return_value=True)
             position = bot.risk_manager.open_position(
@@ -2576,6 +2578,66 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertNotIn("BTC/USDT", bot.risk_manager.open_positions)
             bot._reconcile_exchange_state.assert_called_once_with()
             bot._handle_sell_signal.assert_called_once()
+
+    def test_dashboard_manual_close_requires_explicit_confirmation_for_estimated_loss(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.get_current_price.return_value = 99.0
+            bot._cycle_lock = threading.Lock()
+            bot._reconcile_exchange_state = Mock(return_value=True)
+            position = bot.risk_manager.open_position(
+                "BTC/USDT", 100.0, 1.0, entry_fee_quote=1.0, order_id="buy-1"
+            )
+            bot._handle_sell_signal = Mock()
+
+            result = bot.close_position_manually("BTC/USDT")
+
+            self.assertFalse(result["success"])
+            self.assertTrue(result["requires_confirmation"])
+            self.assertLess(result["estimated_net_pnl"], 0)
+            bot._handle_sell_signal.assert_not_called()
+            self.assertIn("BTC/USDT", bot.risk_manager.open_positions)
+
+            def close_from_signal(signal, decision_key):
+                bot.risk_manager.close_position(
+                    signal.symbol, 99.0, signal.reason, fee_cost=0.5
+                )
+
+            bot._handle_sell_signal.side_effect = close_from_signal
+            result = bot.close_position_manually("BTC/USDT", allow_loss_close=True)
+            self.assertTrue(result["success"])
+            self.assertTrue(result["loss_close_override"])
+            self.assertNotIn("BTC/USDT", bot.risk_manager.open_positions)
+
+    def test_dashboard_manual_close_requires_confirmation_when_net_estimate_unavailable(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.get_current_price.side_effect = RuntimeError("price unavailable")
+            bot._cycle_lock = threading.Lock()
+            bot._reconcile_exchange_state = Mock(return_value=True)
+            bot.risk_manager.open_position("BTC/USDT", 100.0, 1.0, order_id="buy-1")
+            bot._handle_sell_signal = Mock()
+
+            result = bot.close_position_manually("BTC/USDT")
+
+            self.assertFalse(result["success"])
+            self.assertTrue(result["requires_confirmation"])
+            self.assertIsNone(result["estimated_net_pnl"])
+            bot._handle_sell_signal.assert_not_called()
 
     def test_dashboard_manual_close_rejects_fallback_or_untracked_positions(self):
         bot = object.__new__(TradingBot)
@@ -3041,6 +3103,8 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("/api/close-position", positions)
         self.assertIn("estimated_net_pnl", dashboard)
         self.assertIn("estimated_exit_fee_rate", dashboard)
+        self.assertIn("allow_loss_close", positions)
+        self.assertIn("No order has been sent yet", positions)
         self.assertIn("prices[sym] = float(p)", dashboard)
         self.assertIn("const priceText", positions)
 

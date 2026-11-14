@@ -35,6 +35,7 @@ from shadow_strategy import CANDIDATE_ID, evaluate_shadow_candidate
 from regime_router import evaluate_regime_router
 
 logger = logging.getLogger("bot.engine")
+ESTIMATED_TAKER_FEE_RATE = 0.001
 
 
 class TradingBot:
@@ -1854,8 +1855,10 @@ class TradingBot:
         finally:
             self._cycle_lock.release()
 
-    def close_position_manually(self, symbol: str) -> dict:
+    def close_position_manually(self, symbol: str, allow_loss_close: bool = False) -> dict:
         """Market-close one tracked paper position after exchange reconciliation."""
+        if not isinstance(allow_loss_close, bool):
+            return {"success": False, "message": "Invalid loss-close confirmation."}
         if not self.config.exchange.paper_trading:
             return {"success": False, "message": "Manual dashboard closes are disabled outside paper trading."}
         if getattr(self.exchange, "is_fallback_simulated", False):
@@ -1871,6 +1874,40 @@ class TradingBot:
                 return {
                     "success": False,
                     "message": "Account check failed, so the close was not submitted. Review the account status first.",
+                }
+
+            position = self.risk_manager.open_positions[symbol]
+            try:
+                current_price = self.exchange.get_current_price(symbol)
+            except Exception:
+                logger.warning("Could not fetch a fresh price before manual close for %s", symbol, exc_info=True)
+                current_price = None
+            estimate_available = (
+                isinstance(current_price, (int, float))
+                and math.isfinite(float(current_price)) and current_price > 0
+                and position.accounting_complete
+            )
+            estimated_net_pnl = None
+            estimated_net_pnl_pct = None
+            if estimate_available:
+                current_price = float(current_price)
+                gross_pnl = (current_price - position.entry_price) * position.amount
+                estimated_exit_fee = current_price * position.amount * ESTIMATED_TAKER_FEE_RATE
+                estimated_net_pnl = gross_pnl - position.entry_fee_quote - estimated_exit_fee
+                cost_basis = position.entry_price * position.amount
+                estimated_net_pnl_pct = estimated_net_pnl / cost_basis * 100 if cost_basis > 0 else None
+            if (not estimate_available or estimated_net_pnl <= 0) and not allow_loss_close:
+                message = (
+                    f"Current estimated net result is ${estimated_net_pnl:+,.2f} ({estimated_net_pnl_pct:+.2f}%) after known entry fees and estimated sell fees."
+                    if estimate_available and estimated_net_pnl_pct is not None else
+                    "A reliable net estimate is unavailable because price or fee accounting is incomplete."
+                )
+                return {
+                    "success": False,
+                    "requires_confirmation": True,
+                    "estimated_net_pnl": estimated_net_pnl,
+                    "estimated_net_pnl_pct": estimated_net_pnl_pct,
+                    "message": f"Close not submitted. {message} Review the estimate and explicitly confirm if you still want to close.",
                 }
 
             previous_trade_count = len(self.risk_manager.trade_history)
@@ -1903,6 +1940,7 @@ class TradingBot:
                 "exit_price": record.exit_price,
                 "pnl": record.pnl,
                 "pnl_pct": record.pnl_pct,
+                "loss_close_override": allow_loss_close and (not estimate_available or estimated_net_pnl <= 0),
                 "message": (
                     f"Closed {symbol} at market. Net result: ${record.pnl:+,.2f} ({record.pnl_pct:+.2f}%)."
                     if record.accounting_complete and record.pnl is not None

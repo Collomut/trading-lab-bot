@@ -24,7 +24,7 @@ from config import BotConfig
 from exchange import AccountAccessError, ExchangeConnector
 from strategies import get_strategy
 from risk_manager import RiskManager
-from bot_engine import TradingBot
+from bot_engine import ESTIMATED_TAKER_FEE_RATE, TradingBot
 
 logger = logging.getLogger("bot.dashboard")
 _LOGIN_FAILURES: dict[str, list[float]] = {}
@@ -495,7 +495,7 @@ class WebDashboard:
                 pos_pnl = (cur_p - pos.entry_price) * pos.amount
                 pos_pnl_pct = ((cur_p - pos.entry_price) / pos.entry_price) * 100 if pos.entry_price > 0 else 0
                 entry_fee_quote = max(0.0, float(getattr(pos, "entry_fee_quote", 0.0) or 0.0))
-                estimated_exit_fee = cur_p * pos.amount * 0.001
+                estimated_exit_fee = cur_p * pos.amount * ESTIMATED_TAKER_FEE_RATE
                 accounting_complete = bool(getattr(pos, "accounting_complete", True))
                 estimated_net_pnl = (
                     pos_pnl - entry_fee_quote - estimated_exit_fee
@@ -514,7 +514,7 @@ class WebDashboard:
                 pos_dict["estimated_net_pnl"] = round(estimated_net_pnl, 2) if estimated_net_pnl is not None else None
                 pos_dict["estimated_net_pnl_pct"] = round(estimated_net_pnl_pct, 2) if estimated_net_pnl_pct is not None else None
                 pos_dict["estimated_exit_fee"] = round(estimated_exit_fee, 4)
-                pos_dict["estimated_exit_fee_rate"] = 0.001
+                pos_dict["estimated_exit_fee_rate"] = ESTIMATED_TAKER_FEE_RATE
                 pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
                 pos_dict["target_gain_dollars"] = (
                     round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
@@ -1063,12 +1063,18 @@ class WebDashboard:
         symbol = payload.get("symbol") if isinstance(payload, dict) else None
         if not isinstance(symbol, str) or not symbol.strip() or len(symbol) > 32:
             return web.json_response({"success": False, "message": "Choose a valid open market."}, status=400)
+        allow_loss_close = payload.get("allow_loss_close", False) if isinstance(payload, dict) else False
+        if not isinstance(allow_loss_close, bool):
+            return web.json_response({"success": False, "message": "Invalid loss-close confirmation."}, status=400)
 
         self._status_cache = None
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, self.bot.close_position_manually, symbol.strip())
+        result = await loop.run_in_executor(
+            None, self.bot.close_position_manually, symbol.strip(), allow_loss_close
+        )
         self._status_cache = None
-        return web.json_response(result, status=200 if result.get("success") else 409)
+        status = 200 if result.get("success") else 409
+        return web.json_response(result, status=status)
 
     async def handle_testnet_smoke_trade(self, request):
         if not self._is_valid_origin(request):

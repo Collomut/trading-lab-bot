@@ -48,23 +48,37 @@
     };
     const closeStatus = document.getElementById('close-status');
 
+    async function submitClose(symbol, allowLossClose) {
+      const response = await fetch('/api/close-position', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, allow_loss_close: allowLossClose }),
+      });
+      return response.json();
+    }
+
     async function closePosition(symbol, position, button) {
       const estimate = money(position.estimated_net_pnl);
       const pct = position.estimated_net_pnl_pct === null || position.estimated_net_pnl_pct === undefined
         ? '' : ` (${Number(position.estimated_net_pnl_pct).toFixed(2)}%)`;
-      const confirmation = `Close the full ${symbol} position at market now?\n\nEstimated net result: ${estimate}${pct}\nThis includes the recorded entry fee and estimated 0.1% sell fee. The actual result can differ due to price movement, slippage, and final fees.`;
+      const estimatedFeeRate = Number(position.estimated_exit_fee_rate ?? 0.001);
+      const feeLabel = `${(estimatedFeeRate * 100).toFixed(2)}%`;
+      const confirmation = `Close the full ${symbol} position at market now?\n\nEstimated net result: ${estimate}${pct}\nThis includes the recorded entry fee and estimated ${feeLabel} sell fee. The actual result can differ due to price movement, slippage, and final fees.`;
       if (!confirm(confirmation)) return;
 
       button.disabled = true;
       closeStatus.textContent = `Submitting market close for ${symbol}…`;
       closeStatus.className = 'help';
       try {
-        const response = await fetch('/api/close-position', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol }),
-        });
-        const result = await response.json();
+        let result = await submitClose(symbol, false);
+        if (result.requires_confirmation) {
+          const override = confirm(`${result.message}\n\nNo order has been sent yet. Do you explicitly want to close anyway? The bot will still honor its automatic stop and strategy exits.`);
+          if (!override) {
+            closeStatus.textContent = 'No order submitted. The position remains open and its protective stop stays in place.';
+            return;
+          }
+          result = await submitClose(symbol, true);
+        }
         closeStatus.textContent = result.message || 'Close request completed.';
         closeStatus.className = `help ${result.success ? 'positive' : 'negative'}`;
         if (result.success) await refresh();
