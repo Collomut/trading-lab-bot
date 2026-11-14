@@ -2,6 +2,12 @@
 
 **Decision: live trading is blocked.** The build rejects live exchange initialization in `ExchangeConnector._create_exchange`; setting `PAPER_TRADING=false` does not enable live orders. This is intentional. “PASS” below means a safeguard exists in this build, not that the strategy is profitable or production-ready.
 
+## Follow-up audit — 2026-11-14
+
+The dashboard readiness probe now requires a live background worker task, at least one successful completed trading cycle, a fresh cycle heartbeat, clean exchange reconciliation, and no active risk halt. It reports the worker state, last cycle age, and a safe error class without credentials. Railway continues to use the separate liveness probe so a deliberate risk halt does not create an automatic restart loop. Regression coverage verifies fresh, stale, and stopped-worker states. The complete local suite passes 150 tests.
+
+This closes a monitoring blind spot; it does **not** close the live launch gates below. Historical strategy evidence still does not establish positive net expectancy, a deployed Testnet smoke round-trip has not been demonstrated in this review, and a 14-day uninterrupted forward soak cannot be inferred from a successful deploy or unit tests. Live execution remains blocked in both configuration validation and exchange initialization. External exchange permissions, API-key withdrawal/IP restrictions, third-party alerting, and real execution / stop behavior also require independent verification. Binance documents that signed order outcomes can be unknown after request timeouts and must be reconciled, and that symbol-specific filters govern price, size, and notional; these must remain explicit execution test cases before any live release.
+
 ## Follow-up audit — 2026-11-12
 
 The Strategy page had a misleading fallback: it selected the EMA72 display from per-signal indicators, so a valid HOLD/data-check result with an empty indicator payload showed “Signal agreement unavailable.” It now uses the configured strategy from `/api/status` to select the EMA72 view and presents missing data as warmup/data-check status. Earlier Railway logs also contained a warning that only 867 of 2,501 requested candles were available; this was from an earlier runtime window. The current deployment's latest sampled cycles did not show that warning, but candle sufficiency remains an operational signal to monitor because the EMA72 strategy intentionally refuses to trade without its required history.

@@ -25,6 +25,7 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 import urllib.error
 import unittest
 from contextlib import closing, redirect_stdout
@@ -2438,6 +2439,14 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
         dash.bot = Mock()
         dash.bot.risk_manager = Mock()
         dash.bot.exchange = Mock()
+        dash.bg_task = Mock()
+        dash.bg_task.done.return_value = False
+        dash._worker_interval_seconds = 60
+        dash._worker_cycle_started_at = time.time() - 10
+        dash._worker_cycle_completed_at = time.time() - 5
+        dash._worker_last_cycle_ok = True
+        dash._worker_state = "running"
+        dash._worker_last_error = ""
 
         req = Mock()
         resp = asyncio.run(dash.handle_liveness(req))
@@ -2449,6 +2458,22 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
         dash.bot.exchange.is_fallback_simulated = False
         resp_ready = asyncio.run(dash.handle_readiness(req))
         self.assertEqual(resp_ready.status, 200)
+        ready_body = json.loads(resp_ready.text)
+        self.assertEqual(ready_body["worker"]["state"], "running")
+        self.assertTrue(ready_body["worker"]["task_alive"])
+        self.assertTrue(ready_body["worker"]["last_cycle_ok"])
+
+        dash._worker_cycle_completed_at = time.time() - 301
+        resp_stale = asyncio.run(dash.handle_readiness(req))
+        self.assertEqual(resp_stale.status, 503)
+        self.assertEqual(json.loads(resp_stale.text)["worker"]["state"], "stale")
+        dash._worker_cycle_completed_at = time.time() - 5
+
+        dash.bg_task.done.return_value = True
+        resp_stopped = asyncio.run(dash.handle_readiness(req))
+        self.assertEqual(resp_stopped.status, 503)
+        self.assertFalse(json.loads(resp_stopped.text)["worker"]["task_alive"])
+        dash.bg_task.done.return_value = False
 
         dash.bot.risk_manager._is_halted = True
         resp_halted = asyncio.run(dash.handle_readiness(req))

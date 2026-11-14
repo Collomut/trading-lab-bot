@@ -183,6 +183,12 @@ class WebDashboard:
         self.app["bot"] = self.bot
         self.app["config"] = self.config
         self.bg_task = None
+        self._worker_state = "starting"
+        self._worker_interval_seconds = 60
+        self._worker_cycle_started_at = None
+        self._worker_cycle_completed_at = None
+        self._worker_last_cycle_ok = None
+        self._worker_last_error = ""
         self._setup_routes()
         self._setup_lifecycle()
 
@@ -266,8 +272,17 @@ class WebDashboard:
         is_halted = risk._is_halted
         is_fallback_sim = getattr(exchange, "is_fallback_simulated", False)
         mode = risk.entry_mode()
-
-        ready = (is_reconciled or is_fallback_sim) and not is_halted
+        now = time.time()
+        completed_at = self._worker_cycle_completed_at
+        cycle_age = max(0, int(now - completed_at)) if completed_at is not None else None
+        max_cycle_age = max(300, self._worker_interval_seconds * 5)
+        worker_stale = cycle_age is None or cycle_age > max_cycle_age
+        worker_task_alive = self.bg_task is not None and not self.bg_task.done()
+        worker_ready = (
+            worker_task_alive and self._worker_state == "running"
+            and self._worker_last_cycle_ok is True and not worker_stale
+        )
+        ready = (is_reconciled or is_fallback_sim) and not is_halted and worker_ready
         status_code = 200 if ready else 503
         return web.json_response({
             "status": "ready" if ready else "not_ready",
@@ -275,7 +290,20 @@ class WebDashboard:
             "entry_mode": mode,
             "reconciled": is_reconciled,
             "fallback_simulated": is_fallback_sim,
-            "timestamp": int(time.time() * 1000)
+            "worker": {
+                "state": "stale" if worker_stale and worker_task_alive else self._worker_state,
+                "task_alive": worker_task_alive,
+                "cycle_in_progress": self._worker_cycle_started_at is not None
+                    and (completed_at is None or self._worker_cycle_started_at > completed_at),
+                "last_cycle_ok": self._worker_last_cycle_ok,
+                "last_cycle_completed_at": datetime.fromtimestamp(
+                    completed_at, timezone.utc
+                ).isoformat() if completed_at is not None else None,
+                "last_cycle_age_seconds": cycle_age,
+                "stale_after_seconds": max_cycle_age,
+                "last_error": self._worker_last_error or None,
+            },
+            "timestamp": int(now * 1000)
         }, status=status_code)
 
     def _setup_lifecycle(self):
@@ -289,6 +317,7 @@ class WebDashboard:
         except Exception as exc:
             logger.warning("Could not record worker start event: %s", type(exc).__name__)
         self.bg_task = asyncio.create_task(self.background_trading_loop(app))
+        self._worker_state = "starting"
         logger.info("🚀 24/7 background trading worker activated.")
 
     async def cleanup_background_tasks(self, app):
@@ -299,6 +328,7 @@ class WebDashboard:
                 await self.bg_task
             except asyncio.CancelledError:
                 pass
+        self._worker_state = "stopped"
         logger.info("Background trading worker stopped.")
 
     async def background_trading_loop(self, app):
@@ -308,25 +338,39 @@ class WebDashboard:
         except ValueError:
             interval = 60
         interval = min(max(interval, 1), 3600)
+        self._worker_interval_seconds = interval
         logger.info("Background trading loop active (interval: %ss)", interval)
 
         while True:
             try:
                 config_errors = self.config.validate()
                 if config_errors:
+                    self._worker_state = "degraded"
+                    self._worker_last_cycle_ok = False
+                    self._worker_last_error = "configuration_invalid"
                     logger.error("Trading cycle skipped because configuration is invalid: %s", "; ".join(config_errors))
                     await asyncio.sleep(interval)
                     continue
 
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self.bot.run_cycle)
+                self._worker_state = "running"
+                self._worker_cycle_started_at = time.time()
+                cycle_ok = await loop.run_in_executor(None, self.bot.run_cycle)
+                self._worker_cycle_completed_at = time.time()
+                self._worker_last_cycle_ok = bool(cycle_ok)
+                self._worker_state = "running" if cycle_ok else "degraded"
+                self._worker_last_error = "" if cycle_ok else "cycle_not_completed_successfully"
 
             except asyncio.CancelledError:
+                self._worker_state = "stopped"
                 break
             except Exception as e:
                 # Exchange/network exceptions may contain signed URLs or API
                 # metadata. Log the class only; endpoint handlers expose safe
                 # actionable messages where appropriate.
+                self._worker_state = "degraded"
+                self._worker_last_cycle_ok = False
+                self._worker_last_error = type(e).__name__
                 logger.error("Error in continuous background loop (%s)", type(e).__name__)
 
             await asyncio.sleep(interval)
