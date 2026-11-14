@@ -1,3 +1,138 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Positions · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m8"><script src="/assets/app.js?v=m8" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link active" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Portfolio</div><h1>Open positions</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state" data-skeleton aria-busy="true">Loading…</span></div></header><p class="help">Quantity and P&amp;L are from reconciled bot records. Exchange-hosted stops protect the position. Strategy-based exits are sent after a completed candle; the app must be online to process them.</p><div id="positions" class="table-wrap positions-table"><div class="empty" data-skeleton aria-busy="true">Loading…</div></div><footer>Open P&amp;L is an estimate and excludes fees. <a href="/terms#position">Position definitions</a></footer></main><script>
-const money=v=>'$'+Number(v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});function cell(row,value,cls=''){const td=document.createElement('td');td.textContent=value;if(cls)td.className=cls;row.append(td)}async function refresh(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error(`Status unavailable (${r.status})`);const d=await r.json(),wrap=document.getElementById('positions'),entries=Object.entries(d.positions||{});wrap.replaceChildren();if(!entries.length){const p=document.createElement('div');p.className='empty';p.textContent='No open positions tracked';wrap.append(p)}else{const t=document.createElement('table'),h=t.createTHead().insertRow();['Pair','Qty','Entry','Price','Open P&L','App stop','Target / exit','Stop'].forEach(x=>{const th=document.createElement('th');th.textContent=x;h.append(th)});const b=t.createTBody();for(const [sym,p] of entries){const row=b.insertRow();cell(row,sym);cell(row,Number(p.amount).toPrecision(7));cell(row,money(p.entry_price));cell(row,money(p.current_price));cell(row,money(p.unrealized_pnl),p.unrealized_pnl>=0?'positive':'negative');cell(row,money(p.stop_loss_price));cell(row,(p.take_profit_price===null?'EMA72 close':money(p.take_profit_price)+(p.exit_policy==='ema72_signal'?' / EMA72 exit':'')));cell(row,p.break_even_activated?'Trailing':'Initial')}wrap.append(t)}document.getElementById('state').textContent=`${entries.length} tracked · ${d.halted?'Paused':'Active'} · ${new Date().toLocaleTimeString()}`;document.getElementById('dot').className='dot '+(d.halted?'bad':'ok')}catch(e){document.getElementById('state').textContent=e.message;document.getElementById('dot').className='dot bad'}}refresh();setInterval(refresh,10000);
-</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Positions · Trading Lab</title>
+  <link rel="stylesheet" href="/assets/app.css?v=m9">
+  <script src="/assets/app.js?v=m9" defer></script>
+</head>
+<body>
+  <nav>
+    <div class="nav-inner">
+      <a class="brand" href="/">TRADING LAB</a>
+      <div class="nav-links">
+        <a class="nav-link" href="/">Overview</a>
+        <a class="nav-link active" href="/positions">Positions</a>
+        <a class="nav-link" href="/history">Trades</a>
+        <a class="nav-link" href="/strategy">Strategy</a>
+        <a class="nav-link" href="/logs">Logs</a>
+        <a class="nav-link" href="/terms">Glossary</a>
+      </div>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button>
+    </div>
+  </nav>
+  <main class="container">
+    <header class="page-head">
+      <div><div class="eyebrow">Portfolio</div><h1>Open positions</h1></div>
+      <div class="status"><span id="dot" class="dot"></span><span id="state" data-skeleton aria-busy="true">Loading…</span></div>
+    </header>
+    <p class="help">Review the estimated net result, then close a position at market whenever you choose. Exchange-hosted stops stay in place until the close is submitted. Estimates include the recorded entry fee and an estimated 0.1% sell fee; the actual fill can differ.</p>
+    <p id="close-status" class="help" aria-live="polite"></p>
+    <div id="positions" class="table-wrap positions-table"><div class="empty" data-skeleton aria-busy="true">Loading…</div></div>
+    <footer>Estimated net P&amp;L is not a guaranteed exit value; it excludes market slippage and may not match your fee tier. <a href="/terms#position">Position definitions</a></footer>
+  </main>
+  <script>
+    const money = value => value === null || value === undefined
+      ? 'Unavailable'
+      : '$' + Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const priceText = value => value === null || value === undefined
+      ? 'Unavailable'
+      : '$' + Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 });
+    const cell = (row, value, className = '') => {
+      const td = document.createElement('td');
+      td.textContent = value;
+      if (className) td.className = className;
+      row.append(td);
+      return td;
+    };
+    const closeStatus = document.getElementById('close-status');
+
+    async function closePosition(symbol, position, button) {
+      const estimate = money(position.estimated_net_pnl);
+      const pct = position.estimated_net_pnl_pct === null || position.estimated_net_pnl_pct === undefined
+        ? '' : ` (${Number(position.estimated_net_pnl_pct).toFixed(2)}%)`;
+      const confirmation = `Close the full ${symbol} position at market now?\n\nEstimated net result: ${estimate}${pct}\nThis includes the recorded entry fee and estimated 0.1% sell fee. The actual result can differ due to price movement, slippage, and final fees.`;
+      if (!confirm(confirmation)) return;
+
+      button.disabled = true;
+      closeStatus.textContent = `Submitting market close for ${symbol}…`;
+      closeStatus.className = 'help';
+      try {
+        const response = await fetch('/api/close-position', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol }),
+        });
+        const result = await response.json();
+        closeStatus.textContent = result.message || 'Close request completed.';
+        closeStatus.className = `help ${result.success ? 'positive' : 'negative'}`;
+        if (result.success) await refresh();
+      } catch (_) {
+        closeStatus.textContent = 'Close result could not be confirmed. Check the exchange order before retrying.';
+        closeStatus.className = 'help negative';
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch('/api/status', { cache: 'no-store' });
+        if (!response.ok) throw Error(`Status unavailable (${response.status})`);
+        const data = await response.json();
+        const wrap = document.getElementById('positions');
+        const entries = Object.entries(data.positions || {});
+        wrap.replaceChildren();
+        if (!entries.length) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'No open positions tracked';
+          wrap.append(empty);
+        } else {
+          const table = document.createElement('table');
+          const header = table.createTHead().insertRow();
+          ['Pair', 'Qty', 'Entry', 'Price', 'Estimated net P&L', 'App stop', 'Target / exit', 'Stop', 'Action'].forEach(label => {
+            const th = document.createElement('th');
+            th.textContent = label;
+            header.append(th);
+          });
+          const body = table.createTBody();
+          for (const [symbol, position] of entries) {
+            const row = body.insertRow();
+            cell(row, symbol);
+            cell(row, Number(position.amount).toPrecision(7));
+            cell(row, priceText(position.entry_price));
+            cell(row, priceText(position.current_price));
+            const result = position.estimated_net_pnl;
+            const resultPct = position.estimated_net_pnl_pct;
+            const resultLabel = `${money(result)}${resultPct === null || resultPct === undefined ? '' : ` (${Number(resultPct).toFixed(2)}%)`}`;
+            cell(row, resultLabel, result >= 0 ? 'positive' : 'negative');
+            cell(row, priceText(position.stop_loss_price));
+            cell(row, position.take_profit_price === null
+              ? 'EMA72 close'
+              : `${priceText(position.take_profit_price)}${position.exit_policy === 'ema72_signal' ? ' / EMA72 exit' : ''}`);
+            cell(row, position.break_even_activated ? 'Trailing' : 'Initial');
+            const action = row.insertCell();
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'button secondary close-position-btn';
+            button.textContent = 'Close position';
+            button.addEventListener('click', () => closePosition(symbol, position, button));
+            action.append(button);
+          }
+          wrap.append(table);
+        }
+        document.getElementById('state').textContent = `${entries.length} tracked · ${data.halted ? 'Paused' : 'Active'} · ${new Date().toLocaleTimeString()}`;
+        document.getElementById('dot').className = `dot ${data.halted ? 'bad' : 'ok'}`;
+      } catch (error) {
+        document.getElementById('state').textContent = error.message;
+        document.getElementById('dot').className = 'dot bad';
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>

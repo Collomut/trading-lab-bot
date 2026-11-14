@@ -211,6 +211,7 @@ class WebDashboard:
         self.app.router.add_post('/api/exit-only', self.handle_exit_only)
         self.app.router.add_post('/api/resume', self.handle_resume_entries)
         self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
+        self.app.router.add_post('/api/close-position', self.handle_close_position)
         self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
         self.app.router.add_post('/api/test-notification', self.handle_test_notification)
         self.app.router.add_get('/api/account-diagnostic', self.handle_account_diagnostic)
@@ -463,7 +464,7 @@ class WebDashboard:
             sym = sym.strip()
             p = await loop.run_in_executor(None, exchange.get_current_price, sym)
             if p is not None and p > 0:
-                prices[sym] = round(p, 2)
+                prices[sym] = float(p)
             else:
                 prices[sym] = None
                 price_failures.append(sym)
@@ -480,6 +481,10 @@ class WebDashboard:
                 pos_dict["current_price"] = None
                 pos_dict["unrealized_pnl"] = None
                 pos_dict["unrealized_pnl_pct"] = None
+                pos_dict["estimated_net_pnl"] = None
+                pos_dict["estimated_net_pnl_pct"] = None
+                pos_dict["estimated_exit_fee"] = None
+                pos_dict["estimated_exit_fee_rate"] = 0.001
                 pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
                 pos_dict["target_gain_dollars"] = (
                     round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
@@ -489,12 +494,27 @@ class WebDashboard:
             else:
                 pos_pnl = (cur_p - pos.entry_price) * pos.amount
                 pos_pnl_pct = ((cur_p - pos.entry_price) / pos.entry_price) * 100 if pos.entry_price > 0 else 0
+                entry_fee_quote = max(0.0, float(getattr(pos, "entry_fee_quote", 0.0) or 0.0))
+                estimated_exit_fee = cur_p * pos.amount * 0.001
+                accounting_complete = bool(getattr(pos, "accounting_complete", True))
+                estimated_net_pnl = (
+                    pos_pnl - entry_fee_quote - estimated_exit_fee
+                    if accounting_complete else None
+                )
+                estimated_net_pnl_pct = (
+                    estimated_net_pnl / (pos.entry_price * pos.amount) * 100
+                    if estimated_net_pnl is not None and pos.entry_price > 0 and pos.amount > 0 else None
+                )
                 unrealized_total += pos_pnl
 
                 pos_dict = pos.to_dict()
                 pos_dict["current_price"] = cur_p
                 pos_dict["unrealized_pnl"] = round(pos_pnl, 2)
                 pos_dict["unrealized_pnl_pct"] = round(pos_pnl_pct, 2)
+                pos_dict["estimated_net_pnl"] = round(estimated_net_pnl, 2) if estimated_net_pnl is not None else None
+                pos_dict["estimated_net_pnl_pct"] = round(estimated_net_pnl_pct, 2) if estimated_net_pnl_pct is not None else None
+                pos_dict["estimated_exit_fee"] = round(estimated_exit_fee, 4)
+                pos_dict["estimated_exit_fee_rate"] = 0.001
                 pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
                 pos_dict["target_gain_dollars"] = (
                     round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
@@ -1032,6 +1052,23 @@ class WebDashboard:
         success, message = await loop.run_in_executor(None, self.bot.emergency_stop)
         status = 200 if success else 503
         return web.json_response({"success": success, "message": message}, status=status)
+
+    async def handle_close_position(self, request):
+        if not self._is_valid_origin(request):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        symbol = payload.get("symbol") if isinstance(payload, dict) else None
+        if not isinstance(symbol, str) or not symbol.strip() or len(symbol) > 32:
+            return web.json_response({"success": False, "message": "Choose a valid open market."}, status=400)
+
+        self._status_cache = None
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, self.bot.close_position_manually, symbol.strip())
+        self._status_cache = None
+        return web.json_response(result, status=200 if result.get("success") else 409)
 
     async def handle_testnet_smoke_trade(self, request):
         if not self._is_valid_origin(request):

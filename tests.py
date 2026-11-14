@@ -2545,6 +2545,52 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(call_args[0], "BTC/USDT")
             self.assertEqual(call_args[1], 0.01)
 
+    def test_dashboard_manual_close_records_actual_net_result(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = SimpleNamespace(is_fallback_simulated=False)
+            bot._cycle_lock = threading.Lock()
+            bot._reconcile_exchange_state = Mock(return_value=True)
+            position = bot.risk_manager.open_position(
+                "BTC/USDT", 100.0, 1.0, entry_fee_quote=1.0, order_id="buy-1"
+            )
+
+            def close_from_signal(signal, decision_key):
+                self.assertEqual(signal.signal, Signal.SELL)
+                self.assertIn("dashboard-manual-close:", decision_key)
+                bot.risk_manager.close_position(
+                    signal.symbol, 110.0, signal.reason, fee_cost=0.5
+                )
+
+            bot._handle_sell_signal = Mock(side_effect=close_from_signal)
+            result = bot.close_position_manually("BTC/USDT")
+
+            self.assertTrue(result["success"])
+            self.assertTrue(result["accounting_complete"])
+            self.assertAlmostEqual(result["pnl"], 8.5)
+            self.assertNotIn("BTC/USDT", bot.risk_manager.open_positions)
+            bot._reconcile_exchange_state.assert_called_once_with()
+            bot._handle_sell_signal.assert_called_once()
+
+    def test_dashboard_manual_close_rejects_fallback_or_untracked_positions(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(
+            exchange=SimpleNamespace(paper_trading=True),
+            strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+        )
+        bot.exchange = SimpleNamespace(is_fallback_simulated=True)
+        self.assertFalse(bot.close_position_manually("BTC/USDT")["success"])
+
+        bot.exchange.is_fallback_simulated = False
+        bot.risk_manager = SimpleNamespace(open_positions={})
+        bot._cycle_lock = threading.Lock()
+        self.assertFalse(bot.close_position_manually("BTC/USDT")["success"])
+
     def test_rejected_strategy_sell_restores_stop_after_confirmed_zero_fill(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
@@ -2986,6 +3032,17 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         ]
         for term in expected_terms:
             self.assertIn(term, glossary)
+
+    def test_positions_page_has_manual_close_and_fee_estimate_disclosure(self):
+        positions = (Path("templates") / "positions.html").read_text(encoding="utf-8")
+        dashboard = (Path("dashboard.py")).read_text(encoding="utf-8")
+        self.assertIn("Estimated net P&amp;L", positions)
+        self.assertIn("Close position", positions)
+        self.assertIn("/api/close-position", positions)
+        self.assertIn("estimated_net_pnl", dashboard)
+        self.assertIn("estimated_exit_fee_rate", dashboard)
+        self.assertIn("prices[sym] = float(p)", dashboard)
+        self.assertIn("const priceText", positions)
 
     def test_mobile_overflow_protection_in_css(self):
         """Verify CSS contains mobile overflow prevention rules and responsive layouts."""

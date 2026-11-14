@@ -1854,6 +1854,80 @@ class TradingBot:
         finally:
             self._cycle_lock.release()
 
+    def close_position_manually(self, symbol: str) -> dict:
+        """Market-close one tracked paper position after exchange reconciliation."""
+        if not self.config.exchange.paper_trading:
+            return {"success": False, "message": "Manual dashboard closes are disabled outside paper trading."}
+        if getattr(self.exchange, "is_fallback_simulated", False):
+            return {"success": False, "message": "The authenticated Demo account is unavailable; no order was sent."}
+        if symbol not in {pair.strip() for pair in self.config.strategy.trading_pairs}:
+            return {"success": False, "message": "That market is not configured for this bot."}
+        if not self._cycle_lock.acquire(timeout=10):
+            return {"success": False, "message": "The bot is checking the account. Wait briefly and try again."}
+        try:
+            if symbol not in self.risk_manager.open_positions:
+                return {"success": False, "message": "This position is no longer open."}
+            if not self._reconcile_exchange_state():
+                return {
+                    "success": False,
+                    "message": "Account check failed, so the close was not submitted. Review the account status first.",
+                }
+
+            previous_trade_count = len(self.risk_manager.trade_history)
+            decision_key = f"dashboard-manual-close:{int(time.time() * 1000)}"
+            signal = TradeSignal(
+                Signal.SELL, symbol, 1.0,
+                "Manually closed from dashboard", {},
+            )
+            self._handle_sell_signal(signal, decision_key=decision_key)
+
+            if symbol in self.risk_manager.open_positions:
+                return {
+                    "success": False,
+                    "message": self.risk_manager._halt_reason or "The position remains open; check its protective stop and exchange order state.",
+                    "halted": self.risk_manager._is_halted,
+                }
+            if len(self.risk_manager.trade_history) <= previous_trade_count:
+                self.risk_manager.halt("Manual close state could not be verified; operator reconciliation required")
+                return {
+                    "success": False,
+                    "message": "The position state changed, but its close record could not be verified. Review exchange orders before retrying.",
+                    "halted": True,
+                }
+
+            record = self.risk_manager.trade_history[-1]
+            return {
+                "success": True,
+                "accounting_complete": record.accounting_complete,
+                "symbol": record.symbol,
+                "exit_price": record.exit_price,
+                "pnl": record.pnl,
+                "pnl_pct": record.pnl_pct,
+                "message": (
+                    f"Closed {symbol} at market. Net result: ${record.pnl:+,.2f} ({record.pnl_pct:+.2f}%)."
+                    if record.accounting_complete and record.pnl is not None
+                    else f"Closed {symbol}, but final fees or fills need reconciliation. New entries are halted."
+                ),
+            }
+        except Exception as exc:
+            logger.exception("Dashboard manual close failed for %s", symbol)
+            position = self.risk_manager.open_positions.get(symbol)
+            if position and not position.stop_order_id:
+                self._place_and_persist_native_stop(
+                    symbol, f"manual_close_reprotect_{int(time.time() * 1000)}",
+                    fallback_sl=position.stop_loss_price, fallback_amount=position.amount,
+                )
+            self.risk_manager.halt(
+                f"Dashboard close state requires review for {symbol}; check exchange orders before retrying"
+            )
+            return {
+                "success": False,
+                "message": f"Close could not be safely confirmed ({type(exc).__name__}). Check the exchange order before retrying.",
+                "halted": self.risk_manager._is_halted,
+            }
+        finally:
+            self._cycle_lock.release()
+
     def pause_entries(self) -> tuple[bool, str]:
         """Serialize the entry pause against order cycles and durably record it."""
         if not self._cycle_lock.acquire(timeout=30):
