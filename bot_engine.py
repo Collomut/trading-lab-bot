@@ -767,16 +767,23 @@ class TradingBot:
                         baseline_total = Decimal(str(baseline.get(base, "0")))
                         residual = base_total - baseline_total
                         expected_residual = local_amount - filled
+                        baseline_known = base in baseline
                         if (not base_total.is_finite() or not residual.is_finite()
                                 or not expected_residual.is_finite()
-                                or base_total < baseline_total
+                                or (baseline_known and base_total < baseline_total)
                                 or expected_residual < 0
-                                or expected_residual > amount_steps[base] + tolerances[base]):
+                                or expected_residual > amount_steps[base] + tolerances[base]
+                                or (baseline_known and residual > expected_residual + amount_steps[base] + tolerances[base])):
                             raise ValueError(f"filled stop for {symbol} left an unexpected remaining balance")
-                        # Binance quantizes the stop down to the market's amount
-                        # step. After verifying that full order fill, preserve any
-                        # remaining account inventory as baseline before closing;
-                        # this also makes the write sequence safe to retry on restart.
+                        # If this asset was absent from the account baseline, its
+                        # starting inventory is unknown (for example, the pair
+                        # may have been added after initial setup). Preserve the
+                        # exchange's actual remainder, mark this trade's quantity
+                        # accounting incomplete, and require explicit review.
+                        # Otherwise, only accept the sub-step residue explained by
+                        # Binance's amount precision rounding.
+                        if not baseline_known:
+                            self.risk_manager.mark_position_accounting_incomplete(symbol)
                         updated_baseline = dict(baseline)
                         updated_baseline[base] = str(base_total)
                         self.risk_manager.store.write_state("baseline_asset_balances", updated_baseline)
@@ -791,8 +798,10 @@ class TradingBot:
                         self.risk_manager.store.append_event("protective_stop_filled", {
                             "symbol": symbol, "order_id": str(stop.get("id", position.stop_order_id)),
                             "filled": str(filled), "average": str(price),
-                            "remaining": str(residual),
+                            "remaining": str(residual if baseline_known else base_total),
                             "baseline_updated": True,
+                            "baseline_was_missing": not baseline_known,
+                            "unattributed_balance": str(base_total) if not baseline_known else None,
                             "accounting_complete": record.accounting_complete,
                         })
                         self.risk_manager.halt(f"Exchange stop filled for {symbol}; manual review required before resuming")

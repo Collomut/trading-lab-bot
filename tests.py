@@ -2157,6 +2157,67 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(bot.risk_manager.entry_mode(), "ACTIVE")
             self.assertFalse(bot.risk_manager._is_halted)
 
+    def test_filled_stop_with_asset_missing_from_baseline_is_recorded_for_manual_review(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["XRP/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
+            bot.risk_manager.store.write_state("paper_environment", "demo")
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0"})
+            position = bot.risk_manager.open_position(
+                "XRP/USDT", 0.9943, 500.9985, order_id="buy-1",
+                entry_fee_quote=0.49864145, stop_loss_override=0.98,
+                exit_policy="downtrend_rsi_recovery",
+            )
+            position.stop_order_id = "stop-1"
+            position.stop_client_order_id = "stop-client-1"
+            bot.risk_manager._save_positions()
+
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"XRP": "0.6", "USDT": "4487.76"}}, []
+            )
+            bot.exchange.exchange.load_markets.return_value = None
+            bot.exchange.exchange.market.return_value = {"precision": {"amount": 1}}
+            bot.exchange.exchange.precisionMode = 2
+            bot.exchange.exchange.TICK_SIZE = 4
+            bot.exchange.amount_to_precision.side_effect = lambda symbol, amount: (
+                "1.0" if Decimal(str(amount)) == Decimal("1") else "500.9"
+            )
+            bot.exchange.fetch_order.return_value = {
+                "id": "stop-1", "side": "sell", "status": "closed", "amount": "500.9",
+                "filled": "500.9", "average": "0.98",
+                "fees": [{"cost": "0.49", "currency": "USDT"}],
+            }
+            bot._last_reconciliation_ok = False
+            bot._cycle_lock = threading.Lock()
+
+            # XRP was never in the original asset baseline, so the remaining
+            # wallet balance cannot be proven to belong solely to this trade.
+            # Record the confirmed sold amount, preserve the wallet balance,
+            # and keep its accounting explicitly incomplete pending review.
+            self.assertFalse(bot._reconcile_exchange_state())
+            self.assertNotIn("XRP/USDT", bot.risk_manager.open_positions)
+            self.assertEqual(
+                bot.risk_manager.store.read_state("baseline_asset_balances")["XRP"],
+                "0.6",
+            )
+            record = bot.risk_manager.trade_history[-1]
+            self.assertAlmostEqual(record.amount, 500.9)
+            self.assertFalse(record.accounting_complete)
+            self.assertIsNone(record.pnl)
+            self.assertTrue(bot.risk_manager._is_halted)
+            event = next(
+                event for event in bot.risk_manager.store.list_events(10)
+                if event["event_type"] == "protective_stop_filled"
+            )
+            self.assertTrue(event["details"]["baseline_was_missing"])
+            self.assertEqual(event["details"]["unattributed_balance"], "0.6")
+
     def test_terminal_partial_sell_reconciles_and_reprotects_remaining_position(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
