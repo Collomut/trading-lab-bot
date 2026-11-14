@@ -2734,6 +2734,9 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("Gross gains ÷ gross losses", history)
         self.assertIn("Pending reconciliation", history)
         self.assertIn("incomplete fee or partial-fill accounting", history)
+        self.assertIn("profit-factor-note", history)
+        self.assertIn("d.profit_factor==null?'N/A'", history)
+        self.assertIn("function finishLoading()", history)
 
     def test_glossary_definitions_completeness(self):
         glossary = (Path("templates") / "glossary.html").read_text(encoding="utf-8")
