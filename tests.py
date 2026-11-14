@@ -2179,7 +2179,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
 
             bot.exchange = Mock()
             bot.exchange.fetch_account_snapshot.return_value = (
-                {"total": {"XRP": "0.6", "USDT": "4487.76"}}, []
+                {"total": {"XRP": "0", "USDT": "4487.76"}}, []
             )
             bot.exchange.exchange.load_markets.return_value = None
             bot.exchange.exchange.market.return_value = {"precision": {"amount": 1}}
@@ -2196,15 +2196,14 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             bot._last_reconciliation_ok = False
             bot._cycle_lock = threading.Lock()
 
-            # XRP was never in the original asset baseline, so the remaining
-            # wallet balance cannot be proven to belong solely to this trade.
-            # Record the confirmed sold amount, preserve the wallet balance,
-            # and keep its accounting explicitly incomplete pending review.
+            # XRP was never in the original asset baseline. The first snapshot
+            # reports zero, so the confirmed exit is recorded without claiming
+            # complete accounting and a protective-stop review remains pending.
             self.assertFalse(bot._reconcile_exchange_state())
             self.assertNotIn("XRP/USDT", bot.risk_manager.open_positions)
             self.assertEqual(
                 bot.risk_manager.store.read_state("baseline_asset_balances")["XRP"],
-                "0.6",
+                "0",
             )
             record = bot.risk_manager.trade_history[-1]
             self.assertAlmostEqual(record.amount, 500.9)
@@ -2216,7 +2215,35 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 if event["event_type"] == "protective_stop_filled"
             )
             self.assertTrue(event["details"]["baseline_was_missing"])
-            self.assertEqual(event["details"]["unattributed_balance"], "0.6")
+            self.assertEqual(event["details"]["unattributed_balance"], "0")
+
+            # A later wallet snapshot reveals a residual XRP balance. Periodic
+            # reconciliation must not silently accept it; only the explicit
+            # dashboard review action may record the new baseline and resume.
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"XRP": "0.6", "USDT": "4487.76"}}, []
+            )
+            self.assertFalse(bot._reconcile_exchange_state())
+            self.assertEqual(bot.risk_manager._halt_reason, "Exchange stop filled for XRP/USDT; manual review required before resuming")
+            self.assertEqual(
+                bot.risk_manager.store.read_state("baseline_asset_balances")["XRP"],
+                "0",
+            )
+
+            resumed, message = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertTrue(resumed, message)
+            self.assertEqual(
+                bot.risk_manager.store.read_state("baseline_asset_balances")["XRP"],
+                "0.6",
+            )
+            self.assertEqual(bot.risk_manager.entry_mode(), "ACTIVE")
+            self.assertFalse(bot.risk_manager._is_halted)
+            rebase_event = next(
+                event for event in bot.risk_manager.store.list_events(20)
+                if event["event_type"] == "protective_stop_balance_rebased_after_review"
+            )
+            self.assertEqual(rebase_event["details"]["account_balance"], "0.6")
+            self.assertTrue(rebase_event["details"]["operator_review"])
 
     def test_terminal_partial_sell_reconciles_and_reprotects_remaining_position(self):
         with TemporaryDirectory() as persistence_dir:

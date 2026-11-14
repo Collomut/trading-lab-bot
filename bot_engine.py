@@ -639,7 +639,26 @@ class TradingBot:
             logger.critical("Partial sell recovery failed for %s (%s)", symbol, type(exc).__name__)
             return False
 
-    def _reconcile_exchange_state(self) -> bool:
+    def _pending_unbaselined_stop_review(self) -> dict | None:
+        """Return a protective-stop event whose missing asset baseline is unreviewed."""
+        try:
+            events = self.risk_manager.store.list_events(200)
+        except Exception:
+            return None
+        latest_ack_id = max(
+            (int(event.get("id", 0)) for event in events
+             if event.get("event_type") == "protective_stop_review_acknowledged"),
+            default=0,
+        )
+        for event in events:
+            if (event.get("event_type") == "protective_stop_filled"
+                    and int(event.get("id", 0)) > latest_ack_id
+                    and isinstance(event.get("details"), dict)
+                    and event["details"].get("baseline_was_missing") is True):
+                return event
+        return None
+
+    def _reconcile_exchange_state(self, *, allow_manual_review_rebaseline: bool = False) -> bool:
         """Block all order activity until authenticated account state matches local state."""
         try:
             balance, open_orders = self.exchange.fetch_account_snapshot()
@@ -813,7 +832,33 @@ class TradingBot:
                 local = Decimal(str(self.risk_manager.open_positions[symbol].amount if symbol in self.risk_manager.open_positions else 0))
                 expected = Decimal(str(baseline.get(base, "0"))) + local
                 if abs(reported - expected) > tolerances[base]:
-                    raise ValueError(f"balance mismatch for configured asset {base}")
+                    pending_stop = self._pending_unbaselined_stop_review()
+                    pending_details = pending_stop.get("details", {}) if pending_stop else {}
+                    pending_symbol = str(pending_details.get("symbol", ""))
+                    may_rebaseline = (
+                        allow_manual_review_rebaseline
+                        and pending_stop is not None
+                        and pending_symbol == symbol
+                        and not self.risk_manager.open_positions
+                        and not self.risk_manager.store.unresolved_orders()
+                        and not open_orders
+                        and reported.is_finite()
+                        and reported >= 0
+                    )
+                    if not may_rebaseline:
+                        raise ValueError(f"balance mismatch for configured asset {base}")
+                    previous = str(baseline.get(base, "0"))
+                    baseline = dict(baseline)
+                    baseline[base] = str(reported)
+                    self.risk_manager.store.write_state("baseline_asset_balances", baseline)
+                    self.risk_manager.store.append_event("protective_stop_balance_rebased_after_review", {
+                        "symbol": symbol,
+                        "previous_baseline": previous,
+                        "account_balance": str(reported),
+                        "difference": str(reported - Decimal(previous)),
+                        "stop_order_id": str(pending_details.get("order_id", "")),
+                        "operator_review": True,
+                    })
             if self.risk_manager.store.unresolved_orders():
                 raise ValueError("unresolved local order intent exists")
             self._last_account_balance = balance
@@ -1835,9 +1880,16 @@ class TradingBot:
                 "Consecutive loss limit reached",
                 "Consecutive loss limit persists",
             ))
+            pending_unbaselined_stop = self._pending_unbaselined_stop_review()
+            if self.risk_manager._is_halted and pending_unbaselined_stop:
+                reviewable_halt = True
             if self.risk_manager.entry_mode() != "EXIT_ONLY" and not reviewable_halt:
                 return False, "New entries are not paused."
-            if not self._reconcile_exchange_state():
+            if acknowledge_manual_halt and reviewable_halt and (
+                    self.risk_manager.open_positions or self.risk_manager.store.unresolved_orders()):
+                return False, "Manual recovery is blocked while positions or unresolved orders remain. Inspect the configured Demo account."
+            if not self._reconcile_exchange_state(
+                    allow_manual_review_rebaseline=bool(acknowledge_manual_halt and reviewable_halt)):
                 reason = self._last_account_error or self.risk_manager._halt_reason
                 return False, f"Cannot resume: account reconciliation failed. {reason}"
             if self.risk_manager._is_halted:

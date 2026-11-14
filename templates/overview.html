@@ -1098,7 +1098,7 @@ setInterval(loadChart, 30000);
 $('entry-control').addEventListener('click', async () => {
   const paused = $('entry-control').dataset.intent === 'resume';
   const manualReview = paused && $('entry-control').dataset.manualReview === '1';
-  if (manualReview && !confirm('Confirm you reviewed the configured paper account and verified there are no open bot positions or unresolved orders. The bot will reconcile again. A consecutive-loss review resets only that streak; daily and drawdown limits remain active.')) return;
+  if (manualReview && !confirm('Confirm you reviewed the configured Demo account, checked any unmatched asset balances, and verified there are no open bot positions or unresolved orders. If a traded asset was missing from the saved starting balance, the current account balance will be recorded as the new baseline. This will not place an order. A consecutive-loss review resets only that streak; daily and drawdown limits remain active.')) return;
   if (paused && !manualReview && !confirm('Reconcile the configured paper account and resume new entries? Resume will be blocked if the account or any safety check is unhealthy.')) return;
   if (!paused && !confirm('Pause all new entries? Existing positions will still be monitored.')) return;
   $('entry-control').disabled = true;

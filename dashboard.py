@@ -766,8 +766,8 @@ class WebDashboard:
                 "mode": str(details.get("mode", ""))[:24],
                 "source": str(details.get("source", ""))[:40],
             }
-        if event_type in {"protective_stop_placed", "protective_stop_filled", "protective_stop_cancelled", "partial_entry_fill", "partial_exit_reconciled"}:
-            allowed = ("symbol", "amount", "filled", "remaining", "stop_price", "average", "dust_amount", "baseline_updated", "baseline_was_missing", "unattributed_balance", "accounting_complete")
+        if event_type in {"protective_stop_placed", "protective_stop_filled", "protective_stop_cancelled", "partial_entry_fill", "partial_exit_reconciled", "protective_stop_balance_rebased_after_review"}:
+            allowed = ("symbol", "amount", "filled", "remaining", "stop_price", "average", "dust_amount", "baseline_updated", "baseline_was_missing", "unattributed_balance", "accounting_complete", "previous_baseline", "account_balance", "difference", "operator_review")
             return {key: str(details[key])[:80] for key in allowed if details.get(key) is not None}
         if event_type == "protective_stop_review_acknowledged":
             return {"message": "Protective-stop review acknowledged after account reconciliation."}
