@@ -39,6 +39,8 @@ REGIME_ROUTE_POLICY = {
         "entry_enabled": True,
     },
     "range": {
+        # range_rsi_mean_reversion was researched (research/backtest_range_rsi_mean_reversion.py)
+        # and replayed net-negative; no entry candidate is selected in range.
         "strategy": None,
         "state": "no_validated_candidate",
         "entry_enabled": False,
@@ -229,7 +231,11 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str, *, enable_downtren
     elif regime == "uptrend":
         result["reason"] = "The uptrend candidate is not enabled; no strategy change is made in shadow mode."
     elif regime == "range":
-        result["reason"] = "No range candidate passed cost-adjusted research; no entry strategy is selected."
+        result["reason"] = (
+            "No range candidate passed cost-adjusted research: the range RSI "
+            "mean-reversion candidate replayed net-negative (PF < 1 on the 8-coin "
+            "universe and in the 2026 review). No entry strategy is selected."
+        )
     elif regime == "downtrend":
         if not dynamic_mode:
             result["reason"] = "The downtrend RSI recovery route is restricted to the dynamic Binance Testnet profile."

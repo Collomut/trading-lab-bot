@@ -45,6 +45,23 @@ rules (stable three-bar downtrend, RSI14 cross above 40, EMA20/RSI70 exits,
 Profit factor is below 1 in every historical slice at base and stress costs.
 The single 8-pair base breakeven reading is not reproducible under stress.
 
+### 3. A range-regime RSI mean-reversion candidate also fails (new research)
+
+`research/backtest_range_rsi_mean_reversion.py` replays a pre-registered range
+candidate (stable 3-bar range = ADX14≤18 and ATR14≤3%; RSI14 cross up through 30;
+exits on RSI14≥50 or close>EMA20; 4%-capped swing stop; 2×ATR target; 0.50× risk):
+
+| Period | 3-symbol PF (base/stress) | 8-symbol PF (base/stress) |
+|---|---:|---:|
+| 2021–2023 | 1.862 / 1.209 | 0.447 / 0.332 |
+| 2024–2025 | 2.447 / 1.338 | 1.317 / 0.863 |
+| 2026 Jan–Oct | 0.000 / 0.000 | 0.923 / 0.612 |
+
+It is positive only on the small three-symbol universe in train/validation,
+net-negative on the broader eight-symbol universe, and zero-for-two in the 2026
+review — with only 2–22 trades per split, so the positive readings are not
+statistically meaningful. It does not clear the cost-adjusted screen.
+
 ## Issues found and fixed
 
 ### P0 — the unvalidated downtrend route placed orders and could halt the good route
@@ -82,7 +99,8 @@ only permits strategy evaluation.
 ## Conclusion
 
 Market-condition gating with these rules does not add value: it is net-negative
-on the larger splits, and its downtrend constituent has no edge. The router is
-kept as a transparent, order-free diagnostic; entries flow only through the
-candidate with the best cost-adjusted evidence (`macro_donchian_ema72`), and the
-proven-negative downtrend route is gated off by default.
+on the larger splits, and its downtrend constituent has no edge. A new
+range-regime RSI mean-reversion candidate was researched and also failed. The
+router is kept as a transparent, order-free diagnostic; entries flow only through
+the candidate with the best cost-adjusted evidence (`macro_donchian_ema72`), and
+the proven-negative downtrend route is gated off by default.

@@ -6,6 +6,8 @@ This folder contains the reproducible strategy comparison used to decide whether
 
 `backtest_downtrend_rsi_recovery.py` compares the recovery candidate on the three-pair and eight-pair universes. `backtest_rsi_recovery_thresholds.py` screens RSI recovery levels 30, 35, 40, 45, and 50 with the same costs and risk rules; the results are in `results/rsi_recovery_thresholds.json`. The eight-pair universe created more historical opportunities in some periods, but did not produce a robust profitable result. The broader list is enabled on Binance Testnet only to gather prospective observations under the same strict risk controls.
 
+`backtest_range_rsi_mean_reversion.py` (2026-11-15) replays a pre-registered range-regime RSI mean-reversion candidate for the previously empty "range" regime (stable ADX≤18/ATR≤3% range, RSI14 cross up through 30, RSI≥50/EMA20 exits, 0.50× risk). It replayed net-negative on the eight-coin universe and in the 2026 review, so `range` still routes to no entry; results are in `results/range_rsi_mean_reversion_results.json`.
+
 ## Reproduction
 
 1. Use Python with the application's pinned requirements installed.
