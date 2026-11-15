@@ -269,15 +269,40 @@ class TestShadowRegimeRouter(unittest.TestCase):
                            "low": [v * 0.998 for v in close]}, index=idx)
         strategy = DowntrendRsiRecoveryTestnetStrategy()
         with patch("strategies.RSIIndicator") as rsi_mock:
-            rsi_mock.return_value.rsi.return_value = pd.Series([38.0] * 2498 + [39.0, 42.0])
+            rsi_mock.return_value.rsi.return_value = pd.Series([38.0] * 2498 + [24.0, 26.0])
             signal = strategy.analyze(df, "BTC/USDT")
         self.assertEqual(signal.signal, Signal.BUY)
         self.assertEqual(signal.indicators["risk_multiplier"], 0.20)
         self.assertEqual(signal.indicators["strategy"], "downtrend_rsi_recovery_testnet")
+        self.assertEqual(signal.indicators["rsi_recovery_level"], 25.0)
         with patch("strategies.RSIIndicator") as rsi_mock:
             rsi_mock.return_value.rsi.return_value = pd.Series([38.0] * 2499 + [71.0])
             signal = strategy.analyze(df, "BTC/USDT", in_position=True)
         self.assertEqual(signal.signal, Signal.SELL)
+
+    def test_downtrend_recovery_honors_configured_rsi_level(self):
+        close = [100.0 * (0.999 ** i) for i in range(2500)]
+        idx = pd.date_range("2020-01-01", periods=2500, freq="h")
+        df = pd.DataFrame({"close": close, "high": [v * 1.002 for v in close],
+                           "low": [v * 0.998 for v in close]}, index=idx)
+        strategy = DowntrendRsiRecoveryTestnetStrategy(rsi_recovery_level=40.0)
+        # A cross above 25 must NOT trigger when the level is 40.
+        with patch("strategies.RSIIndicator") as rsi_mock:
+            rsi_mock.return_value.rsi.return_value = pd.Series([38.0] * 2498 + [24.0, 26.0])
+            signal = strategy.analyze(df, "BTC/USDT")
+        self.assertEqual(signal.signal, Signal.HOLD)
+        self.assertEqual(signal.indicators["rsi_recovery_level"], 40.0)
+        # A cross above 40 does trigger.
+        with patch("strategies.RSIIndicator") as rsi_mock:
+            rsi_mock.return_value.rsi.return_value = pd.Series([38.0] * 2498 + [39.0, 42.0])
+            signal = strategy.analyze(df, "BTC/USDT")
+        self.assertEqual(signal.signal, Signal.BUY)
+
+    def test_downtrend_recovery_rejects_invalid_rsi_level(self):
+        with self.assertRaises(ValueError):
+            DowntrendRsiRecoveryTestnetStrategy(rsi_recovery_level=9.0)
+        with self.assertRaises(ValueError):
+            DowntrendRsiRecoveryTestnetStrategy(rsi_recovery_level=46.0)
 
 
 # ==============================================================================
@@ -299,11 +324,20 @@ class TestConfigurationAndValidation(unittest.TestCase):
         self.assertEqual(strategy.name, "macro_donchian_ema72")
         self.assertEqual(strategy.timeframe, "1h")
         self.assertEqual(strategy.lookback_candles, 2500)
-        self.assertEqual(strategy.trading_pairs, [
-            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
-            "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT",
-        ])
+        self.assertEqual(strategy.trading_pairs, ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
         self.assertEqual(strategy.min_trend_adx, 20.0)
+        self.assertEqual(strategy.ema72_take_profit_atr_multiple, 100.0)
+
+    def test_ema72_take_profit_atr_multiple_is_validated(self):
+        cfg = BotConfig()
+        cfg.dashboard_token = "test_secret_token"
+        self.assertEqual(cfg.strategy.ema72_take_profit_atr_multiple, 100.0)
+        self.assertEqual([e for e in cfg.validate() if "EMA72_TAKE_PROFIT_ATR_MULTIPLE" in e], [])
+        for bad in (0.0, -1.0, 101.0, math.nan, float("inf")):
+            cfg.strategy.ema72_take_profit_atr_multiple = bad
+            self.assertTrue(
+                any("EMA72_TAKE_PROFIT_ATR_MULTIPLE must be a finite value greater than 0 and no more than 100" in e
+                    for e in cfg.validate()))
 
     def test_downtrend_recovery_flag_is_off_by_default_and_requires_dynamic_regime(self):
         self.assertFalse(StrategyConfig().enable_downtrend_recovery_testnet)
@@ -324,6 +358,34 @@ class TestConfigurationAndValidation(unittest.TestCase):
         self.assertEqual(
             [e for e in cfg2.validate() if "ENABLE_DOWNTEND_RECOVERY_TESTNET" in e], []
         )
+        self.assertEqual(cfg2.strategy.downtrend_rsi_recovery_level, 25.0)
+
+    def test_downtrend_rsi_recovery_level_is_validated(self):
+        cfg = BotConfig()
+        cfg.dashboard_token = "test_secret_token"
+        self.assertEqual(cfg.strategy.downtrend_rsi_recovery_level, 25.0)
+        self.assertEqual(
+            [e for e in cfg.validate() if "DOWNTREND_RSI_RECOVERY_LEVEL" in e], [])
+        for bad in (9.0, 46.0, math.nan, float("inf")):
+            cfg.strategy.downtrend_rsi_recovery_level = bad
+            self.assertTrue(
+                any("DOWNTREND_RSI_RECOVERY_LEVEL must be a finite value between 10 and 45" in e
+                    for e in cfg.validate()))
+
+    def test_consecutive_loss_cap_allows_researched_budget_for_managed_profiles(self):
+        cfg = BotConfig()
+        cfg.dashboard_token = "test_secret_token"
+        cfg.strategy.name = "dynamic_regime"
+        self.assertEqual(cfg.risk.max_consecutive_losses, 3)
+        self.assertEqual([e for e in cfg.validate() if "MAX_CONSECUTIVE_LOSSES" in e], [])
+        # Research (halt-cap sweep) showed the EMA72 route is positive at a 4-loss
+        # budget in validation, so 4-5 is allowed; the default stays 3.
+        cfg.risk.max_consecutive_losses = 4
+        self.assertEqual([e for e in cfg.validate() if "MAX_CONSECUTIVE_LOSSES" in e], [])
+        cfg.risk.max_consecutive_losses = 5
+        self.assertEqual([e for e in cfg.validate() if "MAX_CONSECUTIVE_LOSSES" in e], [])
+        cfg.risk.max_consecutive_losses = 6
+        self.assertTrue(any("must be between 1 and 5" in e for e in cfg.validate()))
 
     def test_ema72_volatility_band_default_and_bounds(self):
         self.assertEqual(StrategyConfig().ema72_max_atr_pct, 2.5)
@@ -1039,6 +1101,75 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             rm.close_position("ETH/USDT", 99.0, "test loss")
             self.assertTrue(rm._is_halted)
             self.assertEqual(rm._consecutive_losses, 2)
+
+    def test_downtrend_losses_do_not_halt_the_uptrend_route(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(max_consecutive_losses=3), persistence_dir=persistence_dir)
+            for _ in range(3):
+                rm.open_position("ADA/USDT", 100.0, 1.0, exit_policy="downtrend_rsi_recovery")
+                rm.close_position("ADA/USDT", 90.0, "stop loss")
+            # The portfolio is NOT halted; only the downtrend route is paused.
+            self.assertFalse(rm._is_halted)
+            self.assertIn("downtrend", rm.route_halts())
+            can_downtrend, reason = rm.can_open_position("ADA/USDT", 10000.0, route="downtrend")
+            self.assertFalse(can_downtrend)
+            self.assertIn("downtrend route entries paused", reason)
+            # The uptrend route is untouched and can still enter.
+            can_uptrend, _ = rm.can_open_position("BTC/USDT", 10000.0, route="uptrend")
+            self.assertTrue(can_uptrend)
+
+    def test_uptrend_route_has_its_own_loss_budget(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(max_consecutive_losses=3), persistence_dir=persistence_dir)
+            for _ in range(3):
+                rm.open_position("BTC/USDT", 100.0, 1.0, exit_policy="ema72_signal")
+                rm.close_position("BTC/USDT", 90.0, "stop loss")
+            self.assertFalse(rm._is_halted)
+            self.assertIn("uptrend", rm.route_halts())
+            self.assertFalse(rm.can_open_position("BTC/USDT", 10000.0, route="uptrend")[0])
+            self.assertTrue(rm.can_open_position("ADA/USDT", 10000.0, route="downtrend")[0])
+
+    def test_route_win_resets_that_routes_streak(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(max_consecutive_losses=3), persistence_dir=persistence_dir)
+            rm.open_position("ADA/USDT", 100.0, 1.0, exit_policy="downtrend_rsi_recovery")
+            rm.close_position("ADA/USDT", 90.0, "loss")
+            rm.open_position("ADA/USDT", 100.0, 1.0, exit_policy="downtrend_rsi_recovery")
+            rm.close_position("ADA/USDT", 90.0, "loss")
+            self.assertEqual(rm._route_losses.get("downtrend"), 2)
+            rm.open_position("ADA/USDT", 100.0, 1.0, exit_policy="downtrend_rsi_recovery")
+            rm.close_position("ADA/USDT", 110.0, "win")
+            self.assertEqual(rm._route_losses.get("downtrend"), 0)
+            self.assertEqual(rm.route_halts(), {})
+            self.assertFalse(rm._is_halted)
+
+    def test_route_halts_persist_across_restart(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(max_consecutive_losses=2), persistence_dir=persistence_dir)
+            for _ in range(2):
+                first.open_position("ADA/USDT", 100.0, 1.0, exit_policy="downtrend_rsi_recovery")
+                first.close_position("ADA/USDT", 90.0, "loss")
+            self.assertIn("downtrend", first.route_halts())
+
+            restored = RiskManager(RiskConfig(max_consecutive_losses=2), persistence_dir=persistence_dir)
+            self.assertFalse(restored._is_halted)
+            self.assertIn("downtrend", restored.route_halts())
+            self.assertFalse(restored.can_open_position("ADA/USDT", 10000.0, route="downtrend")[0])
+            self.assertTrue(restored.can_open_position("BTC/USDT", 10000.0, route="uptrend")[0])
+
+    def test_clear_route_halts_resets_streak(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(max_consecutive_losses=3), persistence_dir=persistence_dir)
+            for _ in range(3):
+                rm.open_position("ADA/USDT", 100.0, 1.0, exit_policy="downtrend_rsi_recovery")
+                rm.close_position("ADA/USDT", 90.0, "loss")
+            self.assertIn("downtrend", rm.route_halts())
+            self.assertTrue(rm.clear_route_halts())
+            self.assertEqual(rm.route_halts(), {})
+            self.assertEqual(rm._route_losses.get("downtrend"), 0)
+            self.assertTrue(rm.can_open_position("ADA/USDT", 10000.0, route="downtrend")[0])
+            # Clearing with no active route halt is a no-op returning False.
+            self.assertFalse(rm.clear_route_halts())
 
     def test_rolling_equity_drawdown_halts_entries(self):
         with TemporaryDirectory() as persistence_dir:
@@ -2286,6 +2417,64 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertTrue(bot._reconcile_exchange_state())
             self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"BTC": "1.25"})
 
+    def test_reconciliation_auto_records_untradable_dust_balance(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="testnet"),
+                strategy=SimpleNamespace(trading_pairs=["XRP/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"XRP": "0"})
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"XRP": "0.0985", "USDT": "10000"}}, [])
+            bot.exchange.exchange.load_markets.return_value = None
+            bot.exchange.exchange.market.return_value = {"precision": {"amount": 8}}
+            bot.exchange.exchange.precisionMode = 2
+            bot.exchange.get_market_limits.return_value = {"min_cost": 10}
+            bot.exchange.get_current_price.return_value = 0.95
+            bot._last_reconciliation_ok = False
+
+            self.assertTrue(bot._reconcile_exchange_state())
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"XRP": "0.0985"})
+            events = bot.risk_manager.store.list_events(10)
+            self.assertTrue(any(event["event_type"] == "dust_balance_rebased" for event in events))
+
+    def test_reconciliation_does_not_auto_record_tradeable_balance(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="testnet"),
+                strategy=SimpleNamespace(trading_pairs=["XRP/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"XRP": "0"})
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"XRP": "0.0985", "USDT": "10000"}}, [])
+            bot.exchange.exchange.load_markets.return_value = None
+            bot.exchange.exchange.market.return_value = {"precision": {"amount": 8}}
+            bot.exchange.exchange.precisionMode = 2
+            bot.exchange.get_market_limits.return_value = {"min_cost": 10}
+            bot.exchange.get_current_price.return_value = 500.0  # 0.0985 * 500 = 49.25, tradeable
+            bot._last_reconciliation_ok = False
+
+            self.assertFalse(bot._reconcile_exchange_state())
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"XRP": "0"})
+
+    def test_below_minimum_notional_uses_exchange_limits(self):
+        bot = object.__new__(TradingBot)
+        bot.exchange = Mock()
+        bot.exchange.get_market_limits.return_value = {"min_cost": 10}
+        bot.exchange.get_current_price.return_value = 0.95
+        self.assertTrue(bot._below_minimum_notional("XRP/USDT", Decimal("0.0985")))
+        bot.exchange.get_current_price.return_value = 500.0
+        self.assertFalse(bot._below_minimum_notional("XRP/USDT", Decimal("0.0985")))
+        bot.exchange.get_market_limits.return_value = {}
+        self.assertFalse(bot._below_minimum_notional("XRP/USDT", Decimal("0.0985")))
+        bot.exchange.get_market_limits.return_value = {"min_cost": 10}
+        bot.exchange.get_current_price.return_value = None
+        self.assertFalse(bot._below_minimum_notional("XRP/USDT", Decimal("0.0985")))
+
     def test_paper_environment_switch_rebaselines_and_pauses_entries(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
@@ -3347,6 +3536,16 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
         self.assertEqual(summary["buy_setups_blocked"], 1)
         self.assertEqual(summary["blocked_by_gate"], {"trend": 1})
         self.assertEqual(summary["analysis_issues"], 1)
+        self.assertFalse(summary["capped"])
+
+    def test_market_activity_summary_reports_when_window_is_capped(self):
+        now = datetime(2026, 11, 11, 12, tzinfo=timezone.utc)
+        market_events = [{"created_at": "2026-11-11T11:00:00Z", "details": {"signal": "HOLD"}}] * 5
+        capped = WebDashboard._summarize_market_activity(market_events, [], now=now, cap=5)
+        self.assertTrue(capped["capped"])
+        self.assertEqual(capped["checks"], 5)
+        uncapped = WebDashboard._summarize_market_activity(market_events, [], now=now, cap=100)
+        self.assertFalse(uncapped["capped"])
 
     def test_asset_serving_and_cache_control(self):
         req_css = make_mocked_request("GET", "/assets/app.css", match_info={"name": "app.css"})
