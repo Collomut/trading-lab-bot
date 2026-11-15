@@ -2371,6 +2371,57 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(record.fee, 3.0)
             self.assertEqual(record.pnl, 7.0)
 
+    def test_trade_ledger_reports_reconciled_tax_lot_shape(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.open_position("BTC/USDT", 100.0, 1.0, entry_fee_quote=1.0)
+            rm.close_position("BTC/USDT", 110.0, "test", fee_cost=2.0)
+            ledger = rm.trade_ledger()
+            self.assertEqual(len(ledger), 1)
+            row = ledger[0]
+            self.assertEqual(row["symbol"], "BTC/USDT")
+            self.assertEqual(row["entry_price"], 100.0)
+            self.assertEqual(row["exit_price"], 110.0)
+            self.assertEqual(row["amount"], 1.0)
+            self.assertEqual(row["proceeds"], 110.0)
+            self.assertEqual(row["cost_basis"], 100.0)
+            self.assertEqual(row["gross_pnl"], 10.0)
+            self.assertEqual(row["fee"], 3.0)
+            self.assertEqual(row["net_pnl"], 7.0)
+            self.assertTrue(row["accounting_complete"])
+
+    def test_trade_ledger_csv_has_header_and_row(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.open_position("BTC/USDT", 100.0, 1.0, entry_fee_quote=1.0)
+            rm.close_position("BTC/USDT", 110.0, "test", fee_cost=2.0)
+            csv_text = rm.trade_ledger_csv()
+            lines = csv_text.strip().splitlines()
+            self.assertGreaterEqual(len(lines), 2)
+            self.assertIn("net_pnl", lines[0])
+            self.assertIn("BTC/USDT", csv_text)
+
+    def test_trade_ledger_csv_emits_header_when_empty(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            csv_text = rm.trade_ledger_csv()
+            self.assertTrue(csv_text.strip().startswith("symbol,side,strategy"))
+
+    def test_performance_summary_includes_total_fees(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.open_position("BTC/USDT", 100.0, 1.0, entry_fee_quote=1.0)
+            rm.close_position("BTC/USDT", 110.0, "test", fee_cost=2.0)
+            summary = rm.get_performance_summary()
+            self.assertEqual(summary["total_fees"], 3.0)
+            self.assertEqual(summary["total_pnl"], 7.0)
+
+    def test_performance_summary_empty_reports_zero_fees(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            summary = rm.get_performance_summary()
+            self.assertEqual(summary["total_fees"], 0.0)
+
     def test_corrupt_position_state_halts_new_entries(self):
         with TemporaryDirectory() as persistence_dir:
             state_path = Path(persistence_dir) / "open_positions.json"
@@ -3506,6 +3557,30 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
                 headers={"Host": "localhost:8080", "Origin": "http://attacker.com"}
             )
             self.assertFalse(self.dashboard._is_valid_origin(req_evil))
+
+    def test_trades_summary_and_export_endpoints(self):
+        with TemporaryDirectory() as persistence_dir:
+            tmp = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            tmp.open_position("BTC/USDT", 100.0, 1.0, entry_fee_quote=1.0)
+            record = tmp.close_position("BTC/USDT", 110.0, "test", fee_cost=2.0)
+            # Seed the dashboard bot's in-memory history only (no file writes).
+            self.dashboard.bot.risk_manager.trade_history = [record]
+
+            req = make_mocked_request("GET", "/api/trades/summary")
+            resp = self.loop.run_until_complete(self.dashboard.handle_trades_summary(req))
+            self.assertEqual(resp.status, 200)
+            body = json.loads(resp.text)
+            self.assertEqual(body["summary"]["total_fees"], 3.0)
+            self.assertEqual(body["summary"]["total_pnl"], 7.0)
+            self.assertEqual(body["by_symbol"]["BTC/USDT"]["net_pnl"], 7.0)
+            self.assertEqual(body["by_symbol"]["BTC/USDT"]["fees"], 3.0)
+
+            req_csv = make_mocked_request("GET", "/api/trades/export.csv")
+            resp_csv = self.loop.run_until_complete(self.dashboard.handle_trades_export(req_csv))
+            self.assertEqual(resp_csv.status, 200)
+            self.assertIn("text/csv", resp_csv.headers["Content-Type"])
+            self.assertIn("BTC/USDT", resp_csv.text)
+            self.assertIn("net_pnl", resp_csv.text)
 
     def test_liveness_and_readiness_probes(self):
         req_live = make_mocked_request("GET", "/api/health/liveness")

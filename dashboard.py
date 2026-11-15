@@ -216,6 +216,8 @@ class WebDashboard:
         self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
         self.app.router.add_post('/api/test-notification', self.handle_test_notification)
         self.app.router.add_get('/api/account-diagnostic', self.handle_account_diagnostic)
+        self.app.router.add_get('/api/trades/summary', self.handle_trades_summary)
+        self.app.router.add_get('/api/trades/export.csv', self.handle_trades_export)
 
     async def handle_terms(self, request):
         """Serve the terms and glossary page."""
@@ -574,6 +576,7 @@ class WebDashboard:
         incomplete_sell_events = [t for t in sell_events if not is_reconciled_trade(t)]
         completed_sells = [t for t in sell_events if t not in incomplete_sell_events]
         realized_pnl = sum(float(t.get("pnl", 0.0)) for t in completed_sells)
+        total_fees = sum(float(t.get("fee") or 0.0) for t in completed_sells)
         total_gain_loss = (
             None if total_net_worth is None or incomplete_sell_events
             else realized_pnl + unrealized_total
@@ -613,6 +616,7 @@ class WebDashboard:
             "total_gain_loss": round(total_gain_loss, 2) if total_gain_loss is not None else None,
             "total_gain_loss_pct": round(gain_loss_pct, 2) if gain_loss_pct is not None else None,
             "realized_pnl": round(realized_pnl, 2),
+            "total_fees": round(total_fees, 2),
             "unrealized_pnl": round(unrealized_total, 2) if not has_unrealized_error else None,
             "daily_pnl": round(risk._daily_loss, 2),
             "accuracy_pct": round(accuracy_pct, 1),
@@ -1146,6 +1150,64 @@ class WebDashboard:
         loop = asyncio.get_event_loop()
         diag = await loop.run_in_executor(None, self.bot.exchange.diagnose_account_access)
         return web.json_response(diag)
+
+    async def handle_trades_summary(self, request):
+        """Realized PnL, total fees, and per-symbol/strategy breakdowns."""
+        try:
+            risk = self.bot.risk_manager
+            summary = risk.get_performance_summary()
+            by_symbol: dict[str, dict] = {}
+            by_strategy: dict[str, dict] = {}
+            for row in risk.trade_ledger():
+                net_pnl = row.get("net_pnl")
+                if not row.get("accounting_complete") or net_pnl is None:
+                    continue
+                fee = float(row.get("fee") or 0.0)
+                for bucket, key in (
+                    (by_symbol, row.get("symbol") or "?"),
+                    (by_strategy, row.get("strategy") or "?"),
+                ):
+                    entry = bucket.setdefault(key, {"trades": 0, "net_pnl": 0.0, "fees": 0.0})
+                    entry["trades"] += 1
+                    entry["net_pnl"] += float(net_pnl)
+                    entry["fees"] += fee
+
+            def _round(bucket):
+                return {
+                    key: {
+                        "trades": value["trades"],
+                        "net_pnl": round(value["net_pnl"], 2),
+                        "fees": round(value["fees"], 2),
+                    }
+                    for key, value in bucket.items()
+                }
+
+            return web.json_response({
+                "summary": summary,
+                "by_symbol": _round(by_symbol),
+                "by_strategy": _round(by_strategy),
+            })
+        except Exception:
+            logger.exception("Trade summary request failed")
+            return web.json_response({"error": "Trade summary is temporarily unavailable."}, status=500)
+
+    async def handle_trades_export(self, request):
+        """Download the reconciled closed-trade ledger as CSV."""
+        try:
+            csv_text = self.bot.risk_manager.trade_ledger_csv()
+        except Exception:
+            logger.exception("Trade export failed")
+            return web.json_response({"error": "Trade export is temporarily unavailable."}, status=500)
+        filename = f"trades-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.csv"
+        return web.Response(
+            text=csv_text,
+            content_type="text/csv",
+            charset="utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     def run(self):
         print(f"\n🚀 Trading Bot Web Dashboard launching on port {self.port}...")

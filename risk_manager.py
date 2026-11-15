@@ -9,6 +9,8 @@ Upgraded features:
   - Strict daily drawdown circuit breakers.
 """
 
+import csv
+import io
 import json
 import logging
 import os
@@ -1114,6 +1116,7 @@ class RiskManager:
                 "open_positions": len(self.open_positions),
                 "daily_pnl": round(self._daily_loss, 2),
                 "is_halted": self._is_halted,
+                "total_fees": 0.0,
                 "profit_factor": None,
             }
 
@@ -1135,6 +1138,7 @@ class RiskManager:
             "losers": len(losers),
             "win_rate": round(win_rate, 1),
             "total_pnl": round(total_pnl, 2),
+            "total_fees": round(sum(t.fee for t in completed_trades if t.fee is not None), 2),
             "avg_win": round(avg_win, 2),
             "avg_loss": round(avg_loss, 2),
             "gross_profit": round(gross_profit, 2),
@@ -1146,6 +1150,64 @@ class RiskManager:
             "daily_pnl": round(self._daily_loss, 2),
             "is_halted": self._is_halted,
         }
+
+    def trade_ledger(self) -> list[dict]:
+        """Normalize closed trades into an auditable, export-ready ledger.
+
+        Each row reports the reconciled figures already captured on the
+        :class:`TradeRecord`. Proceeds, cost basis, and gross PnL are derived
+        from the stored entry/exit prices and amount so a reviewer can see the
+        full tax-lot shape. Entry and exit fees are combined in ``fee`` (the
+        reconciled total), matching how they are captured at close; incomplete
+        closes are included with ``None`` figures rather than silently dropped
+        or misrepresented as zero-cost.
+        """
+        rows: list[dict] = []
+        for trade in self.trade_history:
+            try:
+                entry = float(trade.entry_price)
+                exit_price = float(trade.exit_price)
+                amount = float(trade.amount)
+            except (TypeError, ValueError):
+                continue
+            rows.append({
+                "symbol": trade.symbol,
+                "side": trade.side,
+                "strategy": trade.strategy,
+                "route": trade.route,
+                "regime": trade.regime,
+                "entry_time": trade.entry_time,
+                "exit_time": trade.exit_time,
+                "entry_price": entry,
+                "exit_price": exit_price,
+                "amount": amount,
+                "proceeds": round(exit_price * amount, 8),
+                "cost_basis": round(entry * amount, 8),
+                "gross_pnl": round((exit_price - entry) * amount, 8),
+                "fee": trade.fee,
+                "net_pnl": trade.pnl,
+                "pnl_pct": trade.pnl_pct,
+                "r_multiple": trade.r_multiple,
+                "order_id": trade.order_id,
+                "accounting_complete": trade.accounting_complete,
+                "simulated": trade.simulated,
+            })
+        return rows
+
+    def trade_ledger_csv(self) -> str:
+        """Serialize the trade ledger to CSV (header row plus one row per trade)."""
+        columns = [
+            "symbol", "side", "strategy", "route", "regime",
+            "entry_time", "exit_time", "entry_price", "exit_price", "amount",
+            "proceeds", "cost_basis", "gross_pnl", "fee", "net_pnl", "pnl_pct",
+            "r_multiple", "order_id", "accounting_complete", "simulated",
+        ]
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=columns)
+        writer.writeheader()
+        for row in self.trade_ledger():
+            writer.writerow({column: row.get(column, "") for column in columns})
+        return buffer.getvalue()
 
     def display_performance(self):
         """Print a formatted performance summary."""
