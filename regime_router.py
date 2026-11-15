@@ -2,9 +2,11 @@
 
 This module is deliberately unable to place orders. Regime labels are a
 diagnostic hypothesis, not evidence that a strategy has an edge. Dynamic
-routing selects EMA72/Donchian in a stable uptrend and a low-risk experimental
-RSI recovery candidate in a stable downtrend. The latter is restricted to the
-Binance paper-trading profile and has not passed the cost-adjusted screen.
+routing selects EMA72/Donchian in a stable uptrend and, as an explicit opt-in,
+a low-risk experimental RSI recovery candidate in a stable downtrend. The
+downtrend route is entry-disabled by default because its independent replay
+was net-negative (profit factor < 1) in every historical slice; see
+research/REGIME_ROUTER_REVIEW.md and docs/audits/REGIME_ROUTER_AUDIT.md.
 Range, high-volatility, transition, and invalid-data states route to no entry.
 """
 from __future__ import annotations
@@ -43,8 +45,8 @@ REGIME_ROUTE_POLICY = {
     },
     "downtrend": {
         "strategy": DOWN_TREND_TESTNET_CANDIDATE,
-        "state": "experimental_testnet_candidate",
-        "entry_enabled": True,
+        "state": "experimental_testnet_candidate_disabled",
+        "entry_enabled": False,
     },
     "high_volatility": {
         "strategy": None,
@@ -144,13 +146,16 @@ def _classify_closed_bar(close, index: int, adx, atr, ema200) -> tuple[str, dict
     }
 
 
-def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
+def evaluate_regime_router(ohlcv: list, active_strategy: str, *, enable_downtrend_recovery: bool = False) -> dict:
     """Return a fail-closed regime observation and optional Testnet entry route.
 
     Three consecutive completed hourly bars must classify identically before a
     regime is considered stable. `entry_route_enabled` only permits evaluation
     of a candidate strategy; its signal and the independent risk/execution gates
     are still required before an order can be submitted.
+
+    The downtrend route is entry-disabled unless `enable_downtrend_recovery` is
+    true: its candidate replayed net-negative (PF < 1) in every historical slice.
     """
     dynamic_mode = str(active_strategy).strip().lower() == DYNAMIC_PROFILE
     result = {
@@ -163,6 +168,9 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
         "route": "no_validated_strategy",
         "route_state": "uncertain_regime",
         "entry_route_enabled": False,
+        # Fail-closed informational flag: the router never authorizes an order.
+        # `entry_route_enabled` only permits strategy evaluation; authorization
+        # remains with the risk and execution layer, so this stays False.
         "entry_authorized": False,
         "reason": "No validated strategy is available for this regime.",
     }
@@ -223,17 +231,30 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str) -> dict:
     elif regime == "range":
         result["reason"] = "No range candidate passed cost-adjusted research; no entry strategy is selected."
     elif regime == "downtrend":
-        if dynamic_mode:
+        if not dynamic_mode:
+            result["reason"] = "The downtrend RSI recovery route is restricted to the dynamic Binance Testnet profile."
+        elif enable_downtrend_recovery:
             result.update(
                 candidate_strategy=policy["strategy"],
                 selected_strategy=policy["strategy"],
                 route=policy["strategy"],
-                entry_route_enabled=policy["entry_enabled"],
-                route_state=policy["state"],
-                reason="Stable downtrend confirmed; the low-risk RSI recovery experiment may evaluate on Testnet only. It has not passed live-market validation.",
+                entry_route_enabled=True,
+                route_state="experimental_testnet_candidate",
+                reason="Stable downtrend confirmed; the opt-in low-risk RSI recovery experiment may evaluate on Testnet only. It has not passed live-market validation.",
             )
         else:
-            result["reason"] = "The downtrend RSI recovery route is restricted to the dynamic Binance Testnet profile."
+            result.update(
+                candidate_strategy=policy["strategy"],
+                selected_strategy=None,
+                route="observe_downtrend_recovery_only",
+                entry_route_enabled=False,
+                route_state="experimental_testnet_candidate_disabled",
+                reason=(
+                    "Stable downtrend confirmed, but the RSI recovery experiment is entry-disabled: "
+                    "its independent replay was net-negative (PF < 1) in every historical slice. "
+                    "Set ENABLE_DOWNTEND_RECOVERY_TESTNET=true to opt into the low-risk Testnet experiment."
+                ),
+            )
     elif regime == "high_volatility":
         result["reason"] = "Volatility is above the configured 3% ATR threshold; no new-entry strategy is selected."
     else:

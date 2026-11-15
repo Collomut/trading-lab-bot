@@ -187,10 +187,20 @@ class TestShadowRegimeRouter(unittest.TestCase):
 
         downtrend = evaluate_regime_router(self.candles("downtrend"), "dynamic_regime")
         self.assertEqual(downtrend["regime"], "downtrend")
-        self.assertEqual(downtrend["selected_strategy"], "downtrend_rsi_recovery_testnet")
-        self.assertEqual(downtrend["route_state"], "experimental_testnet_candidate")
-        self.assertTrue(downtrend["entry_route_enabled"])
-        self.assertIn("not passed live-market validation", downtrend["reason"])
+        # Entry-disabled by default: the recovery candidate replayed net-negative.
+        self.assertIsNone(downtrend["selected_strategy"])
+        self.assertFalse(downtrend["entry_route_enabled"])
+        self.assertEqual(downtrend["route_state"], "experimental_testnet_candidate_disabled")
+        self.assertEqual(downtrend["candidate_strategy"], "downtrend_rsi_recovery_testnet")
+        self.assertIn("PF < 1", downtrend["reason"])
+
+        opted_in = evaluate_regime_router(
+            self.candles("downtrend"), "dynamic_regime", enable_downtrend_recovery=True
+        )
+        self.assertEqual(opted_in["selected_strategy"], "downtrend_rsi_recovery_testnet")
+        self.assertTrue(opted_in["entry_route_enabled"])
+        self.assertEqual(opted_in["route_state"], "experimental_testnet_candidate")
+        self.assertIn("not passed live-market validation", opted_in["reason"])
 
         sideways = evaluate_regime_router(self.candles("range"), "dynamic_regime")
         self.assertEqual(sideways["selected_strategy"], None)
@@ -224,16 +234,18 @@ class TestShadowRegimeRouter(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["route"], "no_validated_strategy")
 
-    def test_dynamic_policy_is_an_explicit_allowlist_with_two_testnet_candidates(self):
+    def test_dynamic_policy_is_an_explicit_allowlist_with_one_enabled_candidate(self):
         enabled = [
             (regime, route["strategy"])
             for regime, route in REGIME_ROUTE_POLICY.items()
             if route["entry_enabled"]
         ]
-        self.assertEqual(enabled, [
-            ("uptrend", "macro_donchian_ema72"),
-            ("downtrend", "downtrend_rsi_recovery_testnet"),
-        ])
+        self.assertEqual(enabled, [("uptrend", "macro_donchian_ema72")])
+        # The downtrend candidate exists but is entry-disabled by default (opt-in only).
+        self.assertEqual(
+            REGIME_ROUTE_POLICY["downtrend"]["strategy"], "downtrend_rsi_recovery_testnet"
+        )
+        self.assertFalse(REGIME_ROUTE_POLICY["downtrend"]["entry_enabled"])
         for regime in ("range", "high_volatility", "transition"):
             self.assertIsNone(REGIME_ROUTE_POLICY[regime]["strategy"])
             self.assertFalse(REGIME_ROUTE_POLICY[regime]["entry_enabled"])
@@ -292,6 +304,26 @@ class TestConfigurationAndValidation(unittest.TestCase):
             "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT",
         ])
         self.assertEqual(strategy.min_trend_adx, 20.0)
+
+    def test_downtrend_recovery_flag_is_off_by_default_and_requires_dynamic_regime(self):
+        self.assertFalse(StrategyConfig().enable_downtrend_recovery_testnet)
+
+        cfg = BotConfig()
+        cfg.dashboard_token = "test_secret_token"
+        cfg.strategy.name = "macro_donchian_ema72"
+        cfg.strategy.enable_downtrend_recovery_testnet = True
+        self.assertTrue(
+            any("ENABLE_DOWNTEND_RECOVERY_TESTNET requires STRATEGY=dynamic_regime" in e
+                for e in cfg.validate())
+        )
+
+        cfg2 = BotConfig()
+        cfg2.dashboard_token = "test_secret_token"
+        cfg2.strategy.name = "dynamic_regime"
+        self.assertFalse(cfg2.strategy.enable_downtrend_recovery_testnet)
+        self.assertEqual(
+            [e for e in cfg2.validate() if "ENABLE_DOWNTEND_RECOVERY_TESTNET" in e], []
+        )
 
     def test_ema72_volatility_band_default_and_bounds(self):
         self.assertEqual(StrategyConfig().ema72_max_atr_pct, 2.5)
@@ -1958,6 +1990,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             ])
         bot.config = SimpleNamespace(strategy=SimpleNamespace(
             name="dynamic_regime", timeframe="1h", lookback_candles=2501,
+            enable_downtrend_recovery_testnet=True,
         ), enable_notifications=False)
         bot.exchange = Mock()
         bot.exchange.fetch_closed_ohlcv.return_value = candles
@@ -1978,6 +2011,42 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         bot.downtrend_recovery_strategy.analyze.assert_called_once()
         bot.strategy.analyze.assert_not_called()
         self.assertEqual(bot.last_signals["BTC/USDT"]["regime_router"]["selected_strategy"], "downtrend_rsi_recovery_testnet")
+
+    def test_dynamic_profile_downtrend_recovery_disabled_by_default(self):
+        bot = object.__new__(TradingBot)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 3_600_000
+        candles = []
+        for index in range(2501):
+            close = 100 * (0.999 ** index)
+            candles.append([
+                now_ms - (2500 - index) * 3_600_000,
+                close, close * 1.002, close * 0.998, close, 100.0,
+            ])
+        bot.config = SimpleNamespace(strategy=SimpleNamespace(
+            name="dynamic_regime", timeframe="1h", lookback_candles=2501,
+        ), enable_notifications=False)
+        bot.exchange = Mock()
+        bot.exchange.fetch_closed_ohlcv.return_value = candles
+        bot.exchange.get_ticker.return_value = {"bid": 70.0, "ask": 70.1}
+        bot.strategy = Mock()
+        bot.downtrend_recovery_strategy = Mock()
+        bot.risk_manager = SimpleNamespace(open_positions={}, store=Mock())
+        bot._last_analyzed_candle = {}
+        bot._analysis_error_states = {}
+        bot.last_signals = {}
+        bot._handle_buy_signal = Mock()
+        bot._handle_sell_signal = Mock()
+        with patch("bot_engine.evaluate_shadow_candidate", return_value={"signal": "HOLD", "status": "test"}):
+            bot.analyze_market("BTC/USDT")
+        # The proven-net-negative recovery route must not be evaluated for entry.
+        bot.downtrend_recovery_strategy.analyze.assert_not_called()
+        bot.strategy.analyze.assert_not_called()
+        self.assertEqual(bot.last_signals["BTC/USDT"]["signal"], "HOLD")
+        router = bot.last_signals["BTC/USDT"]["regime_router"]
+        self.assertEqual(router["regime"], "downtrend")
+        self.assertIsNone(router["selected_strategy"])
+        self.assertFalse(router["entry_route_enabled"])
+        self.assertIn("PF < 1", router["reason"])
 
     def test_candle_gap_is_saved_as_an_auditable_market_data_issue(self):
         bot = object.__new__(TradingBot)

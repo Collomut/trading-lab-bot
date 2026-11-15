@@ -69,6 +69,10 @@ class StrategyConfig:
     # Entry-only volatility ceiling for the EMA72 Donchian profile. Kept separate
     # from MAX_ATR_PCT so the legacy combined-strategy default cannot leak in.
     ema72_max_atr_pct: float = float(os.getenv("EMA72_MAX_ATR_PCT", "2.5"))
+    # Opt-in only: the downtrend RSI recovery experiment is entry-disabled by
+    # default because its independent replay was net-negative (PF < 1) in every
+    # historical slice. Takes effect only under STRATEGY=dynamic_regime.
+    enable_downtrend_recovery_testnet: bool = field(default_factory=lambda: _env_bool("ENABLE_DOWNTEND_RECOVERY_TESTNET", False))
     trading_pairs: list = field(default_factory=lambda: os.getenv(
         "TRADING_PAIRS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT"
     ).split(","))
@@ -208,6 +212,8 @@ class BotConfig:
         if (not math.isfinite(self.strategy.ema72_max_atr_pct)
                 or not (0 < self.strategy.ema72_max_atr_pct <= 5)):
             errors.append("EMA72_MAX_ATR_PCT must be a finite value greater than 0 and no more than 5")
+        if self.strategy.enable_downtrend_recovery_testnet and self.strategy.name != "dynamic_regime":
+            errors.append("ENABLE_DOWNTEND_RECOVERY_TESTNET requires STRATEGY=dynamic_regime")
         if self.strategy.name in {"macro_donchian_ema72", "dynamic_regime"}:
             if (not self.exchange.paper_trading or self.exchange.paper_environment not in {"testnet", "demo"}
                     or self.exchange.name.strip().lower() != "binance"):

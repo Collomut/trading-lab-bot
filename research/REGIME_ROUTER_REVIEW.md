@@ -3,6 +3,14 @@
 **Date:** 2026-11-13
 **State:** Executable, fail-closed Binance Spot Testnet router (`dynamic_regime`); not a live-trading strategy.
 
+**Update (2026-11-15):** the downtrend RSI recovery route is now **entry-disabled
+by default**. Its independent replay was net-negative (PF < 1) in every
+historical slice, and its losses could trigger the portfolio-wide loss halt that
+also stops the better EMA72 uptrend route. Re-enable the low-risk experiment
+only with `ENABLE_DOWNTEND_RECOVERY_TESTNET=true` under `STRATEGY=dynamic_regime`.
+See `docs/audits/REGIME_ROUTER_AUDIT.md`.
+
+
 ## Decision
 
 The predeclared family screen found every tested family net-negative after modeled fees and slippage; profit factors were below 1. The EMA72/Donchian candidate had positive strategy-only historical slices, but exceeded the 5% training drawdown limit and was stopped after few trades by the configured loss controls. Neither establishes a regime-specific edge, and the historical archive is not an untouched holdout.

@@ -37,3 +37,6 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Node (Railway IaC SDK)
+node_modules/

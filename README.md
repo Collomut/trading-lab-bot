@@ -25,12 +25,14 @@ python main.py --once
 - Use matching Testnet keys and keep `PAPER_TRADING=true`. Live orders are blocked in this build.
 - Startup runs `start.py`, which completes the guarded SQLite-to-Postgres migration check before replacing itself with the dashboard/worker; a migration error prevents startup.
 - Account or order reconciliation failures halt trading. Process-monitored exits also depend on the worker and network staying online.
-- Railway uses the repository's Railpack configuration. The Procfile, Railway config, and Dockerfile share the same Python startup entrypoint.
+- Railway uses the repository's Railpack configuration with Infrastructure as
+  Code in `.railway/railway.ts` (the deprecated `railway.json` was removed).
+  The Procfile and Dockerfile share the same Python startup entrypoint.
 - The GitHub Actions workflow compiles the Python sources and runs the deterministic test suite on every push and pull request.
 
 ## Operating boundaries
 
-- The default `macro_donchian_ema72` profile is a guarded Testnet research candidate, not a validated profitable strategy. The optional `dynamic_regime` profile routes stable uptrends to EMA72/Donchian and stable downtrends to a separate low-risk RSI recovery experiment. The recovery experiment failed historical cost checks and is enabled only to collect low-risk Testnet execution evidence; it is not eligible for live orders.
+- The default `macro_donchian_ema72` profile is a guarded Testnet research candidate, not a validated profitable strategy. The optional `dynamic_regime` profile routes stable uptrends to EMA72/Donchian and otherwise stands aside; its stable-downtrend RSI recovery experiment replayed net-negative (PF < 1) in every historical slice and is therefore entry-disabled by default (opt-in via `ENABLE_DOWNTEND_RECOVERY_TESTNET=true`).
 - The EMA72/Donchian candidate was positive in strategy-only historical slices but breached the training drawdown screen and quickly reached existing loss halts. No range or high-volatility strategy passed the cost-adjusted screen, so those regimes are deliberately not traded.
 - `python main.py --once` can place Testnet orders when configured with Testnet keys. Do not use it as a read-only health check.
 - `python main.py --backtest` is an exploratory replay for legacy strategies; it does not simulate the EMA72 candidate or dynamic routing. Use dedicated research scripts and documented historical data for candidate evaluation.

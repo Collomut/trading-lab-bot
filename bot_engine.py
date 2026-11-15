@@ -348,7 +348,13 @@ class TradingBot:
                               "reason": "The hourly regime router is unavailable; new entries are disabled in dynamic mode."}
         if self.config.strategy.timeframe == "1h":
             try:
-                router_observation = evaluate_regime_router(ohlcv, strategy_name)
+                router_observation = evaluate_regime_router(
+                    ohlcv,
+                    strategy_name,
+                    enable_downtrend_recovery=getattr(
+                        self.config.strategy, "enable_downtrend_recovery_testnet", False
+                    ),
+                )
             except Exception as exc:
                 logger.warning("Regime routing unavailable for %s (%s)", symbol, type(exc).__name__)
                 router_observation["reason"] = f"The market-regime check failed ({type(exc).__name__}); new entries are disabled."
