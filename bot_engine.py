@@ -761,6 +761,11 @@ class TradingBot:
                     raise ValueError("unreconciled open order exists on the account")
                 seen_stops.add(symbol)
             for symbol, position in list(self.risk_manager.open_positions.items()):
+                # Derive the base asset from the current position's symbol. The
+                # precision loop above leaves `base` bound to the last configured
+                # pair, which would otherwise mis-attribute this position's
+                # balance and tolerance checks to the wrong asset.
+                base = configured.get(symbol, symbol.split("/")[0] if "/" in symbol else symbol)
                 if not position.stop_order_id or not position.stop_client_order_id:
                     raise ValueError(f"tracked position {symbol} has no persisted exchange stop")
                 if symbol in seen_stops:
@@ -1985,13 +1990,11 @@ class TradingBot:
         if not self._cycle_lock.acquire(timeout=10):
             return False, "The trading worker is busy. Wait for the current account check and try again."
         try:
-            reason = self.risk_manager._halt_reason
-            reviewable_halt = self.risk_manager._is_halted and reason.startswith((
-                "Emergency stop",
-                "Exchange stop filled",
-                "Consecutive loss limit reached",
-                "Consecutive loss limit persists",
-            ))
+            halt_reason = self.risk_manager._halt_reason
+            reviewable_halt = (
+                self.risk_manager._is_halted
+                and self.risk_manager.is_reviewed_clear_halt(halt_reason)
+            )
             pending_unbaselined_stop = self._pending_unbaselined_stop_review()
             if self.risk_manager._is_halted and pending_unbaselined_stop:
                 reviewable_halt = True
@@ -2002,14 +2005,26 @@ class TradingBot:
                 return False, "Manual recovery is blocked while positions or unresolved orders remain. Inspect the configured Demo account."
             if not self._reconcile_exchange_state(
                     allow_manual_review_rebaseline=bool(acknowledge_manual_halt and reviewable_halt)):
-                reason = self._last_account_error or self.risk_manager._halt_reason
-                return False, f"Cannot resume: account reconciliation failed. {reason}"
+                detail = self._last_account_error or self.risk_manager._halt_reason
+                return False, f"Cannot resume: account reconciliation failed. {detail}"
+            rolling_rebase_equity = None
+            if (acknowledge_manual_halt and reviewable_halt
+                    and self.risk_manager._is_halted
+                    and self.risk_manager.is_rolling_drawdown_halt(self.risk_manager._halt_reason)):
+                try:
+                    rolling_rebase_equity = float(self._bot_managed_equity())
+                except Exception as exc:
+                    return False, (
+                        "Cannot rebase the rolling drawdown peak: account equity is "
+                        f"unavailable ({type(exc).__name__})."
+                    )
             if self.risk_manager._is_halted:
                 if not (acknowledge_manual_halt and reviewable_halt):
                     return False, f"Cannot resume while a safety halt is active: {self.risk_manager._halt_reason}"
                 if self.risk_manager.open_positions or self.risk_manager.store.unresolved_orders():
                     return False, "Manual recovery is blocked while positions or unresolved orders remain. Inspect the Testnet account."
-                if not self.risk_manager.acknowledge_manual_halt_review():
+                if not self.risk_manager.acknowledge_manual_halt_review(
+                        rolling_drawdown_rebase_equity=rolling_rebase_equity):
                     return False, "The safety-halt review could not be saved; trading remains halted."
             self.risk_manager.store.write_state("entry_mode", "ACTIVE")
             self.risk_manager.store.append_event("mode_changed", {"mode": "ACTIVE", "source": "operator_resume"})

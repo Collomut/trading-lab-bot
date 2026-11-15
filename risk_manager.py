@@ -104,6 +104,88 @@ class RiskManager:
 
     EQUITY_BASIS = "usdt_cash_plus_tracked_positions_v1"
 
+    # Single source of truth for halt-recovery semantics. Halt reason strings are
+    # matched by prefix so the recovery path for each halt lives in exactly one
+    # place instead of being duplicated across the risk manager, engine, and
+    # dashboard.
+    # - DAILY_RESET_HALT_PREFIXES reset automatically at the next UTC day.
+    # - REVIEWED_CLEAR_HALT_PREFIXES can be cleared by an operator acknowledgement
+    #   once the account is flat, reconciled, and free of unresolved orders.
+    # Any other halt remains a hard latch that requires explicit operator
+    # investigation (and, if necessary, direct state repair).
+    DAILY_RESET_HALT_PREFIXES = (
+        "Daily equity drawdown limit reached:",
+        "Daily loss limit reached:",
+    )
+    ROLLING_DRAWDOWN_HALT_PREFIX = "Rolling peak-to-trough drawdown limit reached:"
+    REVIEWED_CLEAR_HALT_PREFIXES = (
+        "Emergency stop",
+        "Exchange stop filled",
+        "Consecutive loss limit reached",
+        "Consecutive loss limit persists",
+        ROLLING_DRAWDOWN_HALT_PREFIX,
+        "Buy order was rejected",
+        "Sell order was rejected",
+        "Stop-exit order was rejected",
+        "Buy order state requires reconciliation",
+        "Sell order state requires reconciliation",
+        "Stop-exit order state requires reconciliation",
+        "Sell order for",
+        "Stop-exit order for",
+        "Partial sell for",
+        "Partial stop-exit for",
+        "Partial entry fill for",
+        "Trade closed for",
+        "Unconfirmed or partial buy fill",
+        "Unconfirmed or partial sell fill",
+        "Unconfirmed or partial stop-exit",
+        "Invalid buy fill details",
+        "Invalid sell fill details",
+        "Invalid stop-exit fill details",
+        "Buy fee details were incomplete",
+        "Post-fill stop risk exceeded",
+        "Candidate stop became invalid after fill",
+        "Candidate target became invalid after fill",
+        "Post-fill risk could not be validated",
+        "Signal execution failed",
+        "Position monitoring failed",
+        "Account equity valuation failed",
+        "Account equity unavailable or invalid",
+        "Native stop placement/persistence failed",
+        "Exchange stop replacement state is uncertain",
+        "Replacement exchange stop failed",
+        "Canceled exchange stop reference could not be persisted",
+        "Could not cancel exchange stop",
+        "Break-even stop update failed",
+        "Trailing stop update failed",
+        "Unable to obtain a valid market price",
+        "Cannot protect missing or invalid position parameters",
+        "Exchange stop could not be attached",
+        "Equity risk baseline audit record failed",
+        "Manual close state could not be verified",
+        "Dashboard close state requires review",
+        "Entry pause could not be saved",
+        "Resume request could not be saved",
+        "Testnet smoke buy was not confirmed fully filled",
+        "Testnet smoke buy fee/fill data was incomplete",
+        "Testnet smoke sell",
+    )
+
+    @classmethod
+    def is_daily_reset_halt(cls, reason: str) -> bool:
+        """Whether a halt reason is a daily-equity latch that resets each UTC day."""
+        return isinstance(reason, str) and reason.startswith(cls.DAILY_RESET_HALT_PREFIXES)
+
+    @classmethod
+    def is_reviewed_clear_halt(cls, reason: str) -> bool:
+        """Whether a halt reason can be cleared by an operator acknowledgement."""
+        return isinstance(reason, str) and reason.startswith(cls.REVIEWED_CLEAR_HALT_PREFIXES)
+
+    @classmethod
+    def is_rolling_drawdown_halt(cls, reason: str) -> bool:
+        """Whether a halt reason is the rolling peak-to-trough drawdown latch."""
+        return isinstance(reason, str) and reason.startswith(cls.ROLLING_DRAWDOWN_HALT_PREFIX)
+
     def __init__(self, config: RiskConfig, persistence_dir: str = "data"):
         self.config = config
         self.persistence_path = Path(persistence_dir) / "open_positions.json"
@@ -170,12 +252,24 @@ class RiskManager:
             self._equity_basis_migration_pending = not basis_matches and prior_equity_baseline_exists
             self._rolling_peak_equity = rolling_peak if basis_matches else 0.0
             self._consecutive_losses = consecutive
+            halt_reason = str(state.get("halt_reason", ""))
             if state_date == today:
                 self._daily_loss = daily_loss
-                self._is_halted = is_halted
-                self._halt_reason = str(state.get("halt_reason", ""))
                 self._daily_starting_equity = daily_start if basis_matches else 0.0
+                self._is_halted = is_halted
+                self._halt_reason = halt_reason
                 self._daily_loss_reset_date = today
+            else:
+                # Daily equity anchors belong to the prior day and reset here.
+                # A non-daily halt is a deliberate safety latch and must survive
+                # a redeploy that happens after UTC midnight; silently clearing
+                # it would re-enable entries without operator review.
+                self._daily_loss = 0.0
+                self._daily_starting_equity = 0.0
+                self._daily_loss_reset_date = today
+                if is_halted and not self.is_daily_reset_halt(halt_reason):
+                    self._is_halted = True
+                    self._halt_reason = halt_reason
             # A crash can happen after the loss counter is persisted but before
             # the corresponding halt write. Never let a stale false flag erase
             # a loss limit that the durable counter itself proves was reached.
@@ -303,7 +397,7 @@ class RiskManager:
             self._daily_loss = 0.0
             self._daily_loss_reset_date = today
             self._daily_starting_equity = 0.0
-            if self._is_halted and ("daily loss" in self._halt_reason.lower() or "daily equity drawdown" in self._halt_reason.lower()):
+            if self._is_halted and self.is_daily_reset_halt(self._halt_reason):
                 self._is_halted = False
                 self._halt_reason = ""
                 logger.info("✅ Trading resumed — new day, daily loss limit reset")
@@ -452,40 +546,63 @@ class RiskManager:
         self.store.write_state("entry_mode", "EXIT_ONLY")
         self.store.append_event("mode_changed", {"mode": "EXIT_ONLY"})
 
-    def acknowledge_manual_halt_review(self) -> bool:
-        """Clear an explicitly reviewed protective-stop, emergency, or loss halt."""
+    def acknowledge_manual_halt_review(self, *, rolling_drawdown_rebase_equity: float | None = None) -> bool:
+        """Clear a reviewed halt after the operator confirms the account is safe.
+
+        Only halt reasons in REVIEWED_CLEAR_HALT_PREFIXES may be cleared here;
+        state-integrity and other halts remain hard latches. Callers
+        (resume_entries) must already have verified a clean, reconciled, flat
+        account with no unresolved orders before invoking this method.
+        """
         if not self._is_halted:
             return False
-        protective_stop_halt = self._halt_reason.startswith("Exchange stop filled")
-        emergency_halt = self._halt_reason.startswith("Emergency stop")
-        loss_limit_halt = self._halt_reason.startswith((
-            "Consecutive loss limit reached",
-            "Consecutive loss limit persists",
-        ))
-        if not (emergency_halt or protective_stop_halt or loss_limit_halt):
+        reason = self._halt_reason
+        if not self.is_reviewed_clear_halt(reason):
             return False
-        previous_reason = self._halt_reason
+        loss_limit_halt = reason.startswith(("Consecutive loss limit reached", "Consecutive loss limit persists"))
+        rolling_drawdown_halt = self.is_rolling_drawdown_halt(reason)
+        protective_stop_halt = reason.startswith("Exchange stop filled")
+        emergency_halt = reason.startswith("Emergency stop")
+        previous_reason = reason
         previous_losses = self._consecutive_losses
+        previous_rolling_peak = self._rolling_peak_equity
         if loss_limit_halt:
             # A reviewed acknowledgement starts a new loss streak. Daily and
             # rolling drawdown counters/limits remain untouched.
             self._consecutive_losses = 0
+        if rolling_drawdown_halt:
+            # A rolling drawdown latch needs a fresh peak to measure the next
+            # streak from; the reconciled account equity is the natural anchor.
+            if (not isinstance(rolling_drawdown_rebase_equity, (int, float))
+                    or not math.isfinite(rolling_drawdown_rebase_equity)
+                    or rolling_drawdown_rebase_equity <= 0):
+                return False
+            self._rolling_peak_equity = float(rolling_drawdown_rebase_equity)
         self._is_halted, self._halt_reason = False, ""
         try:
-            event_type = (
-                "consecutive_loss_halt_review_acknowledged" if loss_limit_halt else
-                "protective_stop_review_acknowledged" if protective_stop_halt else
-                "emergency_stop_review_acknowledged"
-            )
+            if loss_limit_halt:
+                event_type = "consecutive_loss_halt_review_acknowledged"
+            elif rolling_drawdown_halt:
+                event_type = "rolling_drawdown_halt_review_acknowledged"
+            elif protective_stop_halt:
+                event_type = "protective_stop_review_acknowledged"
+            elif emergency_halt:
+                event_type = "emergency_stop_review_acknowledged"
+            else:
+                event_type = "manual_halt_review_acknowledged"
             self.store.append_event(event_type, {
                 "previous_reason": previous_reason,
                 "previous_consecutive_losses": previous_losses,
                 "consecutive_losses_reset": loss_limit_halt,
+                "rolling_drawdown_peak_rebased": rolling_drawdown_halt,
+                "previous_rolling_peak_equity": previous_rolling_peak,
+                "rolling_peak_equity": self._rolling_peak_equity,
             })
             self._save_daily_state()
             return True
         except Exception:
             self._consecutive_losses = previous_losses
+            self._rolling_peak_equity = previous_rolling_peak
             self._is_halted = True
             self._halt_reason = "Manual halt review could not be saved; operator action required"
             try:

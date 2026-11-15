@@ -841,19 +841,13 @@ class WebDashboard:
     def _manual_resume_available(risk, positions, *, account_available, exchange_reconciled, unresolved_orders):
         """Keep protective-stop review reachable when that review must repair reconciliation."""
         reason = getattr(risk, "_halt_reason", "")
-        reviewable_reason = reason.startswith((
-            "Emergency stop",
-            "Exchange stop filled",
-            "Consecutive loss limit reached",
-            "Consecutive loss limit persists",
-        ))
         # A stop-fill review is specifically the guarded path for reconciling
         # its final account balance; it must be available when that balance
         # currently fails the ordinary readiness check.
         stop_review = reason.startswith("Exchange stop filled")
         return bool(
             getattr(risk, "_is_halted", False)
-            and reviewable_reason
+            and RiskManager.is_reviewed_clear_halt(reason)
             and not positions
             and not unresolved_orders
             and account_available

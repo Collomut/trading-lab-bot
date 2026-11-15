@@ -947,6 +947,64 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertFalse(rm.monitor_equity(940.0))
             self.assertIn("rolling", rm._halt_reason.lower())
 
+    def test_halt_taxonomy_classifies_and_recovers_manual_halts(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertTrue(RiskManager.is_daily_reset_halt("Daily equity drawdown limit reached: 5.1%"))
+            self.assertTrue(RiskManager.is_daily_reset_halt("Daily loss limit reached: -$50.00 (limit: -$100.00)"))
+            self.assertFalse(RiskManager.is_daily_reset_halt("Emergency stop failed; operator action required"))
+            self.assertTrue(RiskManager.is_rolling_drawdown_halt("Rolling peak-to-trough drawdown limit reached: 5.2%"))
+            self.assertTrue(RiskManager.is_reviewed_clear_halt("Buy fee details were incomplete for BTC/USDT; position protected with stop, operator reconciliation required"))
+            self.assertFalse(RiskManager.is_reviewed_clear_halt("Open-position state is unreadable; operator reconciliation required"))
+
+            # A previously-sticky execution halt is now recoverable via review.
+            rm.halt("Buy fee details were incomplete for BTC/USDT; position protected with stop, operator reconciliation required")
+            self.assertTrue(rm._is_halted)
+            self.assertTrue(rm.acknowledge_manual_halt_review())
+            self.assertFalse(rm._is_halted)
+
+            # State-integrity halts remain hard latches.
+            rm.halt("Open-position state is unreadable; operator reconciliation required")
+            self.assertFalse(rm.acknowledge_manual_halt_review())
+            self.assertTrue(rm._is_halted)
+
+    def test_manual_halt_survives_restart_across_utc_midnight(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            first.store.write_state("daily_risk", {
+                "date": (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat(),
+                "daily_loss": -5.0,
+                "daily_starting_equity": 1000.0,
+                "rolling_peak_equity": 1000.0,
+                "consecutive_losses": 0,
+                "is_halted": True,
+                "halt_reason": "Buy fee details were incomplete for BTC/USDT; position protected with stop, operator reconciliation required",
+            })
+            restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertTrue(restored._is_halted)
+            self.assertIn("Buy fee details were incomplete", restored._halt_reason)
+            # The daily equity anchors reset, but the manual latch must survive.
+            self.assertEqual(restored._daily_loss, 0.0)
+            self.assertEqual(restored._daily_starting_equity, 0.0)
+
+    def test_daily_equity_halt_resets_across_utc_midnight(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            first.store.write_state("daily_risk", {
+                "date": (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat(),
+                "daily_loss": -50.0,
+                "daily_starting_equity": 1000.0,
+                "rolling_peak_equity": 1000.0,
+                "consecutive_losses": 0,
+                "is_halted": True,
+                "halt_reason": "Daily equity drawdown limit reached: 4.60%",
+            })
+            restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertFalse(restored._is_halted)
+            self.assertEqual(restored._halt_reason, "")
+            self.assertEqual(restored._daily_loss, 0.0)
+
+
     def test_equity_monitor_resets_daily_anchor_before_new_day_drawdown(self):
         with TemporaryDirectory() as persistence_dir:
             rm = RiskManager(RiskConfig(max_daily_loss_pct=3.0, max_rolling_drawdown_pct=20.0), persistence_dir=persistence_dir)
@@ -2271,6 +2329,60 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertTrue(bot.risk_manager._is_halted)
             self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
 
+    def test_stop_fill_reconciliation_uses_position_asset_with_multiple_pairs(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT", "XRP/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
+            bot.risk_manager.store.write_state("paper_environment", "demo")
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0", "XRP": "10"})
+            position = bot.risk_manager.open_position(
+                "BTC/USDT", 60000.0, 1.5, order_id="buy-btc",
+                entry_fee_quote=0.5, stop_loss_override=59000.0,
+                exit_policy="ema72_signal",
+            )
+            position.stop_order_id = "stop-btc"
+            position.stop_client_order_id = "stop-btc-client"
+            bot.risk_manager._save_positions()
+
+            bot.exchange = Mock()
+            # XRP reports a balance below its recorded baseline. The BTC stop-fill
+            # reconciliation must not mis-attribute BTC's balance check to XRP
+            # (the last configured pair) and wrongly refuse the confirmed exit.
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"BTC": "0.0", "XRP": "9", "USDT": "4487.76"}}, []
+            )
+            bot.exchange.exchange.load_markets.return_value = None
+            bot.exchange.exchange.precisionMode = 4  # TICK_SIZE
+            bot.exchange.exchange.TICK_SIZE = 4
+            bot.exchange.exchange.market.side_effect = lambda symbol: (
+                {"precision": {"amount": 0.00001}} if symbol == "BTC/USDT" else {"precision": {"amount": 1}}
+            )
+            bot.exchange.amount_to_precision.side_effect = lambda symbol, amount: (
+                "1.5" if symbol == "BTC/USDT" else str(amount)
+            )
+            bot.exchange.fetch_order.return_value = {
+                "id": "stop-btc", "side": "sell", "status": "closed", "amount": "1.5",
+                "filled": "1.5", "average": "59000.0",
+                "fees": [{"cost": "0.5", "currency": "USDT"}],
+            }
+            bot._last_reconciliation_ok = False
+            bot._cycle_lock = threading.Lock()
+
+            self.assertFalse(bot._reconcile_exchange_state())
+            # The BTC position must be closed by its own stop fill; leaking the
+            # last configured pair's base would leave the position open.
+            self.assertNotIn("BTC/USDT", bot.risk_manager.open_positions)
+            self.assertEqual(len(bot.risk_manager.trade_history), 1)
+            self.assertEqual(
+                bot.risk_manager.store.read_state("baseline_asset_balances")["BTC"],
+                "0.0",
+            )
+
     def test_resume_entries_requires_clean_reconciliation(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
@@ -2335,15 +2447,51 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertIn("positions", message)
             self.assertTrue(bot.risk_manager._is_halted)
 
+    def test_resume_entries_rebases_rolling_drawdown_peak_after_reconciliation(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(
+                RiskConfig(max_daily_loss_pct=10.0, max_rolling_drawdown_pct=5.0),
+                persistence_dir=persistence_dir,
+            )
+            bot.risk_manager.set_exit_only()
+            bot._cycle_lock = threading.Lock()
+            bot._last_account_error = ""
+            bot._last_account_balance = {"total": {"USDT": "940.0"}}
+            bot._reconcile_exchange_state = Mock(return_value=True)
+            bot._bot_managed_equity = Mock(return_value=940.0)
+
+            self.assertTrue(bot.risk_manager.monitor_equity(1000.0))
+            self.assertFalse(bot.risk_manager.monitor_equity(940.0))
+            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertIn("rolling", bot.risk_manager._halt_reason.lower())
+
+            success, message = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertTrue(success, message)
+            self.assertFalse(bot.risk_manager._is_halted)
+            self.assertEqual(bot.risk_manager._rolling_peak_equity, 940.0)
+            self.assertEqual(bot.risk_manager.entry_mode(), "ACTIVE")
+
     def test_manual_review_cannot_clear_other_risk_halts(self):
         with TemporaryDirectory() as persistence_dir:
             rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            # A daily equity latch resets on the UTC day rollover, not via review.
             rm.halt("Daily equity drawdown limit reached: 5.1%")
             self.assertFalse(rm.acknowledge_manual_halt_review())
             self.assertTrue(rm._is_halted)
+
+            # A rolling drawdown latch needs a fresh peak; it cannot clear
+            # without the operator supplying the reconciled account equity.
+            rm._is_halted, rm._halt_reason = False, ""
+            rm._rolling_peak_equity = 1000.0
             rm.halt("Rolling peak-to-trough drawdown limit reached: 5.2%")
             self.assertFalse(rm.acknowledge_manual_halt_review())
             self.assertTrue(rm._is_halted)
+            self.assertTrue(rm.acknowledge_manual_halt_review(rolling_drawdown_rebase_equity=940.0))
+            self.assertFalse(rm._is_halted)
+            self.assertEqual(rm._rolling_peak_equity, 940.0)
+            events = rm.store.list_events(event_type="rolling_drawdown_halt_review_acknowledged")
+            self.assertEqual(len(events), 1)
 
     def test_f02_confirmed_buy_places_stop_even_if_position_persistence_fails(self):
         """F-02: Confirm native stop loss is placed on exchange even if local DB write fails."""
