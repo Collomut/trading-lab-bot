@@ -3,6 +3,13 @@
 **Baseline verified:** `testnet-prelaunch-safeguards` @ `780a72d` (the deployed
 commit). Full suite `python tests.py` = **214 tests, OK** (exit 0).
 
+**Commit / push:** committed as `351185d19051f7c3d310b3af87511605484cada1` and
+pushed to `origin/testnet-prelaunch-safeguards` (the Railway deploy branch). The
+advisory `.github/workflows/ci.yml` change (mypy/bandit) is **not** in this commit
+— it remains an uncommitted local change because the available GitHub credential
+is an OAuth App token without the `workflow` scope that GitHub requires to modify
+workflow files. Pushing it needs a credential with `workflow` scope (or SSH).
+
 ## Implemented and tested (this change set)
 
 - **Finding F — smoke-trade fee accounting.** `run_testnet_smoke_trade` now
@@ -31,9 +38,11 @@ commit). Full suite `python tests.py` = **214 tests, OK** (exit 0).
   computes a one-sample t-test vs. a zero-return baseline plus profit factor,
   with an `is_significant_p05` flag that requires p<0.05 AND positive t.
   Research-only; never places orders.
-- **CI hardening (advisory).** `.github/workflows/ci.yml` adds
-  `continue-on-error` mypy (via `pyproject.toml`) and bandit AST scans so they
-  report without blocking the deterministic suite. `requirements.txt` adds scipy.
+- **CI hardening (advisory, PENDING — not pushed).** A local
+  `.github/workflows/ci.yml` change adds `continue-on-error` mypy (via
+  `pyproject.toml`) and bandit AST scans. It is not in commit `351185d` (see push
+  status above). `requirements.txt` adds scipy (pushed; required by the
+  statistical edge tool).
 - **Finding L — docs/config alignment.** `.env.example` third-asset (BNB) fee
   note updated to reflect that third-asset commissions are now converted and
   reconciled fail-closed. README watchlist corrected to the default 3-symbol
