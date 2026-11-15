@@ -19,8 +19,9 @@ python main.py --once
 
 ## Railway
 
+- Deploy from the `testnet-prelaunch-safeguards` branch. To auto-deploy on push, connect the GitHub repository `Collomut/trading-lab-bot` (project → Settings → Source → GitHub) and set that branch as the deploy branch. Pushing to it then triggers a Railpack rebuild and deploy automatically.
 - Keep one replica and mount a Volume at `/app/data` with `DATA_DIR=/app/data`.
-- Set a long random `DASHBOARD_TOKEN`; keep exchange keys and `DATABASE_URL` in Railway variables.
+- Set a long random `DASHBOARD_TOKEN`; keep exchange keys and `DATABASE_URL` in Railway variables (never in the repo). Required variables mirror `.env.example`: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, `DASHBOARD_TOKEN`, and `PAPER_ENVIRONMENT`/`PAPER_TRADING` for Testnet.
 - Use matching Testnet keys and keep `PAPER_TRADING=true`. Live orders are blocked in this build.
 - Startup runs `start.py`, which completes the guarded SQLite-to-Postgres migration check before replacing itself with the dashboard/worker; a migration error prevents startup.
 - Account or order reconciliation failures halt trading. Process-monitored exits also depend on the worker and network staying online.
