@@ -11,7 +11,7 @@ export default defineRailway(() => {
   const trial = service("trial", {
     source: github("Collomut/trading-lab-bot", {
       branch: "testnet-prelaunch-safeguards",
-      checkSuites: false,
+      checkSuites: true,
       rootDirectory: "/",
     }),
     build: { buildEnvironment: "V3", builder: "RAILPACK" },

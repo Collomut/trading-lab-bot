@@ -29,7 +29,7 @@ EMA72 route (flagged in `research/REGIME_ROUTER_REVIEW.md`).
 
 ## Profit-factor lever
 
-The 2026-11-15 halt-cap sweep (`research/ema72_halt_cap_sweep`) showed the EMA72
+The 2026-11-15 halt-cap sweep (`research/backtest_halt_cap_sweep.py`) showed the EMA72
 route is positive in validation at a **4-loss budget** (PF 1.68, 34 trades) but
 flat at the deployed 3 (PF 0, 4 trades). The config ceiling is therefore relaxed
 from 3 to 5 for the `macro_donchian_ema72` / `dynamic_regime` profiles while the

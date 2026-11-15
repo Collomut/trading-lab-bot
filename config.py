@@ -256,7 +256,7 @@ class BotConfig:
                 errors.append(f"{self.strategy.name} caps MAX_DAILY_LOSS_PCT at 3%")
             if self.risk.max_rolling_drawdown_pct > 5.0:
                 errors.append(f"{self.strategy.name} caps MAX_ROLLING_DRAWDOWN_PCT at 5%")
-            # The 2026-11-15 halt-cap sweep (research/ema72_halt_cap_sweep) showed
+            # The 2026-11-15 halt-cap sweep (research/backtest_halt_cap_sweep.py) showed
             # the EMA72 route is positive at a 4-loss budget in validation; the
             # default remains 3 (conservative) but 4-5 is allowed for this profile.
             if self.risk.max_consecutive_losses > 5:
