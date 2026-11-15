@@ -1,0 +1,897 @@
+{
+  "method": "pre-registered EMA72/Donchian tuning sweep; same simulator, fills, fees, and splits as the accepted replay",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "splits": [
+    "train_2021_02_to_2023",
+    "validation_2024_to_2025",
+    "review_2026_01_to_10"
+  ],
+  "variants": {
+    "v0_baseline": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 116,
+          "win_rate_pct": 35.34,
+          "profit_factor": 1.575,
+          "net_pnl_usdt": 1108.79,
+          "max_drawdown_pct": 6.438,
+          "trades_per_month": 3.31,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 116,
+          "win_rate_pct": 33.62,
+          "profit_factor": 1.362,
+          "net_pnl_usdt": 760.68,
+          "max_drawdown_pct": 7.529,
+          "trades_per_month": 3.31,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -121.72,
+          "max_drawdown_pct": 1.303,
+          "trades_per_month": 0.11,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 171,
+          "win_rate_pct": 41.52,
+          "profit_factor": 1.649,
+          "net_pnl_usdt": 1541.84,
+          "max_drawdown_pct": 4.748,
+          "trades_per_month": 7.12,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 171,
+          "win_rate_pct": 39.18,
+          "profit_factor": 1.384,
+          "net_pnl_usdt": 1004.08,
+          "max_drawdown_pct": 5.047,
+          "trades_per_month": 7.12,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 25.0,
+          "profit_factor": 0.528,
+          "net_pnl_usdt": -44.39,
+          "max_drawdown_pct": 1.128,
+          "trades_per_month": 0.17,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 42,
+          "win_rate_pct": 30.95,
+          "profit_factor": 1.496,
+          "net_pnl_usdt": 244.97,
+          "max_drawdown_pct": 2.898,
+          "trades_per_month": 4.2,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 42,
+          "win_rate_pct": 28.57,
+          "profit_factor": 1.214,
+          "net_pnl_usdt": 123.01,
+          "max_drawdown_pct": 3.587,
+          "trades_per_month": 4.2,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 8,
+          "win_rate_pct": 37.5,
+          "profit_factor": 0.647,
+          "net_pnl_usdt": -34.27,
+          "max_drawdown_pct": 1.71,
+          "trades_per_month": 0.8,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    },
+    "v1_atr_capped_stop": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 116,
+          "win_rate_pct": 35.34,
+          "profit_factor": 1.575,
+          "net_pnl_usdt": 1108.79,
+          "max_drawdown_pct": 6.438,
+          "trades_per_month": 3.31,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 116,
+          "win_rate_pct": 33.62,
+          "profit_factor": 1.362,
+          "net_pnl_usdt": 760.68,
+          "max_drawdown_pct": 7.529,
+          "trades_per_month": 3.31,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -121.72,
+          "max_drawdown_pct": 1.303,
+          "trades_per_month": 0.11,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 171,
+          "win_rate_pct": 41.52,
+          "profit_factor": 1.646,
+          "net_pnl_usdt": 1538.65,
+          "max_drawdown_pct": 4.748,
+          "trades_per_month": 7.12,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 171,
+          "win_rate_pct": 39.18,
+          "profit_factor": 1.383,
+          "net_pnl_usdt": 1002.47,
+          "max_drawdown_pct": 5.047,
+          "trades_per_month": 7.12,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 25.0,
+          "profit_factor": 0.528,
+          "net_pnl_usdt": -44.39,
+          "max_drawdown_pct": 1.128,
+          "trades_per_month": 0.17,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 42,
+          "win_rate_pct": 30.95,
+          "profit_factor": 1.496,
+          "net_pnl_usdt": 244.73,
+          "max_drawdown_pct": 2.9,
+          "trades_per_month": 4.2,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 42,
+          "win_rate_pct": 28.57,
+          "profit_factor": 1.214,
+          "net_pnl_usdt": 123.01,
+          "max_drawdown_pct": 3.587,
+          "trades_per_month": 4.2,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 8,
+          "win_rate_pct": 37.5,
+          "profit_factor": 0.647,
+          "net_pnl_usdt": -34.27,
+          "max_drawdown_pct": 1.71,
+          "trades_per_month": 0.8,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    },
+    "v2_volume_filter": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 116,
+          "win_rate_pct": 35.34,
+          "profit_factor": 1.54,
+          "net_pnl_usdt": 1054.43,
+          "max_drawdown_pct": 6.602,
+          "trades_per_month": 3.31,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 116,
+          "win_rate_pct": 33.62,
+          "profit_factor": 1.333,
+          "net_pnl_usdt": 708.07,
+          "max_drawdown_pct": 7.691,
+          "trades_per_month": 3.31,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -108.05,
+          "max_drawdown_pct": 1.081,
+          "trades_per_month": 0.11,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 169,
+          "win_rate_pct": 40.83,
+          "profit_factor": 1.6,
+          "net_pnl_usdt": 1420.31,
+          "max_drawdown_pct": 4.735,
+          "trades_per_month": 7.04,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 169,
+          "win_rate_pct": 38.46,
+          "profit_factor": 1.343,
+          "net_pnl_usdt": 893.68,
+          "max_drawdown_pct": 5.033,
+          "trades_per_month": 7.04,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 25.0,
+          "profit_factor": 0.528,
+          "net_pnl_usdt": -44.39,
+          "max_drawdown_pct": 1.128,
+          "trades_per_month": 0.17,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 42,
+          "win_rate_pct": 30.95,
+          "profit_factor": 1.467,
+          "net_pnl_usdt": 230.43,
+          "max_drawdown_pct": 3.026,
+          "trades_per_month": 4.2,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 42,
+          "win_rate_pct": 28.57,
+          "profit_factor": 1.19,
+          "net_pnl_usdt": 108.68,
+          "max_drawdown_pct": 3.724,
+          "trades_per_month": 4.2,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 8,
+          "win_rate_pct": 37.5,
+          "profit_factor": 0.647,
+          "net_pnl_usdt": -34.27,
+          "max_drawdown_pct": 1.71,
+          "trades_per_month": 0.8,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    },
+    "v3_adx_filter": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 114,
+          "win_rate_pct": 33.33,
+          "profit_factor": 1.438,
+          "net_pnl_usdt": 861.45,
+          "max_drawdown_pct": 6.608,
+          "trades_per_month": 3.26,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 114,
+          "win_rate_pct": 31.58,
+          "profit_factor": 1.248,
+          "net_pnl_usdt": 529.1,
+          "max_drawdown_pct": 7.816,
+          "trades_per_month": 3.26,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -128.55,
+          "max_drawdown_pct": 1.371,
+          "trades_per_month": 0.11,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 162,
+          "win_rate_pct": 39.51,
+          "profit_factor": 1.445,
+          "net_pnl_usdt": 1065.4,
+          "max_drawdown_pct": 5.573,
+          "trades_per_month": 6.75,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 162,
+          "win_rate_pct": 37.04,
+          "profit_factor": 1.222,
+          "net_pnl_usdt": 580.41,
+          "max_drawdown_pct": 6.394,
+          "trades_per_month": 6.75,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 25.0,
+          "profit_factor": 0.528,
+          "net_pnl_usdt": -44.39,
+          "max_drawdown_pct": 1.128,
+          "trades_per_month": 0.17,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 40,
+          "win_rate_pct": 30.0,
+          "profit_factor": 1.57,
+          "net_pnl_usdt": 261.16,
+          "max_drawdown_pct": 2.938,
+          "trades_per_month": 4.0,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 40,
+          "win_rate_pct": 30.0,
+          "profit_factor": 1.269,
+          "net_pnl_usdt": 144.0,
+          "max_drawdown_pct": 3.388,
+          "trades_per_month": 4.0,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 8,
+          "win_rate_pct": 37.5,
+          "profit_factor": 0.603,
+          "net_pnl_usdt": -41.31,
+          "max_drawdown_pct": 1.78,
+          "trades_per_month": 0.8,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    },
+    "v4_atr_band": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 114,
+          "win_rate_pct": 35.09,
+          "profit_factor": 1.551,
+          "net_pnl_usdt": 1040.55,
+          "max_drawdown_pct": 6.039,
+          "trades_per_month": 3.26,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 114,
+          "win_rate_pct": 33.33,
+          "profit_factor": 1.339,
+          "net_pnl_usdt": 699.94,
+          "max_drawdown_pct": 7.112,
+          "trades_per_month": 3.26,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -121.72,
+          "max_drawdown_pct": 1.303,
+          "trades_per_month": 0.11,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 169,
+          "win_rate_pct": 41.42,
+          "profit_factor": 1.66,
+          "net_pnl_usdt": 1534.79,
+          "max_drawdown_pct": 4.342,
+          "trades_per_month": 7.04,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 169,
+          "win_rate_pct": 39.05,
+          "profit_factor": 1.392,
+          "net_pnl_usdt": 1002.74,
+          "max_drawdown_pct": 4.619,
+          "trades_per_month": 7.04,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 25.0,
+          "profit_factor": 0.528,
+          "net_pnl_usdt": -44.39,
+          "max_drawdown_pct": 1.128,
+          "trades_per_month": 0.17,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 42,
+          "win_rate_pct": 30.95,
+          "profit_factor": 1.496,
+          "net_pnl_usdt": 244.97,
+          "max_drawdown_pct": 2.898,
+          "trades_per_month": 4.2,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 42,
+          "win_rate_pct": 28.57,
+          "profit_factor": 1.214,
+          "net_pnl_usdt": 123.01,
+          "max_drawdown_pct": 3.587,
+          "trades_per_month": 4.2,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 8,
+          "win_rate_pct": 37.5,
+          "profit_factor": 0.647,
+          "net_pnl_usdt": -34.27,
+          "max_drawdown_pct": 1.71,
+          "trades_per_month": 0.8,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    },
+    "v5_quality_combo": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 110,
+          "win_rate_pct": 32.73,
+          "profit_factor": 1.434,
+          "net_pnl_usdt": 814.5,
+          "max_drawdown_pct": 6.444,
+          "trades_per_month": 3.14,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 110,
+          "win_rate_pct": 30.91,
+          "profit_factor": 1.241,
+          "net_pnl_usdt": 493.86,
+          "max_drawdown_pct": 7.71,
+          "trades_per_month": 3.14,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -114.89,
+          "max_drawdown_pct": 1.149,
+          "trades_per_month": 0.11,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 157,
+          "win_rate_pct": 38.22,
+          "profit_factor": 1.436,
+          "net_pnl_usdt": 1004.73,
+          "max_drawdown_pct": 5.177,
+          "trades_per_month": 6.54,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 157,
+          "win_rate_pct": 35.67,
+          "profit_factor": 1.212,
+          "net_pnl_usdt": 535.69,
+          "max_drawdown_pct": 5.953,
+          "trades_per_month": 6.54,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 25.0,
+          "profit_factor": 0.528,
+          "net_pnl_usdt": -44.39,
+          "max_drawdown_pct": 1.128,
+          "trades_per_month": 0.17,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 40,
+          "win_rate_pct": 30.0,
+          "profit_factor": 1.508,
+          "net_pnl_usdt": 232.4,
+          "max_drawdown_pct": 3.067,
+          "trades_per_month": 4.0,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 40,
+          "win_rate_pct": 30.0,
+          "profit_factor": 1.216,
+          "net_pnl_usdt": 115.61,
+          "max_drawdown_pct": 3.658,
+          "trades_per_month": 4.0,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 8,
+          "win_rate_pct": 37.5,
+          "profit_factor": 0.603,
+          "net_pnl_usdt": -41.31,
+          "max_drawdown_pct": 1.78,
+          "trades_per_month": 0.8,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    },
+    "v6_ema50_exit": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 130,
+          "win_rate_pct": 38.46,
+          "profit_factor": 1.406,
+          "net_pnl_usdt": 847.98,
+          "max_drawdown_pct": 5.83,
+          "trades_per_month": 3.71,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 130,
+          "win_rate_pct": 36.92,
+          "profit_factor": 1.206,
+          "net_pnl_usdt": 466.48,
+          "max_drawdown_pct": 6.823,
+          "trades_per_month": 3.71,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 3,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -91.59,
+          "max_drawdown_pct": 1.002,
+          "trades_per_month": 0.09,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 189,
+          "win_rate_pct": 39.68,
+          "profit_factor": 1.555,
+          "net_pnl_usdt": 1358.57,
+          "max_drawdown_pct": 3.89,
+          "trades_per_month": 7.88,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 189,
+          "win_rate_pct": 36.51,
+          "profit_factor": 1.288,
+          "net_pnl_usdt": 779.65,
+          "max_drawdown_pct": 4.404,
+          "trades_per_month": 7.88,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 25.0,
+          "profit_factor": 0.719,
+          "net_pnl_usdt": -26.48,
+          "max_drawdown_pct": 1.128,
+          "trades_per_month": 0.17,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 47,
+          "win_rate_pct": 36.17,
+          "profit_factor": 1.22,
+          "net_pnl_usdt": 110.41,
+          "max_drawdown_pct": 3.027,
+          "trades_per_month": 4.7,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 47,
+          "win_rate_pct": 34.04,
+          "profit_factor": 0.959,
+          "net_pnl_usdt": -24.15,
+          "max_drawdown_pct": 3.429,
+          "trades_per_month": 4.7,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 9,
+          "win_rate_pct": 33.33,
+          "profit_factor": 0.551,
+          "net_pnl_usdt": -44.06,
+          "max_drawdown_pct": 1.462,
+          "trades_per_month": 0.9,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    },
+    "v7_trailing": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 223,
+          "win_rate_pct": 44.84,
+          "profit_factor": 1.116,
+          "net_pnl_usdt": 248.7,
+          "max_drawdown_pct": 4.573,
+          "trades_per_month": 6.37,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 222,
+          "win_rate_pct": 42.79,
+          "profit_factor": 0.842,
+          "net_pnl_usdt": -385.02,
+          "max_drawdown_pct": 6.578,
+          "trades_per_month": 6.34,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 3,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -4.78,
+          "max_drawdown_pct": 0.176,
+          "trades_per_month": 0.09,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 320,
+          "win_rate_pct": 45.31,
+          "profit_factor": 0.751,
+          "net_pnl_usdt": -828.96,
+          "max_drawdown_pct": 9.701,
+          "trades_per_month": 13.33,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 321,
+          "win_rate_pct": 38.94,
+          "profit_factor": 0.542,
+          "net_pnl_usdt": -1713.23,
+          "max_drawdown_pct": 17.609,
+          "trades_per_month": 13.38,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 7,
+          "win_rate_pct": 42.86,
+          "profit_factor": 0.509,
+          "net_pnl_usdt": -58.0,
+          "max_drawdown_pct": 0.919,
+          "trades_per_month": 0.29,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 74,
+          "win_rate_pct": 52.7,
+          "profit_factor": 0.896,
+          "net_pnl_usdt": -73.15,
+          "max_drawdown_pct": 2.592,
+          "trades_per_month": 7.4,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 73,
+          "win_rate_pct": 47.95,
+          "profit_factor": 0.671,
+          "net_pnl_usdt": -259.2,
+          "max_drawdown_pct": 3.682,
+          "trades_per_month": 7.3,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 19,
+          "win_rate_pct": 57.89,
+          "profit_factor": 0.93,
+          "net_pnl_usdt": -9.9,
+          "max_drawdown_pct": 0.809,
+          "trades_per_month": 1.9,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    },
+    "v8_quality_fast": {
+      "train_2021_02_to_2023": {
+        "base": {
+          "trades": 120,
+          "win_rate_pct": 36.67,
+          "profit_factor": 1.363,
+          "net_pnl_usdt": 721.84,
+          "max_drawdown_pct": 5.968,
+          "trades_per_month": 3.43,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 120,
+          "win_rate_pct": 34.17,
+          "profit_factor": 1.174,
+          "net_pnl_usdt": 374.62,
+          "max_drawdown_pct": 7.02,
+          "trades_per_month": 3.43,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 3,
+          "win_rate_pct": 0.0,
+          "profit_factor": 0.0,
+          "net_pnl_usdt": -96.22,
+          "max_drawdown_pct": 0.962,
+          "trades_per_month": 0.09,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "validation_2024_to_2025": {
+        "base": {
+          "trades": 172,
+          "win_rate_pct": 36.05,
+          "profit_factor": 1.352,
+          "net_pnl_usdt": 827.73,
+          "max_drawdown_pct": 4.187,
+          "trades_per_month": 7.17,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 172,
+          "win_rate_pct": 33.14,
+          "profit_factor": 1.125,
+          "net_pnl_usdt": 325.55,
+          "max_drawdown_pct": 5.786,
+          "trades_per_month": 7.17,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 4,
+          "win_rate_pct": 25.0,
+          "profit_factor": 0.719,
+          "net_pnl_usdt": -26.48,
+          "max_drawdown_pct": 1.128,
+          "trades_per_month": 0.17,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      },
+      "review_2026_01_to_10": {
+        "base": {
+          "trades": 44,
+          "win_rate_pct": 34.09,
+          "profit_factor": 1.16,
+          "net_pnl_usdt": 77.25,
+          "max_drawdown_pct": 2.871,
+          "trades_per_month": 4.4,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "stress": {
+          "trades": 44,
+          "win_rate_pct": 34.09,
+          "profit_factor": 0.913,
+          "net_pnl_usdt": -48.69,
+          "max_drawdown_pct": 3.358,
+          "trades_per_month": 4.4,
+          "halted": false,
+          "halt_reason": ""
+        },
+        "existing_halts_base": {
+          "trades": 9,
+          "win_rate_pct": 33.33,
+          "profit_factor": 0.446,
+          "net_pnl_usdt": -67.17,
+          "max_drawdown_pct": 1.485,
+          "trades_per_month": 0.9,
+          "halted": false,
+          "halt_reason": "three consecutive losing trades"
+        }
+      }
+    }
+  }
+}
