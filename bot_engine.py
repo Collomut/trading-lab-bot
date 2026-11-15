@@ -58,7 +58,11 @@ class TradingBot:
             max_atr_pct=config.strategy.max_atr_pct,
             ema72_max_atr_pct=config.strategy.ema72_max_atr_pct,
         )
-        self.downtrend_recovery_strategy = DowntrendRsiRecoveryTestnetStrategy()
+        self.downtrend_recovery_strategy = DowntrendRsiRecoveryTestnetStrategy(
+            rsi_recovery_level=getattr(
+                config.strategy, "downtrend_rsi_recovery_level", 25.0
+            )
+        )
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
         self.shadow_ledger = ShadowLedger(self.risk_manager.store)
         if (config.strategy.name in {"macro_donchian_ema72", "dynamic_regime"} and any(
@@ -703,6 +707,26 @@ class TradingBot:
                 return event
         return None
 
+    def _below_minimum_notional(self, symbol: str, amount: Decimal) -> bool:
+        """Whether ``amount`` of ``symbol`` is below the exchange minimum notional.
+
+        A partial fill can leave a remnant too small to sell. Treat that remnant
+        as dust so reconciliation can record it into the balance baseline instead
+        of failing forever. Returns False on any uncertainty (fail closed).
+        """
+        try:
+            limits = self.exchange.get_market_limits(symbol)
+            min_cost = limits.get("min_cost")
+            if min_cost is None:
+                return False
+            price = self.exchange.get_current_price(symbol)
+            if price is None or price <= 0 or not math.isfinite(float(price)):
+                return False
+            notional = amount * Decimal(str(price))
+            return notional.is_finite() and notional < Decimal(str(min_cost))
+        except Exception:
+            return False
+
     def _reconcile_exchange_state(self, *, allow_manual_review_rebaseline: bool = False) -> bool:
         """Block all order activity until authenticated account state matches local state."""
         try:
@@ -895,20 +919,43 @@ class TradingBot:
                         and reported.is_finite()
                         and reported >= 0
                     )
-                    if not may_rebaseline:
+                    # Auto-record untradable dust: an excess below the exchange's
+                    # minimum notional can never be sold, so re-baseline it instead
+                    # of failing reconciliation forever. Only when flat with no
+                    # unresolved or open exchange orders.
+                    excess = reported - expected
+                    dust_auto_sweep = (
+                        not may_rebaseline
+                        and excess.is_finite()
+                        and excess > 0
+                        and not self.risk_manager.open_positions
+                        and not self.risk_manager.store.unresolved_orders()
+                        and not open_orders
+                        and self._below_minimum_notional(symbol, excess)
+                    )
+                    if not may_rebaseline and not dust_auto_sweep:
                         raise ValueError(f"balance mismatch for configured asset {base}")
                     previous = str(baseline.get(base, "0"))
                     baseline = dict(baseline)
                     baseline[base] = str(reported)
                     self.risk_manager.store.write_state("baseline_asset_balances", baseline)
-                    self.risk_manager.store.append_event("protective_stop_balance_rebased_after_review", {
-                        "symbol": symbol,
-                        "previous_baseline": previous,
-                        "account_balance": str(reported),
-                        "difference": str(reported - Decimal(previous)),
-                        "stop_order_id": str(pending_details.get("order_id", "")),
-                        "operator_review": True,
-                    })
+                    if may_rebaseline:
+                        self.risk_manager.store.append_event("protective_stop_balance_rebased_after_review", {
+                            "symbol": symbol,
+                            "previous_baseline": previous,
+                            "account_balance": str(reported),
+                            "difference": str(reported - Decimal(previous)),
+                            "stop_order_id": str(pending_details.get("order_id", "")),
+                            "operator_review": True,
+                        })
+                    else:
+                        self.risk_manager.store.append_event("dust_balance_rebased", {
+                            "symbol": symbol,
+                            "previous_baseline": previous,
+                            "account_balance": str(reported),
+                            "difference": str(excess),
+                            "below_minimum_notional": True,
+                        })
             if self.risk_manager.store.unresolved_orders():
                 raise ValueError("unresolved local order intent exists")
             self._last_account_balance = balance
@@ -1254,9 +1301,17 @@ class TradingBot:
             logger.info("Trade blocked for %s: one downtrend-recovery Testnet position is already open", symbol)
             return
 
-        # Risk check: can we open a new position?
+        # Risk check: can we open a new position? The loss-budget route is
+        # derived from the candidate strategy so a route-scoped consecutive-loss
+        # halt (e.g. from the experimental downtrend route) never blocks the
+        # independent uptrend EMA72 route.
+        candidate_strategy_id = signal.indicators.get("strategy") if isinstance(signal.indicators, dict) else None
+        entry_route = {
+            "macro_donchian_ema72": "uptrend",
+            "downtrend_rsi_recovery_testnet": "downtrend",
+        }.get(candidate_strategy_id, "legacy")
         can_trade, reason = self.risk_manager.can_open_position(
-            symbol, entry_equity
+            symbol, entry_equity, route=entry_route
         )
         if not can_trade:
             logger.info(f"⏸ Trade blocked for {symbol}: {reason}")
@@ -1455,7 +1510,9 @@ class TradingBot:
                     strategy_stop_adjusted_after_fill = True
                 else:
                     actual_stop_loss = proposed_stop
-                target_atr_multiple = 2.0 if recovery_candidate else 100.0
+                target_atr_multiple = 2.0 if recovery_candidate else float(
+                    getattr(self.config.strategy, "ema72_take_profit_atr_multiple", 100.0)
+                )
                 actual_take_profit = fill_price + target_atr_multiple * float(atr)
                 if not math.isfinite(actual_take_profit) or actual_take_profit <= fill_price:
                     self.risk_manager.halt(f"Candidate target became invalid after fill for {symbol}; manual reconciliation required")
@@ -2124,6 +2181,31 @@ class TradingBot:
             self.risk_manager.halt("Resume request could not be saved; operator review required")
             logger.exception("Could not safely resume entries (%s)", type(exc).__name__)
             return False, "Resume could not be saved. Trading remains paused; inspect service logs."
+        finally:
+            self._cycle_lock.release()
+
+    def clear_route_loss_halts(self) -> tuple[bool, str]:
+        """Clear route-scoped consecutive-loss halts after operator review.
+
+        Route halts block only new entries for one strategy route (uptrend or
+        downtrend); the portfolio-wide halt, daily-loss, and rolling-drawdown
+        controls are unaffected. Requires a clean reconciliation with no
+        unresolved orders.
+        """
+        if not self._cycle_lock.acquire(timeout=10):
+            return False, "The trading worker is busy. Wait for the current account check and try again."
+        try:
+            if self.risk_manager.store.unresolved_orders():
+                return False, "Cannot clear a route halt while unresolved orders remain; reconcile them first."
+            if not self._reconcile_exchange_state():
+                detail = self._last_account_error or "account reconciliation failed"
+                return False, f"Cannot clear a route halt: {detail}"
+            if not self.risk_manager.clear_route_halts():
+                return False, "No route-scoped loss halt is active."
+            return True, "Route-scoped loss halts cleared after successful account reconciliation."
+        except Exception as exc:
+            logger.exception("Could not clear route loss halts (%s)", type(exc).__name__)
+            return False, "Route halt review could not be saved."
         finally:
             self._cycle_lock.release()
 
