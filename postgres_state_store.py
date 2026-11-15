@@ -447,7 +447,7 @@ class PostgresStateStore:
                 """)
 
     def list_events(self, limit=100, *, event_type=None, exclude_event_type=None):
-        limit = max(1, min(int(limit), 200))
+        limit = max(1, min(int(limit), 2000))
         with self._pool.connection() as conn:
             if event_type is not None:
                 rows = conn.execute("""

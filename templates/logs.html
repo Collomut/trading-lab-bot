@@ -75,6 +75,7 @@
     emergency_stop_review_acknowledged:'Emergency stop review acknowledged',
     protective_stop_review_acknowledged:'Protective stop review acknowledged',
     protective_stop_balance_rebased_after_review:'Unmatched balance reviewed',
+    dust_balance_rebased:'Dust balance recorded',
     testnet_smoke_trade_completed:'Testnet smoke trade completed',
     testnet_reset_recovery:'Testnet reset recorded',
     paper_environment_changed:'Paper account changed',
@@ -243,7 +244,8 @@
     const sells=Number(signals.SELL)||0;
     const blocked=Number(summary.buy_setups_blocked)||0;
     for(const [key,id] of Object.entries(summaryIds)){
-      document.getElementById(id).textContent=String(key==='checks'?checks:key==='buys'?buys:key==='sells'?sells:blocked);
+      const value=key==='checks'?(checks+(summary.capped?'+':'')):key==='buys'?buys:key==='sells'?sells:blocked;
+      document.getElementById(id).textContent=String(value);
     }
     document.getElementById('log-summary-window').textContent='Last 24 hours';
     let note;

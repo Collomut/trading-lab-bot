@@ -260,7 +260,7 @@ class StateStore:
 
     def list_events(self, limit=100, *, event_type=None, exclude_event_type=None):
         """Return recent audit events; callers must sanitize details before exposing them."""
-        limit = max(1, min(int(limit), 200))
+        limit = max(1, min(int(limit), 2000))
         where = ""
         params = []
         if event_type is not None:

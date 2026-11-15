@@ -210,6 +210,7 @@ class WebDashboard:
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
         self.app.router.add_post('/api/exit-only', self.handle_exit_only)
         self.app.router.add_post('/api/resume', self.handle_resume_entries)
+        self.app.router.add_post('/api/clear-route-halts', self.handle_clear_route_halts)
         self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
         self.app.router.add_post('/api/close-position', self.handle_close_position)
         self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
@@ -643,6 +644,7 @@ class WebDashboard:
             "max_atr_pct": self.config.strategy.max_atr_pct,
             "halted": risk._is_halted,
             "halt_reason": risk._halt_reason,
+            "route_halts": risk.route_halts(),
             "entry_mode": risk.entry_mode(),
             "exchange_reconciled": self.bot._last_reconciliation_ok,
             "resume_available": risk.entry_mode() == "EXIT_ONLY" and not risk._is_halted and account_available and self.bot._last_reconciliation_ok,
@@ -786,8 +788,8 @@ class WebDashboard:
                 "mode": str(details.get("mode", ""))[:24],
                 "source": str(details.get("source", ""))[:40],
             }
-        if event_type in {"protective_stop_placed", "protective_stop_filled", "protective_stop_cancelled", "partial_entry_fill", "partial_exit_reconciled", "protective_stop_balance_rebased_after_review"}:
-            allowed = ("symbol", "amount", "filled", "remaining", "stop_price", "average", "dust_amount", "baseline_updated", "baseline_was_missing", "unattributed_balance", "accounting_complete", "previous_baseline", "account_balance", "difference", "operator_review")
+        if event_type in {"protective_stop_placed", "protective_stop_filled", "protective_stop_cancelled", "partial_entry_fill", "partial_exit_reconciled", "protective_stop_balance_rebased_after_review", "dust_balance_rebased"}:
+            allowed = ("symbol", "amount", "filled", "remaining", "stop_price", "average", "dust_amount", "baseline_updated", "baseline_was_missing", "unattributed_balance", "accounting_complete", "previous_baseline", "account_balance", "difference", "operator_review", "below_minimum_notional")
             return {key: str(details[key])[:80] for key in allowed if details.get(key) is not None}
         if event_type == "protective_stop_review_acknowledged":
             return {"message": "Protective-stop review acknowledged after account reconciliation."}
@@ -857,7 +859,7 @@ class WebDashboard:
         )
 
     @staticmethod
-    def _summarize_market_activity(market_events, audit_events, *, now=None):
+    def _summarize_market_activity(market_events, audit_events, *, now=None, cap=200):
         """Summarize the last 24 hours of strategy checks without implying orders."""
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None:
@@ -924,6 +926,7 @@ class WebDashboard:
         return {
             "window_hours": 24,
             "checks": len(recent_market),
+            "capped": len(market_events) >= cap,
             "signals": signal_counts,
             "votes": vote_counts,
             "no_consensus": no_consensus,
@@ -942,11 +945,15 @@ class WebDashboard:
                 limit = 100
             limit = max(1, min(limit, 100))
             store = self.bot.risk_manager.store
-            summary_market_events = store.list_events(200, event_type="market_check")
-            summary_audit_events = store.list_events(200, exclude_event_type="market_check")
+            # Fetch enough history to cover a full 24-hour window for the
+            # configured universe (a burst can exceed the old 200-event cap).
+            summary_market_events = store.list_events(1000, event_type="market_check")
+            summary_audit_events = store.list_events(1000, exclude_event_type="market_check")
             market_events = summary_market_events[:limit]
             audit_events = summary_audit_events[:limit]
-            market_summary = self._summarize_market_activity(summary_market_events, summary_audit_events)
+            market_summary = self._summarize_market_activity(
+                summary_market_events, summary_audit_events, cap=1000
+            )
 
             def event_order(item):
                 try:
@@ -1037,6 +1044,18 @@ class WebDashboard:
         return web.json_response({
             "success": success,
             "entry_mode": self.bot.risk_manager.entry_mode(),
+            "message": message,
+        }, status=200 if success else 409)
+
+    async def handle_clear_route_halts(self, request):
+        if not self._is_valid_origin(request):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        self._status_cache = None
+        loop = asyncio.get_event_loop()
+        success, message = await loop.run_in_executor(None, self.bot.clear_route_loss_halts)
+        return web.json_response({
+            "success": success,
+            "route_halts": self.bot.risk_manager.route_halts(),
             "message": message,
         }, status=200 if success else 409)
 
