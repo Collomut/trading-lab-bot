@@ -1016,6 +1016,22 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertEqual(rm._daily_starting_equity, 900.0)
             self.assertFalse(rm._is_halted)
 
+    def test_close_position_records_strategy_route_regime_and_r_multiple(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.open_position(
+                "BTC/USDT", 100.0, 1.0, order_id="buy-1",
+                stop_loss_override=90.0, exit_policy="ema72_signal",
+                route="macro_donchian_ema72", regime="uptrend",
+            )
+            record = rm.close_position("BTC/USDT", 110.0, "Test exit")
+            self.assertEqual(record.strategy, "macro_donchian_ema72")
+            self.assertEqual(record.route, "macro_donchian_ema72")
+            self.assertEqual(record.regime, "uptrend")
+            self.assertAlmostEqual(record.r_multiple, 1.0)
+            self.assertEqual(record.order_id, "buy-1")
+            self.assertFalse(record.simulated)
+
     def test_consecutive_loss_halt_survives_crash_between_counter_and_halt_writes(self):
         with TemporaryDirectory() as persistence_dir:
             first = RiskManager(RiskConfig(max_consecutive_losses=2), persistence_dir=persistence_dir)
@@ -1192,6 +1208,19 @@ class TestStateStoreAndPersistence(unittest.TestCase):
                 self.assertIn("audit_events", tables)
                 self.assertIn("schema_migrations", tables)
 
+    def test_sqlite_store_trades_parity(self):
+        with TemporaryDirectory() as tmpdir:
+            store = StateStore(Path(tmpdir) / "state.db")
+            payload = {
+                "action": "SELL", "symbol": "BTC/USDT", "price": 100.0, "amount": 1.0,
+                "timestamp": "2026-11-15T00:00:00+00:00",
+            }
+            store.append_trade(payload)
+            store.append_trade(payload)  # duplicate payload must be deduplicated
+            trades = store.list_trades(10)
+            self.assertEqual(len(trades), 1)
+            self.assertEqual(trades[0]["symbol"], "BTC/USDT")
+
     def test_order_transitions_enforcement(self):
         with TemporaryDirectory() as tmpdir:
             store = StateStore(Path(tmpdir) / "state.db")
@@ -1249,6 +1278,27 @@ class TestStateStoreAndPersistence(unittest.TestCase):
             self.assertTrue(second._is_halted)
             self.assertEqual(second._halt_reason, "test durable halt")
             self.assertEqual(second.store.quick_check(), "ok")
+
+    def test_trade_history_hydrates_from_store_on_restart(self):
+        with TemporaryDirectory() as persistence_dir:
+            first = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            first.store.append_trade({
+                "action": "SELL", "symbol": "BTC/USDT", "price": 110.0, "amount": 1.0,
+                "entry_price": 100.0, "entry_time": "2026-11-15T00:00:00+00:00",
+                "pnl": 10.0, "pnl_pct": 10.0, "fee": 0.1, "accounting_complete": True,
+                "reason": "Test", "strategy": "macro_donchian_ema72",
+                "route": "macro_donchian_ema72", "regime": "uptrend",
+                "r_multiple": 1.0, "order_id": "buy-1", "simulated": False,
+                "timestamp": "2026-11-15T01:00:00+00:00",
+            })
+            restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertEqual(len(restored.trade_history), 1)
+            record = restored.trade_history[0]
+            self.assertEqual(record.strategy, "macro_donchian_ema72")
+            self.assertEqual(record.route, "macro_donchian_ema72")
+            self.assertEqual(record.regime, "uptrend")
+            self.assertEqual(record.r_multiple, 1.0)
+            self.assertEqual(record.order_id, "buy-1")
 
     def test_order_intent_is_unique_and_unresolved_until_applied(self):
         with TemporaryDirectory() as persistence_dir:
@@ -2492,6 +2542,66 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(rm._rolling_peak_equity, 940.0)
             events = rm.store.list_events(event_type="rolling_drawdown_halt_review_acknowledged")
             self.assertEqual(len(events), 1)
+
+    def test_buy_signal_prefers_managed_equity_risk_basis(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.strategy.name = "macro_donchian_ema72"
+            cfg.strategy.timeframe = "1h"
+            cfg.strategy.lookback_candles = 2501
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_usdt_balance.return_value = 10000.0
+            bot._bot_managed_equity = Mock(return_value=20000.0)
+            with patch.object(bot.risk_manager, "can_open_position", return_value=(False, "blocked")) as can_open:
+                signal = TradeSignal(Signal.BUY, "BTC/USDT", 0.8, "Test", indicators={
+                    "close": 100.0, "strategy": "macro_donchian_ema72", "atr": 2.0, "swing_low_5": 96.0,
+                })
+                bot._handle_buy_signal(signal)
+            can_open.assert_called_once()
+            # Managed equity (cash + positions), not free cash, is the risk basis.
+            self.assertAlmostEqual(can_open.call_args[0][1], 20000.0)
+
+    def test_signal_fill_divergence_halts_and_protects_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.strategy.name = "macro_donchian_ema72"
+            cfg.strategy.timeframe = "1h"
+            cfg.strategy.lookback_candles = 2501
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_usdt_balance.return_value = 10000.0
+            bot.exchange.get_current_price.return_value = 100.0
+            bot.exchange.get_public_market_data_price.return_value = 99.9
+            bot.exchange.amount_to_precision.return_value = "10"
+            bot.exchange.get_market_limits.return_value = {"min_amount": 0.1, "min_cost": 10.0, "active": True}
+            bot.exchange.get_order_book.return_value = {"bids": [[99.9, 100.0]], "asks": [[100.0, 100.0]]}
+            bot._has_correlated_open_position = lambda _symbol: (False, "")
+            buy_order = {
+                "id": "buy-1", "status": "closed", "filled": "10", "average": "105.0",
+                "fees": [{"currency": "USDT", "cost": "1"}],
+            }
+            bot._submit_market_order = Mock(return_value=(buy_order, "cb-1"))
+            bot._place_and_persist_native_stop = Mock(return_value=True)
+            bot._fee_quote_cost = Mock(return_value=1.0)
+            bot._simulated_wallet_active = Mock(return_value=False)
+            bot.send_notification = Mock()
+            bot._log_trade = Mock()
+
+            signal = TradeSignal(Signal.BUY, "BTC/USDT", 0.85, "Test", indicators={
+                "strategy": "macro_donchian_ema72", "close": 100.0, "swing_low_5": 96.0, "atr": 2.0,
+            })
+            bot._handle_buy_signal(signal)
+
+            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertIn("signal close", bot.risk_manager._halt_reason)
+            self.assertIn("BTC/USDT", bot.risk_manager.open_positions)
+            events = bot.risk_manager.store.list_events(10)
+            self.assertTrue(any(event["event_type"] == "signal_fill_divergence" for event in events))
 
     def test_f02_confirmed_buy_places_stop_even_if_position_persistence_fails(self):
         """F-02: Confirm native stop loss is placed on exchange even if local DB write fails."""

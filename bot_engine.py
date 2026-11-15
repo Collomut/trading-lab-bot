@@ -120,7 +120,7 @@ class TradingBot:
             f.write(json.dumps(trade_data, allow_nan=False) + "\n")
 
     def _log_closed_trade(self, record, reason: str, exit_price: float, order_id: str = ""):
-        """Persist every confirmed position close with explicit accounting status."""
+        """Persist every confirmed position close with full attribution."""
         if not record:
             return
         self._log_trade({
@@ -128,12 +128,19 @@ class TradingBot:
             "symbol": record.symbol,
             "price": exit_price,
             "amount": record.amount,
+            "entry_price": record.entry_price,
+            "entry_time": record.entry_time,
             "pnl": record.pnl,
             "pnl_pct": record.pnl_pct,
             "fee": record.fee,
             "accounting_complete": record.accounting_complete,
-            "order_id": str(order_id or ""),
+            "order_id": str(order_id or record.order_id or ""),
             "reason": reason,
+            "strategy": record.strategy,
+            "route": record.route,
+            "regime": record.regime,
+            "r_multiple": record.r_multiple,
+            "simulated": record.simulated,
         })
 
     def _send_telegram_notification(self, message: str):
@@ -364,6 +371,9 @@ class TradingBot:
             signal = self.strategy.analyze(df, symbol, in_position=has_position)
         else:
             signal = self.strategy.analyze(df, symbol)
+        if isinstance(signal.indicators, dict):
+            signal.indicators.setdefault("regime", router_observation.get("regime", ""))
+            signal.indicators.setdefault("route", router_observation.get("route", ""))
         self._last_analyzed_candle[symbol] = candle_timestamp
         self.last_signals[symbol] = {
             "signal": signal.signal.value,
@@ -947,6 +957,13 @@ class TradingBot:
             raise ValueError("bot-managed equity is invalid")
         return equity
 
+    def _simulated_wallet_active(self) -> bool:
+        """True only when the exchange connector is operating a virtual wallet."""
+        if getattr(self.exchange, "is_fallback_simulated", False) is True:
+            return True
+        is_sim = getattr(self.exchange, "_is_simulated", None)
+        return bool(callable(is_sim) and is_sim() is True)
+
     def _cancel_exchange_stop(self, symbol: str) -> bool:
         position = self.risk_manager.open_positions.get(symbol)
         if not position or not position.stop_order_id:
@@ -1174,12 +1191,21 @@ class TradingBot:
     def _handle_buy_signal(self, signal, decision_key="manual"):
         """Process a BUY signal through risk checks and potentially buy."""
         symbol = signal.symbol
+        indicators = signal.indicators if isinstance(signal.indicators, dict) else {}
 
         # Get current portfolio value
         usdt_balance = self.exchange.get_usdt_balance()
         if usdt_balance <= 0:
             logger.warning(f"No USDT balance available for buying {symbol}")
             return
+        # Use managed equity (cash + tracked positions) as the single risk basis
+        # so entry sizing and the daily-loss gate agree with the equity halt.
+        # Fall back to free cash when an equity snapshot is unavailable (e.g. in
+        # isolated tests or before the first reconciliation).
+        try:
+            entry_equity = float(self._bot_managed_equity())
+        except Exception:
+            entry_equity = usdt_balance
 
         # Keep the downtrend experiment to one position across the portfolio.
         recovery_candidate = (
@@ -1196,7 +1222,7 @@ class TradingBot:
 
         # Risk check: can we open a new position?
         can_trade, reason = self.risk_manager.can_open_position(
-            symbol, usdt_balance
+            symbol, entry_equity
         )
         if not can_trade:
             logger.info(f"⏸ Trade blocked for {symbol}: {reason}")
@@ -1257,7 +1283,7 @@ class TradingBot:
         else:
             stop_loss_price = self.risk_manager.calculate_stop_loss(current_price, atr=atr)
         amount = self.risk_manager.calculate_position_size(
-            usdt_balance, current_price, stop_loss_price,
+            entry_equity, current_price, stop_loss_price,
             risk_multiplier=risk_multiplier,
             entry_fee_rate=0.001 if recovery_candidate else 0.0,
         )
@@ -1303,10 +1329,10 @@ class TradingBot:
                 Decimal("0.001") if recovery_candidate else Decimal("0")
             )
             risk_cap = (
-                Decimal(str(usdt_balance)) * Decimal(str(self.config.risk.max_risk_per_trade))
+                Decimal(str(entry_equity)) * Decimal(str(self.config.risk.max_risk_per_trade))
                 / Decimal(100) * Decimal(str(risk_multiplier))
             )
-            exposure_cap = Decimal(str(usdt_balance)) * Decimal(str(self.config.risk.position_size_pct)) / Decimal(100)
+            exposure_cap = Decimal(str(entry_equity)) * Decimal(str(self.config.risk.position_size_pct)) / Decimal(100)
             if rounded_risk + fee_reserve > risk_cap or needed_quote > exposure_cap:
                 logger.warning("Rounded amount exceeds configured risk or exposure cap for %s", symbol)
                 return
@@ -1413,6 +1439,9 @@ class TradingBot:
                     take_profit_override=actual_take_profit if managed_candidate else None,
                     exit_policy=("downtrend_rsi_recovery" if recovery_candidate
                                  else "ema72_signal" if ema72_candidate else "risk_managed"),
+                    route=str(indicators.get("route", "") or ""),
+                    regime=str(indicators.get("regime", "") or ""),
+                    simulated=self._simulated_wallet_active(),
                 )
             except Exception as exc:
                 logger.error("Failed to open local position: %s", exc)
@@ -1447,6 +1476,34 @@ class TradingBot:
                     "stop_placed": stop_placed, "order_id": str(order.get("id", ""))
                 })
                 return
+
+            # If the exchange filled far from the closed-candle price that
+            # generated this signal, the signal was likely stale or the market
+            # gapped. The position is already protected by its stop; record the
+            # divergence and halt for review so a non-representative fill is
+            # never silently counted as forward evidence.
+            signal_close = None
+            try:
+                candidate_close = float(indicators.get("close"))
+                if math.isfinite(candidate_close) and candidate_close > 0:
+                    signal_close = candidate_close
+            except (TypeError, ValueError):
+                signal_close = None
+            if managed_candidate and signal_close is not None:
+                divergence_bps = abs(fill_price - signal_close) / signal_close * 10000.0
+                if divergence_bps > self.config.max_signal_fill_divergence_bps:
+                    self.risk_manager.store.append_event("signal_fill_divergence", {
+                        "symbol": symbol,
+                        "signal_close": str(signal_close),
+                        "fill_price": str(fill_price),
+                        "divergence_bps": round(divergence_bps, 2),
+                        "protective_stop_placed": True,
+                    })
+                    self.risk_manager.halt(
+                        f"Entry for {symbol} filled {divergence_bps:.1f} bps from its signal close; "
+                        f"position protected, review required"
+                    )
+                    return
 
             if not risk_within_cap:
                 self.risk_manager.store.append_event("post_fill_risk_cap_breach", {

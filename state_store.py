@@ -6,11 +6,13 @@ database; run one worker until a server database and distributed locking exist.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
 import time
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -62,6 +64,12 @@ class StateStore:
                     details_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL UNIQUE,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS trades_created_idx ON trades (created_at);
                 INSERT OR IGNORE INTO schema_migrations (version, description)
                 VALUES (1, 'Base schema: state, positions, order_intents, audit_events');
             """)
@@ -276,3 +284,25 @@ class StateStore:
                 }
                 for row in rows
             ]
+
+    def append_trade(self, trade: dict):
+        """Append a trade record; identical payloads are deduplicated by hash."""
+        payload = json.dumps(trade, allow_nan=False, separators=(",", ":"))
+        source_id = "runtime:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        created_at = str(trade.get("timestamp") or datetime.now(timezone.utc).isoformat())
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR IGNORE INTO trades(source_id,payload,created_at) VALUES(?,?,?)",
+                (source_id, payload, created_at),
+            )
+            conn.commit()
+
+    def list_trades(self, limit=5000) -> list:
+        """Return trades oldest-first, matching the PostgreSQL store's ordering."""
+        limit = max(1, min(int(limit), 20000))
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT payload FROM trades ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in reversed(rows)]

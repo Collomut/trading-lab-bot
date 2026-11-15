@@ -41,6 +41,9 @@ class Position:
     break_even_activated: bool = False
     exit_policy: str = "risk_managed"
     accounting_complete: bool = True
+    route: str = ""        # Router-selected strategy id at entry
+    regime: str = ""       # Market regime observed at entry
+    simulated: bool = False  # True when opened on a virtual wallet
 
     @property
     def cost_basis(self) -> float:
@@ -91,6 +94,12 @@ class TradeRecord:
     reason: str  # Why the trade was closed
     fee: float | None = 0.0
     accounting_complete: bool = True
+    strategy: str = ""       # Which candidate strategy produced the trade
+    route: str = ""          # Router-selected strategy id at entry ("" when direct)
+    regime: str = ""         # Market regime observed at entry ("" when unavailable)
+    r_multiple: float | None = None  # Gross price R multiple vs initial stop distance
+    order_id: str = ""
+    simulated: bool = False  # True when the trade was executed on a virtual wallet
 
     @property
     def is_winner(self) -> bool:
@@ -220,6 +229,7 @@ class RiskManager:
         # state is also a risk control: unreadable state must halt new entries.
         self._load_daily_state()
         self._load_positions()
+        self._load_trade_history()
 
     @property
     def daily_state_path(self) -> Path:
@@ -374,6 +384,57 @@ class RiskManager:
             self._is_halted = True
             self._halt_reason = "Open-position state is unreadable; operator reconciliation required"
             logger.error("Failed to load persisted positions; new entries halted: %s", type(e).__name__)
+
+    def _load_trade_history(self):
+        """Hydrate in-memory TradeRecords from the durable store so performance
+        reporting matches the dashboard across restarts on both backends."""
+        try:
+            list_trades = getattr(self.store, "list_trades", None)
+            if callable(list_trades):
+                rows = list_trades(20000)
+            else:
+                rows = []
+                trade_log = self.persistence_path.parent / "trades.jsonl"
+                if trade_log.exists():
+                    with open(trade_log, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                rows.append(json.loads(line))
+                            except (ValueError, TypeError):
+                                continue
+            for trade in rows:
+                if not isinstance(trade, dict) or trade.get("action") != "SELL":
+                    continue
+                try:
+                    record = TradeRecord(
+                        symbol=str(trade.get("symbol", "")),
+                        side="long",
+                        entry_price=float(trade.get("entry_price", 0.0)),
+                        exit_price=float(trade.get("price", 0.0)),
+                        amount=float(trade.get("amount", 0.0)),
+                        entry_time=str(trade.get("entry_time", "")),
+                        exit_time=str(trade.get("timestamp", "")),
+                        pnl=float(trade["pnl"]) if trade.get("pnl") is not None else None,
+                        pnl_pct=float(trade["pnl_pct"]) if trade.get("pnl_pct") is not None else None,
+                        reason=str(trade.get("reason", "")),
+                        fee=float(trade["fee"]) if trade.get("fee") is not None else None,
+                        accounting_complete=trade.get("accounting_complete") is not False,
+                        strategy=str(trade.get("strategy", "")),
+                        route=str(trade.get("route", "")),
+                        regime=str(trade.get("regime", "")),
+                        r_multiple=float(trade["r_multiple"]) if trade.get("r_multiple") is not None else None,
+                        order_id=str(trade.get("order_id", "")),
+                        simulated=bool(trade.get("simulated", False)),
+                    )
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if record.symbol and record.entry_price > 0 and record.exit_price > 0 and record.amount > 0:
+                    self.trade_history.append(record)
+        except Exception as exc:
+            logger.warning("Could not hydrate trade history from durable store: %s", type(exc).__name__)
 
     def resume_after_reconciliation(self):
         """Only clear transient exchange-reconciliation halts after clean state."""
@@ -680,6 +741,9 @@ class RiskManager:
         stop_loss_override: float | None = None,
         take_profit_override: float | None = None,
         exit_policy: str = "risk_managed",
+        route: str = "",
+        regime: str = "",
+        simulated: bool = False,
     ) -> Position:
         """Record and persist a new open position."""
         if exit_policy not in {"risk_managed", "ema72_signal", "downtrend_rsi_recovery"}:
@@ -710,6 +774,9 @@ class RiskManager:
             highest_price=entry_price,
             break_even_activated=False,
             exit_policy=exit_policy,
+            route=route,
+            regime=regime,
+            simulated=simulated,
         )
         self.open_positions[symbol] = position
         if not self._save_positions():
@@ -810,6 +877,18 @@ class RiskManager:
             pnl = None
             pnl_pct = None
 
+        strategy = {
+            "ema72_signal": "macro_donchian_ema72",
+            "downtrend_rsi_recovery": "downtrend_rsi_recovery_testnet",
+            "risk_managed": "risk_managed",
+        }.get(position.exit_policy, position.exit_policy)
+        risk_distance = position.entry_price - position.stop_loss_price
+        r_multiple = (
+            ((exit_price - position.entry_price) / risk_distance)
+            if risk_distance > 0 and math.isfinite(risk_distance)
+            else None
+        )
+
         record = TradeRecord(
             symbol=symbol,
             side=position.side,
@@ -823,6 +902,12 @@ class RiskManager:
             reason=reason,
             fee=total_fee,
             accounting_complete=accounting_complete,
+            strategy=strategy,
+            route=getattr(position, "route", "") or "",
+            regime=getattr(position, "regime", "") or "",
+            r_multiple=r_multiple,
+            order_id=getattr(position, "order_id", "") or "",
+            simulated=bool(getattr(position, "simulated", False)),
         )
         self.trade_history.append(record)
         if not accounting_complete:
