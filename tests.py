@@ -2048,6 +2048,31 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         self.assertFalse(router["entry_route_enabled"])
         self.assertIn("PF < 1", router["reason"])
 
+    def test_equity_circuit_breakers_still_run_when_reconciliation_fails(self):
+        import threading
+        from decimal import Decimal
+
+        bot = object.__new__(TradingBot)
+        bot._cycle_lock = threading.Lock()
+        bot.config = SimpleNamespace(validate=lambda: [], strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]))
+        bot._cycle_count = 0
+        bot._reconcile_exchange_state = Mock(return_value=False)
+        bot._last_reconciliation_ok = False
+        bot._bot_managed_equity = Mock(return_value=Decimal("10000"))
+        bot.risk_manager = SimpleNamespace(
+            monitor_equity=Mock(return_value=True),
+            _halt_reason="", _is_halted=False, open_positions={},
+        )
+        bot.check_stop_loss_take_profit = Mock()
+
+        result = bot.run_cycle()
+
+        self.assertFalse(result)
+        # Loss limits still fire on stale-but-local equity during an outage.
+        bot.risk_manager.monitor_equity.assert_called_once_with(10000.0, account_reconciled=False)
+        # Order activity (soft stop/target monitoring) stays blocked until reconciliation.
+        bot.check_stop_loss_take_profit.assert_not_called()
+
     def test_candle_gap_is_saved_as_an_auditable_market_data_issue(self):
         bot = object.__new__(TradingBot)
         bot.config = SimpleNamespace(strategy=SimpleNamespace(timeframe="1h", lookback_candles=150))

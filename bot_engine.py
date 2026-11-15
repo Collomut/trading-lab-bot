@@ -2257,6 +2257,25 @@ class TradingBot:
         finally:
             self._cycle_lock.release()
 
+    def _enforce_equity_circuit_breakers(self) -> None:
+        """Enforce local daily-loss / rolling-drawdown halt checks.
+
+        These value bot-managed equity from cached cash plus positions marked at
+        current ticker prices. They never place an order and may only HALT (never
+        clear a halt, since a legacy-equity halt clear requires a reconciled
+        account). Safe to run even when exchange reconciliation has failed, so
+        loss limits keep firing during an outage instead of being skipped.
+        """
+        try:
+            equity = self._bot_managed_equity()
+            if not self.risk_manager.monitor_equity(
+                float(equity), account_reconciled=self._last_reconciliation_ok
+            ):
+                logger.error("Equity risk circuit breaker is active: %s", self.risk_manager._halt_reason)
+        except Exception:
+            self.risk_manager.halt("Account equity valuation failed; operator review required")
+            logger.exception("Equity valuation failed; new orders blocked")
+
     def run_cycle(self) -> bool:
         """Run one serialized, validated risk-monitoring and strategy cycle."""
         if not self._cycle_lock.acquire(blocking=False):
@@ -2270,16 +2289,12 @@ class TradingBot:
 
             self._cycle_count += 1
             if not self._reconcile_exchange_state():
+                # Reconciliation blocks all order activity, but the local loss-limit
+                # circuit breakers must still run so drawdown limits are enforced
+                # during an outage rather than skipped until the next clean cycle.
+                self._enforce_equity_circuit_breakers()
                 return False
-            try:
-                equity = self._bot_managed_equity()
-                if not self.risk_manager.monitor_equity(
-                    float(equity), account_reconciled=self._last_reconciliation_ok
-                ):
-                    logger.error("Equity risk circuit breaker is active: %s", self.risk_manager._halt_reason)
-            except Exception as exc:
-                self.risk_manager.halt("Account equity valuation failed; operator review required")
-                logger.error("Equity valuation failed; new orders blocked (%s)", type(exc).__name__)
+            self._enforce_equity_circuit_breakers()
             try:
                 self.check_stop_loss_take_profit()
             except Exception:

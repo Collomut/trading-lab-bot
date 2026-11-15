@@ -73,6 +73,12 @@ validation and only "won" the reused 2026 slice — in-sample selection.
   train/validation drawdown. `research/backtest_ema72_donchian.py` replays the
   same rule so the committed results match production. This is a robustness
   change, not a profitability claim.
+- **Equity circuit breakers during reconciliation outage** (`bot_engine.py`):
+  `run_cycle` now runs the local daily-loss / rolling-drawdown halts even when
+  exchange reconciliation fails, instead of returning before them. Order
+  activity (soft stop/target monitoring) stays blocked until a clean
+  reconciliation, so loss limits keep firing during an outage without placing
+  orders on an unverified account.
 
 ## Remaining launch blockers (unchanged)
 
