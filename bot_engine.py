@@ -1109,13 +1109,14 @@ class TradingBot:
             return None, False
 
     @staticmethod
-    def _net_base_filled(order: dict, symbol: str) -> Decimal | None:
-        """Account for commission charged in the received base asset.
+    def _order_fee_entries(order: dict) -> list[dict] | None:
+        """Normalize an order response into ``{currency, cost}`` fee entries.
 
-        Return None when the order response lacks fee data; silently assuming
-        zero base commission would make local quantity disagree with the wallet.
+        Handles the three shapes CCXT may return (a ``fees`` list, a single
+        ``fee`` dict, or Binance ``info.fills[].commission*``) and returns None
+        when fee data is absent or malformed so callers fail closed instead of
+        assuming a zero commission.
         """
-        base = symbol.split("/")[0]
         fees = order.get("fees")
         if fees is None:
             fee = order.get("fee")
@@ -1128,6 +1129,19 @@ class TradingBot:
             return None
         if not isinstance(fees, list) or any(not isinstance(fee, dict) for fee in fees):
             return None
+        return fees
+
+    @staticmethod
+    def _net_base_filled(order: dict, symbol: str) -> Decimal | None:
+        """Account for commission charged in the received base asset.
+
+        Return None when the order response lacks fee data; silently assuming
+        zero base commission would make local quantity disagree with the wallet.
+        """
+        base = symbol.split("/")[0]
+        fees = TradingBot._order_fee_entries(order)
+        if not fees:
+            return None
         try:
             filled = Decimal(str(order.get("filled")))
             base_fee = sum((Decimal(str(fee.get("cost") or 0)) for fee in fees if fee.get("currency") == base), Decimal("0"))
@@ -1137,26 +1151,26 @@ class TradingBot:
             return None
 
     @staticmethod
-    def _fee_quote_cost(order: dict, symbol: str, fill_price: float) -> float | None:
-        """Convert reported base/quote fees into quote currency; unknown assets are ambiguous."""
+    def _fee_quote_cost(order: dict, symbol: str, fill_price: float, third_asset_prices: dict[str, float] | None = None) -> float | None:
+        """Convert reported fees into quote currency.
+
+        Base fees use the fill price; third-asset fees (e.g. BNB) use the
+        provided contemporaneous ``third_asset_prices`` mapping (currency ->
+        price in quote). Any fee whose currency cannot be priced is ambiguous
+        and returns None so the caller fails closed rather than miscounting.
+        """
         base, quote = symbol.split("/", 1)
-        fees = order.get("fees")
-        if fees is None:
-            fee = order.get("fee")
-            fees = [fee] if isinstance(fee, dict) else None
+        fees = TradingBot._order_fee_entries(order)
         if not fees:
-            fills = (order.get("info") or {}).get("fills")
-            if isinstance(fills, list) and fills:
-                fees = [{"currency": f.get("commissionAsset"), "cost": f.get("commission")} for f in fills]
-        if not isinstance(fees, list) or not fees:
             return None
+        third_asset_prices = third_asset_prices or {}
         total = Decimal("0")
         try:
             price = Decimal(str(fill_price))
             if not price.is_finite() or price <= 0:
                 return None
             for fee in fees:
-                if not isinstance(fee, dict) or fee.get("cost") is None:
+                if fee.get("cost") is None:
                     return None
                 cost = Decimal(str(fee["cost"] or 0))
                 currency = fee.get("currency")
@@ -1166,6 +1180,11 @@ class TradingBot:
                     total += cost
                 elif currency == base:
                     total += cost * price
+                elif currency in third_asset_prices:
+                    third_price = third_asset_prices[currency]
+                    if third_price is None or not math.isfinite(float(third_price)) or float(third_price) <= 0:
+                        return None
+                    total += cost * Decimal(str(third_price))
                 else:
                     # Fee conversion requires a contemporaneous third-asset quote.
                     return None
@@ -1174,9 +1193,34 @@ class TradingBot:
         except (InvalidOperation, TypeError, ValueError):
             return None
 
+    def _third_asset_fee_prices(self, order: dict, symbol: str) -> dict[str, float]:
+        """Resolve quote prices for any fee currency that is neither base nor quote."""
+        base, quote = symbol.split("/", 1)
+        fees = self._order_fee_entries(order)
+        if not fees:
+            return {}
+        third = {fee.get("currency") for fee in fees if fee.get("currency") not in (base, quote)}
+        prices: dict[str, float] = {}
+        for currency in third:
+            if not currency:
+                continue
+            try:
+                price = self.exchange.get_current_price(f"{currency}/{quote}")
+            except Exception:
+                price = None
+            if price is not None:
+                try:
+                    value = float(price)
+                    if math.isfinite(value) and value > 0:
+                        prices[currency] = value
+                except (TypeError, ValueError):
+                    continue
+        return prices
+
     def _resolve_fee_quote_cost(self, order: dict, symbol: str, fill_price: float) -> float | None:
         """Use order fees, then verified per-fill fees; never assume missing fees are zero."""
-        fee_cost = self._fee_quote_cost(order, symbol, fill_price)
+        third_asset_prices = self._third_asset_fee_prices(order, symbol)
+        fee_cost = self._fee_quote_cost(order, symbol, fill_price, third_asset_prices)
         if fee_cost is not None:
             return fee_cost
         if not isinstance(order, dict):
@@ -1229,7 +1273,8 @@ class TradingBot:
         verified_order = {
             "fees": [{"currency": currency, "cost": str(cost)} for currency, cost in aggregated.items()]
         }
-        return self._fee_quote_cost(verified_order, symbol, fill_price)
+        third_asset_prices = self._third_asset_fee_prices(verified_order, symbol)
+        return self._fee_quote_cost(verified_order, symbol, fill_price, third_asset_prices)
 
     @staticmethod
     def _return_correlation(candles_a: list, candles_b: list) -> float | None:

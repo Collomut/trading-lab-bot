@@ -2347,6 +2347,28 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             {"fee": {"currency": "BNB", "cost": "0.01"}}, "BTC/USDT", 50000
         ))
 
+    def test_fee_accounting_converts_third_asset_fee_when_priced(self):
+        # BNB fee on a BTC/USDT trade, priced via a contemporaneous BNB/USDT quote.
+        self.assertAlmostEqual(TradingBot._fee_quote_cost(
+            {"fees": [{"currency": "BNB", "cost": "0.01"}]}, "BTC/USDT", 50000,
+            third_asset_prices={"BNB": 300.0},
+        ), 3.0)
+        # A missing third-asset price still fails closed rather than miscounting.
+        self.assertIsNone(TradingBot._fee_quote_cost(
+            {"fees": [{"currency": "BNB", "cost": "0.01"}]}, "BTC/USDT", 50000,
+            third_asset_prices={},
+        ))
+
+    def test_resolve_fee_quote_cost_prices_third_asset_via_exchange(self):
+        bot = object.__new__(TradingBot)
+        bot.exchange = Mock()
+        bot.exchange.get_current_price.return_value = 300.0
+        order = {"id": "order-1", "filled": "1.0", "fees": [{"currency": "BNB", "cost": "0.02"}]}
+        self.assertAlmostEqual(bot._resolve_fee_quote_cost(order, "BTC/USDT", 100.0), 6.0)
+        # An unavailable third-asset price must fail closed.
+        bot.exchange.get_current_price.return_value = None
+        self.assertIsNone(bot._resolve_fee_quote_cost(order, "BTC/USDT", 100.0))
+
     def test_fee_accounting_recovers_verified_order_fill_fees(self):
         bot = object.__new__(TradingBot)
         bot.exchange = Mock()
