@@ -2036,6 +2036,67 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
 # 6. Bot Engine Order Lifecycle Suite
 # ==============================================================================
 
+class FakeExchange:
+    """Deterministic in-memory exchange used for end-to-end round-trip tests.
+
+    Models a single quote-balance wallet with realistic taker fees: buy fees are
+    charged in the received base asset, sell fees in the quote asset, both at a
+    configurable rate. This lets a test drive the real order-submission and
+    close-accounting paths and then assert that the bot's realized PnL exactly
+    equals the wallet's quote-balance delta (no accounting drift).
+    """
+
+    def __init__(self, quote_balance: float, price: float, fee_rate: float = 0.001):
+        self.quote = Decimal(str(quote_balance))
+        self.base = Decimal("0")
+        self.price = Decimal(str(price))
+        self.fee_rate = Decimal(str(fee_rate))
+        self._order_seq = 0
+        self.prices: dict[str, Decimal] = {}
+
+    def set_price(self, symbol: str, price: float) -> None:
+        self.prices[symbol] = Decimal(str(price))
+
+    def get_current_price(self, symbol: str) -> float:
+        return float(self.prices.get(symbol, self.price))
+
+    def _next_id(self, side: str) -> str:
+        self._order_seq += 1
+        return f"{side}-{self._order_seq}"
+
+    def place_market_buy(self, symbol: str, amount: str, client_id: str) -> dict:
+        base = symbol.split("/")[0]
+        price = self.prices.get(symbol, self.price)
+        amount_d = Decimal(amount)
+        cost = amount_d * price
+        fee_base = amount_d * self.fee_rate
+        self.quote -= cost
+        self.base += (amount_d - fee_base)
+        return {
+            "id": self._next_id("buy"),
+            "status": "closed",
+            "filled": float(amount_d),
+            "average": float(price),
+            "fees": [{"currency": base, "cost": str(fee_base)}],
+        }
+
+    def place_market_sell(self, symbol: str, amount: str, client_id: str) -> dict:
+        quote = symbol.split("/")[1]
+        price = self.prices.get(symbol, self.price)
+        amount_d = Decimal(amount)
+        proceeds = amount_d * price
+        fee_quote = proceeds * self.fee_rate
+        self.quote += (proceeds - fee_quote)
+        self.base -= amount_d
+        return {
+            "id": self._next_id("sell"),
+            "status": "closed",
+            "filled": float(amount_d),
+            "average": float(price),
+            "fees": [{"currency": quote, "cost": str(fee_quote)}],
+        }
+
+
 class TestBotEngineOrderLifecycle(unittest.TestCase):
     """Verifies complete order execution, fee deduction, stop loss synchronization, recovery, and alerts."""
 
@@ -2368,6 +2429,59 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         # An unavailable third-asset price must fail closed.
         bot.exchange.get_current_price.return_value = None
         self.assertIsNone(bot._resolve_fee_quote_cost(order, "BTC/USDT", 100.0))
+
+    def test_full_round_trip_reconciles_wallet_delta_to_realized_pnl(self):
+        # End-to-end: drive the real order-submission and close paths against a
+        # deterministic wallet, then assert realized PnL equals the wallet delta.
+        with TemporaryDirectory() as persistence_dir:
+            fake = FakeExchange(quote_balance=10000.0, price=100.0, fee_rate=0.001)
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(enable_notifications=False)
+            bot.exchange = fake
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
+
+            symbol = "BTC/USDT"
+            entry_price = 100.0
+            exit_price = 110.0
+            fake.set_price(symbol, entry_price)
+
+            # BUY through the real submission/journaling path.
+            buy_order, buy_client_id = bot._submit_market_order(symbol, "buy", 1.0, "e2e-buy")
+            self.assertEqual(buy_order["status"], "closed")
+
+            # Compute net base and entry fee exactly as the entry path does.
+            net_amount = float(bot._net_base_filled(buy_order, symbol))
+            entry_fee = bot._resolve_fee_quote_cost(buy_order, symbol, entry_price)
+            self.assertIsNotNone(net_amount)
+            self.assertIsNotNone(entry_fee)
+            position = bot.risk_manager.open_position(
+                symbol, entry_price, net_amount, entry_fee_quote=entry_fee,
+                order_id=buy_order["id"],
+            )
+            self.assertIsNotNone(position)
+
+            # SELL through the real signal handler.
+            fake.set_price(symbol, exit_price)
+            signal = SimpleNamespace(symbol=symbol, reason="e2e exit", confidence=1.0)
+            bot._handle_sell_signal(signal, "e2e-sell")
+
+            self.assertNotIn(symbol, bot.risk_manager.open_positions)
+            ledger = bot.risk_manager.trade_ledger()
+            self.assertEqual(len(ledger), 1)
+            row = ledger[0]
+            self.assertTrue(row["accounting_complete"])
+            self.assertIsNotNone(row["net_pnl"])
+
+            # Money invariant: realized net PnL must equal the wallet's quote delta.
+            wallet_delta = float(fake.quote) - 10000.0
+            self.assertAlmostEqual(row["net_pnl"], wallet_delta, places=6)
+            # 1.0 base * 0.001 = 0.001 base fee (entry) = $0.10; sell fee is quote.
+            self.assertAlmostEqual(row["fee"], 0.20989, places=6)
+
+            summary = bot.risk_manager.get_performance_summary()
+            self.assertAlmostEqual(summary["total_fees"], 0.21, places=6)
+            self.assertAlmostEqual(summary["total_pnl"], 9.78, places=6)
 
     def test_fee_accounting_recovers_verified_order_fill_fees(self):
         bot = object.__new__(TradingBot)
