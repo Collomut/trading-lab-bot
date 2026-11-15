@@ -449,7 +449,13 @@ class DowntrendRsiRecoveryTestnetStrategy:
     """Low-risk, experimental long-only downtrend recovery route for Testnet.
 
     The regime router must first confirm a stable downtrend. Entry then waits
-    for RSI(14) to recover through 40. The execution layer applies a 0.20%
+    for RSI(14) to recover through a configurable oversold level (default 25).
+    The default was lowered from the original 40 after a cost-adjusted sweep
+    (research/backtest_downtrend_variants.py): the deeper trigger had a higher
+    profit factor in the 2024-2025 validation (1.26 vs 0.29) and 2026 review
+    (1.55 vs 1.01) slices at the cost of fewer entries. No long-only downtrend
+    candidate passed the profit-factor screen in all three slices, so this
+    remains entry-disabled by default. The execution layer applies a 0.20%
     equity risk budget, a four-percent-capped swing stop, and a 2-ATR target.
     This is not a validated live-market strategy.
     """
@@ -457,6 +463,12 @@ class DowntrendRsiRecoveryTestnetStrategy:
     MIN_CANDLES = 2500
     INTERVAL = pd.Timedelta(hours=1)
     STRATEGY_ID = "downtrend_rsi_recovery_testnet"
+
+    def __init__(self, rsi_recovery_level: float = 25.0):
+        value = float(rsi_recovery_level)
+        if not math.isfinite(value) or not 10.0 <= value <= 45.0:
+            raise ValueError("rsi_recovery_level must be a finite value between 10 and 45")
+        self.rsi_recovery_level = value
 
     def analyze(self, df: pd.DataFrame, symbol: str, *, in_position: bool = False) -> TradeSignal:
         if df is None or len(df) < self.MIN_CANDLES or not {"high", "low", "close"}.issubset(df.columns):
@@ -491,7 +503,7 @@ class DowntrendRsiRecoveryTestnetStrategy:
         atr_pct = atr_now / close_now * 100.0
         trend_ok = close_now < ema200_now and ema200_now < ema200_prev
         regime_ok = adx_now >= 25.0 and atr_pct <= 3.0
-        entry_ready = trend_ok and regime_ok and rsi_prev < 40.0 <= rsi_now
+        entry_ready = trend_ok and regime_ok and rsi_prev < self.rsi_recovery_level <= rsi_now
         exit_ready = close_now > ema20_now or rsi_now > 70.0
         indicators = {
             "strategy": self.STRATEGY_ID,
@@ -504,6 +516,7 @@ class DowntrendRsiRecoveryTestnetStrategy:
             "atr": atr_now,
             "atr_pct": atr_pct,
             "swing_low_5": swing_now,
+            "rsi_recovery_level": self.rsi_recovery_level,
             "entry_ready": entry_ready,
             "exit_ready": exit_ready,
             "risk_multiplier": 0.20,
@@ -513,7 +526,7 @@ class DowntrendRsiRecoveryTestnetStrategy:
                 return TradeSignal(Signal.SELL, symbol, 0.85, "Completed 1h close above EMA20 or RSI above 70", indicators)
             return TradeSignal(Signal.HOLD, symbol, 0.0, "Recovery position open; waiting for EMA20 or RSI exit", indicators)
         if entry_ready:
-            return TradeSignal(Signal.BUY, symbol, 0.65, "Downtrend recovery: RSI crossed above 40 after stable regime confirmation", indicators)
+            return TradeSignal(Signal.BUY, symbol, 0.65, f"Downtrend recovery: RSI crossed above {self.rsi_recovery_level:g} after stable regime confirmation", indicators)
         return TradeSignal(Signal.HOLD, symbol, 0.0, "No RSI recovery entry in the confirmed downtrend", indicators)
 
 

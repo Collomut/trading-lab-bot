@@ -69,12 +69,28 @@ class StrategyConfig:
     # Entry-only volatility ceiling for the EMA72 Donchian profile. Kept separate
     # from MAX_ATR_PCT so the legacy combined-strategy default cannot leak in.
     ema72_max_atr_pct: float = float(os.getenv("EMA72_MAX_ATR_PCT", "2.5"))
+    # Distant take-profit backstop for the EMA72 candidate, in ATR14 multiples.
+    # 100.0 approximates an uncapped target (trend-following: low win rate, high
+    # payoff). Lowering it to 2.0 raises the win rate to ~60% but cuts the trend
+    # payoff; see research/backtest_readiness_analysis.py for the measured
+    # accuracy-vs-profit-factor trade-off.
+    ema72_take_profit_atr_multiple: float = float(os.getenv("EMA72_TAKE_PROFIT_ATR_MULTIPLE", "100"))
     # Opt-in only: the downtrend RSI recovery experiment is entry-disabled by
     # default because its independent replay was net-negative (PF < 1) in every
     # historical slice. Takes effect only under STRATEGY=dynamic_regime.
     enable_downtrend_recovery_testnet: bool = field(default_factory=lambda: _env_bool("ENABLE_DOWNTEND_RECOVERY_TESTNET", False))
+    # RSI(14) recovery level for the opt-in downtrend experiment. The default
+    # was lowered from 40 to 25 after research/backtest_downtrend_variants.py
+    # showed the deeper trigger trades less often but with a higher profit
+    # factor in the 2024-2025 validation and 2026 review slices.
+    downtrend_rsi_recovery_level: float = float(os.getenv("DOWNTREND_RSI_RECOVERY_LEVEL", "25"))
     trading_pairs: list = field(default_factory=lambda: os.getenv(
-        "TRADING_PAIRS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,LINK/USDT"
+        # Default to the three symbols with a validated positive edge. The 2026-11-15
+        # readiness analysis (research/backtest_readiness_analysis.py) and the
+        # independent review (research/MACRO_DONCHIAN_REVIEW.md) both show the
+        # wider 8-symbol universe is net-negative in the 2026 holdout and materially
+        # worsens drawdown. BNB, XRP, ADA, DOGE, LINK remain opt-in via TRADING_PAIRS.
+        "TRADING_PAIRS", "BTC/USDT,ETH/USDT,SOL/USDT"
     ).split(","))
 
 
@@ -197,8 +213,8 @@ class BotConfig:
             errors.append("MAX_DAILY_LOSS_PCT must be greater than 0 and no more than 3%")
         if self.risk.max_rolling_drawdown_pct <= 0 or self.risk.max_rolling_drawdown_pct > 5:
             errors.append("MAX_ROLLING_DRAWDOWN_PCT must be greater than 0 and no more than 5%")
-        if not 1 <= self.risk.max_consecutive_losses <= 3:
-            errors.append("MAX_CONSECUTIVE_LOSSES must be between 1 and 3")
+        if not 1 <= self.risk.max_consecutive_losses <= 5:
+            errors.append("MAX_CONSECUTIVE_LOSSES must be between 1 and 5")
         if not (0 < self.risk.stop_loss_pct <= 10):
             errors.append("STOP_LOSS_PCT must be greater than 0 and no more than 10%")
         if not (0 < self.risk.position_size_pct <= 10):
@@ -212,8 +228,14 @@ class BotConfig:
         if (not math.isfinite(self.strategy.ema72_max_atr_pct)
                 or not (0 < self.strategy.ema72_max_atr_pct <= 5)):
             errors.append("EMA72_MAX_ATR_PCT must be a finite value greater than 0 and no more than 5")
+        if (not math.isfinite(self.strategy.ema72_take_profit_atr_multiple)
+                or not (0 < self.strategy.ema72_take_profit_atr_multiple <= 100)):
+            errors.append("EMA72_TAKE_PROFIT_ATR_MULTIPLE must be a finite value greater than 0 and no more than 100")
         if self.strategy.enable_downtrend_recovery_testnet and self.strategy.name != "dynamic_regime":
             errors.append("ENABLE_DOWNTEND_RECOVERY_TESTNET requires STRATEGY=dynamic_regime")
+        if (not math.isfinite(self.strategy.downtrend_rsi_recovery_level)
+                or not (10 <= self.strategy.downtrend_rsi_recovery_level <= 45)):
+            errors.append("DOWNTREND_RSI_RECOVERY_LEVEL must be a finite value between 10 and 45")
         if self.strategy.name in {"macro_donchian_ema72", "dynamic_regime"}:
             if (not self.exchange.paper_trading or self.exchange.paper_environment not in {"testnet", "demo"}
                     or self.exchange.name.strip().lower() != "binance"):
@@ -234,8 +256,11 @@ class BotConfig:
                 errors.append(f"{self.strategy.name} caps MAX_DAILY_LOSS_PCT at 3%")
             if self.risk.max_rolling_drawdown_pct > 5.0:
                 errors.append(f"{self.strategy.name} caps MAX_ROLLING_DRAWDOWN_PCT at 5%")
-            if self.risk.max_consecutive_losses > 3:
-                errors.append(f"{self.strategy.name} keeps MAX_CONSECUTIVE_LOSSES at 3 or lower")
+            # The 2026-11-15 halt-cap sweep (research/ema72_halt_cap_sweep) showed
+            # the EMA72 route is positive at a 4-loss budget in validation; the
+            # default remains 3 (conservative) but 4-5 is allowed for this profile.
+            if self.risk.max_consecutive_losses > 5:
+                errors.append(f"{self.strategy.name} keeps MAX_CONSECUTIVE_LOSSES at 5 or lower")
         if self.smtp_host and not (1 <= self.smtp_port <= 65535):
             errors.append("SMTP_PORT must be an integer between 1 and 65535")
 

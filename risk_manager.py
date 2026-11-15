@@ -113,6 +113,24 @@ class RiskManager:
 
     EQUITY_BASIS = "usdt_cash_plus_tracked_positions_v1"
 
+    # Route-scoped consecutive-loss budgets. Each strategy route keeps its own
+    # loss streak; reaching the cap halts only that route's new entries, never
+    # the whole portfolio. The legacy "risk_managed" route keeps the original
+    # portfolio-wide behavior for backward compatibility. Research:
+    # research/REGIME_ROUTER_REVIEW.md (a downtrend loss streak must not halt the
+    # better uptrend EMA72 route) and the 2026-11-15 halt-cap sweep.
+    ROUTE_BY_EXIT_POLICY = {
+        "ema72_signal": "uptrend",
+        "downtrend_rsi_recovery": "downtrend",
+        "risk_managed": "legacy",
+    }
+    MANAGED_ROUTES = ("uptrend", "downtrend")
+
+    @classmethod
+    def route_key_for(cls, exit_policy: str) -> str:
+        """Map a position exit policy to a loss-budget route key."""
+        return cls.ROUTE_BY_EXIT_POLICY.get(exit_policy, "legacy")
+
     # Single source of truth for halt-recovery semantics. Halt reason strings are
     # matched by prefix so the recovery path for each halt lives in exactly one
     # place instead of being duplicated across the risk manager, engine, and
@@ -219,6 +237,8 @@ class RiskManager:
         self._daily_starting_equity = 0.0
         self._rolling_peak_equity = 0.0
         self._consecutive_losses = 0
+        self._route_losses: dict[str, int] = {}
+        self._route_halted: dict[str, str] = {}
         self._daily_loss_reset_date = datetime.now(timezone.utc).date()
         self._is_halted = False
         self._halt_reason = ""
@@ -252,10 +272,26 @@ class RiskManager:
             rolling_peak = float(state.get("rolling_peak_equity", 0.0))
             is_halted = state.get("is_halted", False)
             consecutive = int(state.get("consecutive_losses", 0))
+            route_losses = state.get("route_losses", {})
+            route_halted = state.get("route_halted", {})
+            if not isinstance(route_losses, dict) or not isinstance(route_halted, dict):
+                raise ValueError("daily equity risk state contains invalid route data")
+            normalized_losses: dict[str, int] = {}
+            for key, value in route_losses.items():
+                if not isinstance(key, str) or not isinstance(value, (int, float)) or int(value) < 0:
+                    raise ValueError("daily equity risk state contains invalid route data")
+                normalized_losses[key] = int(value)
+            normalized_halted: dict[str, str] = {}
+            for key, value in route_halted.items():
+                if not isinstance(key, str) or not isinstance(value, str) or not value:
+                    raise ValueError("daily equity risk state contains invalid route data")
+                normalized_halted[key] = value[:500]
             if (not math.isfinite(daily_loss) or not isinstance(is_halted, bool) or
                     not math.isfinite(daily_start) or daily_start < 0 or
                     not math.isfinite(rolling_peak) or rolling_peak < 0 or consecutive < 0):
                 raise ValueError("daily equity risk state contains invalid values")
+            self._route_losses = normalized_losses
+            self._route_halted = normalized_halted
             self._equity_basis = state.get("equity_basis")
             basis_matches = self._equity_basis == self.EQUITY_BASIS
             prior_equity_baseline_exists = daily_start > 0 or rolling_peak > 0
@@ -287,6 +323,15 @@ class RiskManager:
                 self._is_halted = True
                 if not self._halt_reason:
                     self._halt_reason = f"Consecutive loss limit persists ({self._consecutive_losses}); entries paused"
+            # Route-scoped crash survival: a route's durable loss count proves the
+            # limit was reached even if the corresponding route-halt write was lost.
+            for route in self.MANAGED_ROUTES:
+                if (self._route_losses.get(route, 0) >= self.config.max_consecutive_losses
+                        and route not in self._route_halted):
+                    self._route_halted[route] = (
+                        f"Consecutive loss limit persists ({self._route_losses[route]}); "
+                        f"{route} route entries paused"
+                    )
         except Exception as exc:
             # Fail closed: corrupt state should prevent new orders until reconciled.
             self._is_halted = True
@@ -301,6 +346,8 @@ class RiskManager:
             "rolling_peak_equity": self._rolling_peak_equity,
             "equity_basis": self._equity_basis,
             "consecutive_losses": self._consecutive_losses,
+            "route_losses": self._route_losses,
+            "route_halted": self._route_halted,
             "is_halted": self._is_halted,
             "halt_reason": self._halt_reason,
         }
@@ -569,8 +616,13 @@ class RiskManager:
             return False
         return True
 
-    def can_open_position(self, symbol: str, portfolio_value: float) -> tuple[bool, str]:
-        """Check if opening a new position complies with risk rules."""
+    def can_open_position(self, symbol: str, portfolio_value: float, route: str | None = None) -> tuple[bool, str]:
+        """Check if opening a new position complies with risk rules.
+
+        ``route`` is the loss-budget route key (``uptrend``, ``downtrend``, or
+        ``legacy``). When provided, a route-scoped consecutive-loss halt blocks
+        only that route; omitted routes use the legacy portfolio-wide behavior.
+        """
         self._reset_daily_if_needed()
 
         mode = self.entry_mode()
@@ -579,6 +631,9 @@ class RiskManager:
 
         if self._is_halted:
             return False, f"Trading halted: {self._halt_reason}"
+
+        if route is not None and route in self._route_halted:
+            return False, self._route_halted[route]
 
         if len(self.open_positions) >= self.config.max_open_positions:
             return False, (
@@ -601,6 +656,32 @@ class RiskManager:
             return False, self._halt_reason
 
         return True, "OK"
+
+    def route_halts(self) -> dict[str, str]:
+        """Snapshot of route-scoped consecutive-loss halts (route -> reason)."""
+        return dict(self._route_halted)
+
+    def clear_route_halts(self) -> bool:
+        """Clear route-scoped consecutive-loss halts after operator review.
+
+        Resets only the halted routes' streaks. The portfolio-wide halt, daily
+        loss, and rolling drawdown controls are untouched.
+        """
+        if not self._route_halted:
+            return False
+        previous_halted = dict(self._route_halted)
+        previous_losses = dict(self._route_losses)
+        self._route_halted = {}
+        for route in previous_halted:
+            self._route_losses[route] = 0
+        try:
+            self._save_daily_state()
+            self.store.append_event("route_loss_halt_cleared", {"routes": list(previous_halted)})
+            return True
+        except Exception:
+            self._route_halted = previous_halted
+            self._route_losses = previous_losses
+            return False
 
     def set_exit_only(self):
         """Durably stop new entries while retaining existing position monitoring."""
@@ -915,15 +996,28 @@ class RiskManager:
             return record
 
         self._daily_loss += pnl
-        self._consecutive_losses = self._consecutive_losses + 1 if pnl < 0 else 0
+        route_key = self.route_key_for(position.exit_policy)
+        is_loss = pnl < 0
+        self._route_losses[route_key] = self._route_losses.get(route_key, 0) + 1 if is_loss else 0
+        if route_key == "legacy":
+            self._consecutive_losses = self._consecutive_losses + 1 if is_loss else 0
         try:
             self._save_daily_state()
         except Exception:
             # The exit is already durable, but daily drawdown state is not.
             # Preserve the completed close and prevent any further entries.
             return record
-        if self._consecutive_losses >= self.config.max_consecutive_losses:
+        if route_key == "legacy" and self._consecutive_losses >= self.config.max_consecutive_losses:
             self.halt(f"Consecutive loss limit reached ({self._consecutive_losses}); entries paused")
+        elif route_key in self.MANAGED_ROUTES and self._route_losses[route_key] >= self.config.max_consecutive_losses:
+            reason = f"Consecutive loss limit reached ({self._route_losses[route_key]}); {route_key} route entries paused"
+            self._route_halted[route_key] = reason
+            try:
+                self._save_daily_state()
+            except Exception:
+                return record
+            self.store.append_event("route_loss_halt", {"route": route_key, "reason": reason})
+            logger.warning("🛑 Route-scoped loss halt: %s", reason)
 
         emoji = "💰" if pnl >= 0 else "💸"
         logger.info(
