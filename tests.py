@@ -293,6 +293,20 @@ class TestConfigurationAndValidation(unittest.TestCase):
         ])
         self.assertEqual(strategy.min_trend_adx, 20.0)
 
+    def test_ema72_volatility_band_default_and_bounds(self):
+        self.assertEqual(StrategyConfig().ema72_max_atr_pct, 2.5)
+        cfg = BotConfig()
+        cfg.dashboard_token = "test_secret_token"
+        self.assertEqual([e for e in cfg.validate() if "EMA72_MAX_ATR_PCT" in e], [])
+        for bad in (0.0, -1.0, 5.5, math.nan, float("inf")):
+            cfg = BotConfig()
+            cfg.dashboard_token = "test_secret_token"
+            cfg.strategy.ema72_max_atr_pct = bad
+            self.assertTrue(
+                any("EMA72_MAX_ATR_PCT" in e for e in cfg.validate()),
+                f"Validation failed to reject ema72_max_atr_pct={bad}",
+            )
+
     def test_fallback_simulation_is_disabled_by_default(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertFalse(ExchangeConfig().fallback_to_simulation)
@@ -691,6 +705,58 @@ class TestTechnicalIndicatorsAndStrategies(unittest.TestCase):
         exit_signal = strategy.analyze(frame, "BTC/USDT", in_position=True)
         self.assertEqual(exit_signal.signal, Signal.SELL)
         self.assertLess(exit_signal.indicators["close"], exit_signal.indicators["ema72"])
+
+    def test_get_strategy_wires_ema72_volatility_band(self):
+        candidate = get_strategy("macro_donchian_ema72", ema72_max_atr_pct=1.25)
+        self.assertEqual(candidate.max_atr_pct, 1.25)
+        routed = get_strategy("dynamic_regime", ema72_max_atr_pct=1.25)
+        self.assertEqual(routed.max_atr_pct, 1.25)
+        legacy = get_strategy("combined", max_atr_pct=4.0, ema72_max_atr_pct=1.25)
+        self.assertEqual(legacy.max_atr_pct, 4.0)
+
+    def test_ema72_donchian_rejects_invalid_volatility_band(self):
+        from strategies import MacroDonchianEma72Strategy
+
+        for bad in (0.0, -2.5, math.nan, float("inf")):
+            with self.assertRaises(ValueError):
+                MacroDonchianEma72Strategy(max_atr_pct=bad)
+
+    def test_ema72_donchian_atr_band_blocks_only_high_volatility_entries(self):
+        from strategies import MacroDonchianEma72Strategy
+
+        index = pd.date_range("2025-01-01", periods=2500, freq="1h")
+        close = np.full(2500, 100.0)
+        high = np.full(2500, 105.0)
+        low = np.full(2500, 95.0)
+        close[-1], high[-1], low[-1] = 110.0, 111.0, 99.0
+        frame = pd.DataFrame({"open": close, "high": high, "low": low, "close": close,
+                              "volume": 10.0}, index=index)
+
+        blocked = MacroDonchianEma72Strategy().analyze(frame, "BTC/USDT")
+        self.assertEqual(blocked.signal, Signal.HOLD)
+        self.assertIn("volatility band", blocked.reason)
+        self.assertGreater(blocked.indicators["atr_pct"], blocked.indicators["max_atr_pct"])
+        self.assertEqual(blocked.indicators["max_atr_pct"], 2.5)
+        self.assertTrue(blocked.indicators["breakout_ready"])
+        self.assertFalse(blocked.indicators["entry_ready"])
+
+        allowed = MacroDonchianEma72Strategy(max_atr_pct=12.0).analyze(frame, "BTC/USDT")
+        self.assertEqual(allowed.signal, Signal.BUY)
+
+    def test_ema72_donchian_atr_band_never_blocks_exit(self):
+        from strategies import MacroDonchianEma72Strategy
+
+        index = pd.date_range("2025-01-01", periods=2500, freq="1h")
+        close = np.full(2500, 100.0)
+        high = np.full(2500, 105.0)
+        low = np.full(2500, 95.0)
+        close[-1], high[-1], low[-1] = 90.0, 111.0, 89.0
+        frame = pd.DataFrame({"open": close, "high": high, "low": low, "close": close,
+                              "volume": 10.0}, index=index)
+
+        signal = MacroDonchianEma72Strategy().analyze(frame, "BTC/USDT", in_position=True)
+        self.assertEqual(signal.signal, Signal.SELL)
+        self.assertGreater(signal.indicators["atr_pct"], signal.indicators["max_atr_pct"])
 
     def test_ema72_donchian_holds_on_short_or_gapped_warmup(self):
         from strategies import MacroDonchianEma72Strategy

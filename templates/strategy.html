@@ -39,7 +39,8 @@ function renderMarketChecks(d){
    const agreement=document.createElement('div');agreement.className='vote-agreement';
    const valid=hasDonchianValues;
    const result=document.createElement('strong');result.className=`vote-chip vote-result ${valid?(indicators.entry_ready?'is-buy':'is-wait'):'is-wait'}`;
-   result.textContent=valid?`EMA72 strategy · ${indicators.entry_ready?'ENTRY READY':'WAITING FOR ENTRY'}`:'EMA72 strategy · WARMUP / DATA CHECK';agreement.append(result);
+   const atrBlocked=valid&&indicators.breakout_ready===true&&indicators.entry_ready!==true;
+   result.textContent=valid?`EMA72 strategy · ${indicators.entry_ready?'ENTRY READY':atrBlocked?'ENTRY BLOCKED · ATR BAND':'WAITING FOR ENTRY'}`:'EMA72 strategy · WARMUP / DATA CHECK';agreement.append(result);
    const chips=document.createElement('div');chips.className='vote-chips';chips.setAttribute('aria-label','Donchian breakout and EMA strategy rules');
    if(valid){
     const rules=[
@@ -47,6 +48,9 @@ function renderMarketChecks(d){
      ['EMA480 trend',Number(indicators.close)>Number(indicators.ema480),'PASS','BLOCK'],
      ['EMA72 exit',Boolean(indicators.exit_ready),'TRIGGERED','CLEAR'],
     ];
+    if(Number.isFinite(Number(indicators.atr_pct))&&Number.isFinite(Number(indicators.max_atr_pct))){
+     rules.splice(2,0,['ATR band',Number(indicators.atr_pct)<=Number(indicators.max_atr_pct),'PASS','BLOCK']);
+    }
     for(const [name,passed,yes,no] of rules){const chip=document.createElement('span');chip.className=`vote-chip ${name==='EMA72 exit'&&passed?'is-sell':passed?'is-buy':'is-wait'}`;chip.textContent=`${name} · ${passed?yes:no}`;chips.append(chip)}
    }else{
     const chip=document.createElement('span');chip.className='vote-chip is-wait';chip.textContent=readableReason(item?.reason||'Waiting for valid strategy data');chips.append(chip)

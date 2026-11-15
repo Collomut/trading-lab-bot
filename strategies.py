@@ -350,6 +350,15 @@ class MacroDonchianEma72Strategy:
     MIN_CANDLES = 2500
     INTERVAL = pd.Timedelta(hours=1)
 
+    def __init__(self, max_atr_pct: float = 2.5):
+        # Skip entries when ATR14 exceeds this share of price. The tuning sweep
+        # (research/EMA72_TUNING_2026_11_15.md) showed this trims drawdown at
+        # equal profit factor; exits are never gated by volatility.
+        value = float(max_atr_pct)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("max_atr_pct must be a finite value greater than 0")
+        self.max_atr_pct = value
+
     def analyze(self, df: pd.DataFrame, symbol: str, *, in_position: bool = False) -> TradeSignal:
         empty = TradeSignal(Signal.HOLD, symbol, 0.0, "Waiting for 2,500 contiguous hourly candles", {})
         required = {"high", "low", "close"}
@@ -387,9 +396,14 @@ class MacroDonchianEma72Strategy:
                 current_close, macro_value, exit_value, high_value, swing_value, atr_value
             )):
                 raise ValueError("indicator warmup is incomplete")
+            # Matches research/backtest_tune_ema72.py: ATR14 as a percentage of the
+            # completed close. Applied to entries only, never to exits.
+            atr_pct = atr_value / current_close * 100.0
         except (TypeError, ValueError, OverflowError) as exc:
             return TradeSignal(Signal.HOLD, symbol, 0.0, f"Invalid strategy data ({type(exc).__name__})", {})
 
+        breakout_ready = bool(current_close > high_value and current_close > macro_value)
+        atr_within_band = bool(atr_pct <= self.max_atr_pct)
         indicators = {
             "close": current_close,
             "ema480": macro_value,
@@ -397,8 +411,13 @@ class MacroDonchianEma72Strategy:
             "donchian_high168": high_value,
             "swing_low_5": swing_value,
             "atr": atr_value,
+            "atr_pct": atr_pct,
+            "max_atr_pct": self.max_atr_pct,
             "strategy": "macro_donchian_ema72",
-            "entry_ready": bool(current_close > high_value and current_close > macro_value),
+            "breakout_ready": breakout_ready,
+            # entry_ready is the tradeable state: a breakout that also passes the
+            # entry-only volatility band. Templates key their badges off this.
+            "entry_ready": bool(breakout_ready and atr_within_band),
             "exit_ready": bool(current_close < exit_value),
         }
         if in_position:
@@ -410,7 +429,14 @@ class MacroDonchianEma72Strategy:
                 )
             return TradeSignal(Signal.HOLD, symbol, 0.0, "Position open; waiting for a completed close below EMA72", indicators)
 
-        if current_close > high_value and current_close > macro_value:
+        if breakout_ready:
+            if not atr_within_band:
+                return TradeSignal(
+                    Signal.HOLD, symbol, 0.0,
+                    (f"Breakout skipped: ATR14 {atr_pct:.2f}% of price exceeds the "
+                     f"{self.max_atr_pct:.2f}% volatility band"),
+                    indicators,
+                )
             return TradeSignal(
                 Signal.BUY, symbol, 0.85,
                 f"Completed 1h close broke the prior 168-bar high above EMA480",
@@ -712,6 +738,7 @@ def get_strategy(
     regime_filter_enabled: bool = True,
     min_trend_adx: float = 20.0,
     max_atr_pct: float = 3.0,
+    ema72_max_atr_pct: float = 2.5,
 ):
     """Factory function to get a strategy by name."""
     strategies = {
@@ -734,4 +761,8 @@ def get_strategy(
             min_trend_adx=min_trend_adx,
             max_atr_pct=max_atr_pct,
         )
+    if name in {"macro_donchian_ema72", "dynamic_regime"}:
+        # The EMA72 profile uses its own research-validated volatility band so the
+        # legacy MAX_ATR_PCT default for the combined strategy cannot leak in.
+        return MacroDonchianEma72Strategy(max_atr_pct=ema72_max_atr_pct)
     return strategies[name]()

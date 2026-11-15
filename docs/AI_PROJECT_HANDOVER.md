@@ -85,7 +85,7 @@ The router takes 1-hour OHLCV data and is deliberately transparent rather than p
 - **Range:** ADX ≤18 while not high-volatility → no validated candidate, no new entry.
 - **Transition/uncertain/unavailable:** no entry until conditions stabilize and data is valid.
 
-The uptrend candidate looks for a completed 1-hour close breaking the prior 168-bar high while above EMA480; it uses EMA72 as an exit rule. This strategy is not a default live recommendation. The downtrend strategy is **long-only**: after stable downtrend classification, it buys only on RSI14 recovery through 40, exits above EMA20 or RSI 70, uses a prior swing-low stop capped at 4%, and a 2×ATR target. It uses 0.20× normal risk sizing and at most one such open position across the portfolio. Research says this did not pass stress-cost checks.
+The uptrend candidate looks for a completed 1-hour close breaking the prior 168-bar high while above EMA480, and skips the entry when ATR14 exceeds 2.5% of price (entry-only volatility band; exits are never gated); it uses EMA72 as an exit rule. This strategy is not a default live recommendation. The downtrend strategy is **long-only**: after stable downtrend classification, it buys only on RSI14 recovery through 40, exits above EMA20 or RSI 70, uses a prior swing-low stop capped at 4%, and a 2×ATR target. It uses 0.20× normal risk sizing and at most one such open position across the portfolio. Research says this did not pass stress-cost checks.
 
 The router chooses entries for flat symbols. Existing positions keep the exit policy they were opened with. Risk manager and exchange checks continue to control any order; a route selection is not order authorization by itself.
 

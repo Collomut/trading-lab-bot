@@ -35,7 +35,7 @@ SPLITS = {
 }
 
 
-def build_signals(symbol: str) -> pd.DataFrame:
+def build_signals(symbol: str, max_atr_pct: float = 2.5) -> pd.DataFrame:
     path = DATA / f"{symbol}_1h.csv"
     raw = (pd.read_csv(path)
            .drop_duplicates("timestamp_ms")
@@ -55,11 +55,16 @@ def build_signals(symbol: str) -> pd.DataFrame:
     atr = AverageTrueRange(high, low, close, window=14).average_true_range()
     contiguous = raw.timestamp_ms.diff().eq(HOUR_MS).rolling(2500, min_periods=2500).sum().eq(2500)
     ready = contiguous & macro_ema.notna() & exit_ema.notna() & atr.notna()
+    atr_pct = atr / close * 100.0
     buy = ready & close.gt(entry_high) & close.gt(macro_ema)
+    # Production parity: StrategyConfig.ema72_max_atr_pct gates entries only.
+    if max_atr_pct is not None:
+        buy &= atr_pct.le(max_atr_pct)
     sell = ready & close.lt(exit_ema)
 
     result = raw[["timestamp_ms", "open", "high", "low", "close", "volume"]].copy()
     result["atr"] = atr
+    result["atr_pct"] = atr_pct
     result["ema480"] = macro_ema
     result["ema72"] = exit_ema
     result["entry_channel"] = entry_high
@@ -81,7 +86,7 @@ def main() -> dict:
             "candidate": "D168_M480_E72",
             "symbols": list(SYMBOLS),
             "timeframe": "1h",
-            "entry": "completed close > prior 168-bar high and > EMA480",
+            "entry": "completed close > prior 168-bar high and > EMA480, with ATR14 <= 2.5% of close",
             "signal_exit": "completed close < EMA72; filled at next bar open",
             "warmup": "2,500 contiguous completed hourly bars; runtime requests 2,501 raw rows because the latest hour is incomplete",
             "initial_stop": "max(prior 5-bar low, entry fill * 0.96); invalid stops are rejected",

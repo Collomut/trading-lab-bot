@@ -56,6 +56,7 @@ class TradingBot:
             regime_filter_enabled=config.strategy.regime_filter_enabled,
             min_trend_adx=config.strategy.min_trend_adx,
             max_atr_pct=config.strategy.max_atr_pct,
+            ema72_max_atr_pct=config.strategy.ema72_max_atr_pct,
         )
         self.downtrend_recovery_strategy = DowntrendRsiRecoveryTestnetStrategy()
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
@@ -441,7 +442,8 @@ class TradingBot:
             for key in (
                 "market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend",
                 "consensus_required", "entry_gates", "close", "ema480", "ema72",
-                "ema20", "rsi", "donchian_high168", "swing_low_5", "entry_ready", "exit_ready", "strategy",
+                "ema20", "rsi", "donchian_high168", "swing_low_5", "entry_ready", "exit_ready",
+                "breakout_ready", "max_atr_pct", "strategy",
             ):
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):

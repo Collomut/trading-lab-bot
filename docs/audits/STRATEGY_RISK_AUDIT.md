@@ -66,6 +66,13 @@ validation and only "won" the reused 2026 slice — in-sample selection.
 - **Ops/docs**: rotating log handler, `.env.example` completeness, BNB fee
   discount warning, Testnet runbook filename fix, stale EMA72 caveat corrected,
   handover committed.
+- **ATR volatility band** (`strategies.py`): `MacroDonchianEma72Strategy` now
+  takes an entry-only `max_atr_pct` ceiling (default 2.5%), wired through
+  `StrategyConfig.ema72_max_atr_pct` / `EMA72_MAX_ATR_PCT` and `get_strategy()`.
+  Adopted from `v4_atr_band` in the tuning sweep: equal profit factor, lower
+  train/validation drawdown. `research/backtest_ema72_donchian.py` replays the
+  same rule so the committed results match production. This is a robustness
+  change, not a profitability claim.
 
 ## Remaining launch blockers (unchanged)
 
