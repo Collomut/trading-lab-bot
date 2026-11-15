@@ -834,7 +834,10 @@ class WebDashboard:
                 "amount": str(details.get("amount", ""))[:80],
                 "buy_price": str(details.get("buy_price", ""))[:80],
                 "sell_price": str(details.get("sell_price", ""))[:80],
-                "pnl_before_fees": str(details.get("pnl_before_fees", ""))[:80],
+                "entry_fee_quote": str(details.get("entry_fee_quote", ""))[:80],
+                "exit_fee_quote": str(details.get("exit_fee_quote", ""))[:80],
+                "accounting_complete": bool(details.get("accounting_complete", False)),
+                "pnl_net_fees": str(details.get("pnl_net_fees", ""))[:80],
                 "message": (
                     "Recovered from the saved completed Testnet check; excluded from strategy performance."
                     if recovered else

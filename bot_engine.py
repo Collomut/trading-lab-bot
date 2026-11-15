@@ -563,6 +563,104 @@ class TradingBot:
         )
         return order, client_id
 
+    def _post_only_limit_chase_buy(self, symbol: str, amount, decision_key: str, *, max_requotes: int = 5):
+        """Maker-first BUY entry using a post-only limit chase (zero taker fee).
+
+        Posts a post-only limit at the current best bid and, while unfilled,
+        cancels and re-quotes one touch higher, up to `max_requotes` times or
+        until the book moves beyond the configured `max_slippage_bps` cap, at
+        which point the entry is aborted with no fill. Never crosses the spread,
+        so the taker fee and spread-crossing slippage are eliminated.
+
+        Mirrors `_submit_market_order`'s intent journal and reconciliation so an
+        ambiguous exchange outcome still fails closed to operator review. Returns
+        `(order, client_id)` like `_submit_market_order`, where `order` is None
+        when the entry was aborted.
+        """
+        amount_decimal = Decimal(str(amount))
+        if not amount_decimal.is_finite() or amount_decimal <= 0:
+            raise ValueError("Order amount must be a finite positive decimal")
+        client_id = self._client_order_id(symbol, "buy", str(decision_key))
+        self.risk_manager.store.create_order_intent(
+            client_id, symbol, "buy", format(amount_decimal, "f"),
+            {"symbol": symbol, "side": "buy", "amount": format(amount_decimal, "f"), "post_only": True},
+        )
+        self.risk_manager.store.update_order(client_id, "SUBMITTED")
+        last_attempt_client_id = client_id
+        slippage_cap_bps = float(getattr(self.config, "max_slippage_bps", 30) or 30)
+        try:
+            book = self.exchange.get_order_book(symbol)
+            if not book or not book.get("bids"):
+                raise RuntimeError("order book is unavailable for post-only entry")
+            anchor_bid = Decimal(str(book["bids"][0][0]))
+            if not anchor_bid.is_finite() or anchor_bid <= 0:
+                raise RuntimeError("invalid top of book for post-only entry")
+            max_price = anchor_bid * (Decimal(1) + Decimal(str(slippage_cap_bps)) / Decimal(10000))
+            order = None
+            for attempt in range(max(1, max_requotes)):
+                book = self.exchange.get_order_book(symbol)
+                bids = book.get("bids") if book else None
+                if not bids:
+                    raise RuntimeError("order book unavailable during post-only chase")
+                best_bid = Decimal(str(bids[0][0]))
+                if not best_bid.is_finite() or best_bid <= 0:
+                    raise RuntimeError("invalid top of book during post-only chase")
+                if best_bid > max_price:
+                    self.risk_manager.store.update_order(client_id, "CANCELED", response={"result": "slippage_cap_exceeded"})
+                    self.risk_manager.store.mark_order_applied(client_id)
+                    logger.info("Post-only entry aborted for %s: best bid %.8f exceeds slippage cap %.8f", symbol, best_bid, max_price)
+                    return None, client_id
+                # Binance requires a unique clientOrderId per submitted order; a
+                # canceled then re-quoted order must not reuse the parent id or
+                # the exchange rejects the duplicate. Keep the stable parent id
+                # for the intent journal, but send a distinct id each re-quote.
+                attempt_client_id = client_id if attempt == 0 else f"{client_id}{attempt}"
+                last_attempt_client_id = attempt_client_id
+                order = self.exchange.place_post_only_limit_buy(symbol, format(amount_decimal, "f"), format(best_bid, "f"), attempt_client_id)
+                if not order:
+                    self.risk_manager.store.update_order(client_id, "REJECTED", response={"result": "post_only_rejected_without_order"})
+                    self.risk_manager.store.mark_order_applied(client_id)
+                    self.risk_manager.halt(f"Buy order was rejected for {symbol}; operator review required")
+                    return None, client_id
+                raw_status = str(order.get("status", "")).lower()
+                if raw_status in {"closed", "canceled", "rejected", "expired"}:
+                    break
+                # Still open / partially filled: cancel and re-quote one touch higher.
+                order_id = str(order.get("id") or "")
+                if order_id:
+                    self.exchange.cancel_order(order_id, symbol)
+            if not order:
+                self.risk_manager.store.update_order(client_id, "REJECTED", response={"result": "chase_ended_without_order"})
+                self.risk_manager.store.mark_order_applied(client_id)
+                return None, client_id
+            raw_status = str(order.get("status", "")).lower()
+            filled = order.get("filled") or 0
+            state = {
+                "closed": "FILLED", "open": "OPEN", "new": "OPEN",
+                "partially_filled": "PARTIALLY_FILLED", "canceled": "CANCELED",
+                "rejected": "REJECTED", "expired": "EXPIRED",
+            }.get(raw_status, "UNKNOWN")
+            average = order.get("average") or order.get("price")
+            self.risk_manager.store.update_order(
+                client_id, state, exchange_order_id=order.get("id"),
+                filled=filled, average=average, response=order,
+            )
+            if state != "FILLED":
+                # A maker entry that did not fill is aborted cleanly; no taker penalty.
+                self.risk_manager.store.mark_order_applied(client_id)
+                logger.info("Post-only entry for %s not filled (state %s); no position opened", symbol, state)
+                return None, client_id
+            return order, client_id
+        except Exception as exc:
+            self.risk_manager.store.update_order(client_id, "UNKNOWN")
+            try:
+                order = self.exchange.fetch_order_by_client_id(last_attempt_client_id, symbol)
+                if not order:
+                    raise RuntimeError("order was not returned by reconciliation")
+                return order, client_id
+            except Exception:
+                raise RuntimeError("Post-only order outcome remains unknown; operator reconciliation required") from exc
+
     def _place_and_persist_native_stop(self, symbol: str, entry_order_id: str, fallback_sl: float | None = None, fallback_amount: float | None = None) -> bool:
         position = self.risk_manager.open_positions.get(symbol)
         amount = position.amount if position else fallback_amount
@@ -1483,7 +1581,10 @@ class TradingBot:
         )
 
         try:
-            order, client_order_id = self._submit_market_order(symbol, "buy", amount, decision_key)
+            if getattr(self.config, "post_only_entries", False):
+                order, client_order_id = self._post_only_limit_chase_buy(symbol, amount, decision_key)
+            else:
+                order, client_order_id = self._submit_market_order(symbol, "buy", amount, decision_key)
         except Exception as exc:
             self.risk_manager.halt(f"Buy order state requires reconciliation for {symbol}")
             logger.error("Buy order state requires reconciliation for %s: %s", symbol, exc)
@@ -2300,7 +2401,15 @@ class TradingBot:
             if net_amount is None or not math.isfinite(fill_price) or fill_price <= 0:
                 self.risk_manager.halt("Testnet smoke buy fee/fill data was incomplete")
                 raise RuntimeError("Buy fill or fee details were incomplete")
-            self.risk_manager.open_position(symbol, fill_price, float(net_amount), buy.get("id", ""))
+            entry_fee_quote = self._resolve_fee_quote_cost(buy, symbol, fill_price)
+            self.risk_manager.open_position(
+                symbol, fill_price, float(net_amount), buy.get("id", ""),
+                entry_fee_quote=(entry_fee_quote if entry_fee_quote is not None else 0.0),
+            )
+            if entry_fee_quote is None:
+                # An unpriced entry commission must not be recorded as a clean
+                # zero-fee round trip; mark the smoke accounting incomplete.
+                self.risk_manager.mark_position_accounting_incomplete(symbol)
             if self.risk_manager._is_halted:
                 raise RuntimeError("Bought position could not be persisted")
             if not self._place_and_persist_native_stop(symbol, buy.get("id", "")):
@@ -2354,7 +2463,10 @@ class TradingBot:
             if not math.isfinite(sell_price) or sell_price <= 0:
                 self.risk_manager.halt("Testnet smoke sell returned invalid fill details")
                 raise RuntimeError("Sell fill details were invalid")
-            record = self.risk_manager.close_position(symbol, sell_price, "Testnet order-path smoke check")
+            exit_fee_quote = self._resolve_fee_quote_cost(sell, symbol, sell_price)
+            record = self.risk_manager.close_position(
+                symbol, sell_price, "Testnet order-path smoke check", fee_cost=exit_fee_quote,
+            )
             if not record:
                 raise RuntimeError("Closed-position state could not be persisted")
             self.risk_manager.store.mark_order_applied(sell_client_id)
@@ -2363,7 +2475,11 @@ class TradingBot:
                 "buy_order_id": str(buy.get("id", "")),
                 "sell_order_id": str(sell.get("id", "")),
                 "buy_price": fill_price, "sell_price": sell_price,
-                "amount": str(net_amount), "pnl_before_fees": record.pnl,
+                "amount": str(net_amount),
+                "entry_fee_quote": entry_fee_quote,
+                "exit_fee_quote": exit_fee_quote,
+                "accounting_complete": bool(record.accounting_complete),
+                "pnl_net_fees": record.pnl,
             }
             self.risk_manager.store.write_state("testnet_smoke_trade", result)
             # Smoke orders validate exchange order handling, not the trading
@@ -2375,7 +2491,10 @@ class TradingBot:
                     "amount": str(net_amount),
                     "buy_price": fill_price,
                     "sell_price": sell_price,
-                    "pnl_before_fees": record.pnl,
+                    "entry_fee_quote": entry_fee_quote,
+                    "exit_fee_quote": exit_fee_quote,
+                    "accounting_complete": bool(record.accounting_complete),
+                    "pnl_net_fees": record.pnl,
                     "recovered_from_saved_result": False,
                 })
             except Exception:

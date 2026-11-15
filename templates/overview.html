@@ -1177,7 +1177,7 @@ $('testnet-smoke').addEventListener('click', async () => {
     const r = await fetch('/api/testnet-smoke-trade', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
     const d = await r.json();
     if (!r.ok) throw Error(d.error || 'Smoke trade needs operator attention');
-    $('control-status').textContent = `Testnet smoke complete · ${d.symbol} · buy ${d.buy_order_id} / sell ${d.sell_order_id} · before-fee P&L ${money(d.pnl_before_fees)}`;
+    $('control-status').textContent = `Testnet smoke complete · ${d.symbol} · buy ${d.buy_order_id} / sell ${d.sell_order_id} · ${d.accounting_complete ? ('net P&L ' + money(d.pnl_net_fees)) : 'fees incomplete'}`;
     refreshStatus();
   } catch (e) {
     $('control-status').textContent = e.message;

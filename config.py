@@ -118,6 +118,12 @@ class BotConfig:
     max_pairwise_correlation: float = float(os.getenv("MAX_PAIRWISE_CORRELATION", "0.85"))
     max_testnet_price_divergence_pct: float = float(os.getenv("MAX_TESTNET_PRICE_DIVERGENCE_PCT", "0.5"))
     max_signal_fill_divergence_bps: float = float(os.getenv("MAX_SIGNAL_FILL_DIVERGENCE_BPS", "100"))
+    # Maker-first entry toggle. When enabled, BUY entries post a post-only limit
+    # at the near touch and chase the book instead of crossing the spread with a
+    # taker market order, eliminating the taker fee and spread-crossing slippage.
+    # Defaults to False so the default execution path and its deterministic tests
+    # are unchanged.
+    post_only_entries: bool = field(default_factory=lambda: _env_bool("POST_ONLY_ENTRIES", False))
 
     def validate(self):
         """Validate configuration values."""
@@ -144,6 +150,8 @@ class BotConfig:
             errors.append("FALLBACK_TO_SIMULATION must be a boolean")
         if not isinstance(self.exchange.allow_live_trading, bool):
             errors.append("ALLOW_LIVE_TRADING must be a boolean")
+        if not isinstance(self.post_only_entries, bool):
+            errors.append("POST_ONLY_ENTRIES must be a boolean")
         if self.exchange.paper_trading:
             if self.exchange.paper_environment not in {"testnet", "demo", "simulated"}:
                 errors.append("PAPER_ENVIRONMENT must be either 'testnet', 'demo', or 'simulated'")

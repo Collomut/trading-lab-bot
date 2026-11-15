@@ -331,6 +331,49 @@ class ExchangeConnector:
         self._sim_orders[cid] = order
         return order
 
+    def _simulated_limit_fill(self, symbol: str, amount, price, side: str, client_order_id: str | None = None) -> dict:
+        """Deterministic simulated maker fill at the requested limit price."""
+        amt = float(amount)
+        limit_price = float(price)
+        cost = amt * limit_price
+        if side == "buy":
+            self._sim_cash = max(0.0, getattr(self, "_sim_cash", 10000.0) - cost)
+            if not hasattr(self, "_sim_positions"):
+                self._sim_positions = {}
+            self._sim_positions[symbol] = self._sim_positions.get(symbol, 0.0) + amt
+            fee_currency = symbol.split("/")[0]
+            fee_cost = amt * 0.0002
+        else:
+            self._sim_cash = getattr(self, "_sim_cash", 10000.0) + cost
+            if not hasattr(self, "_sim_positions"):
+                self._sim_positions = {}
+            self._sim_positions[symbol] = max(0.0, self._sim_positions.get(symbol, 0.0) - amt)
+            fee_currency = "USDT"
+            fee_cost = cost * 0.0002
+        order_id = f"sim_{side}_{int(time.time()*1000)}"
+        cid = client_order_id or f"client_{order_id}"
+        order = {
+            "id": order_id,
+            "clientOrderId": cid,
+            "symbol": symbol,
+            "side": side,
+            "type": "limit",
+            "status": "closed",
+            "price": limit_price,
+            "average": limit_price,
+            "amount": amt,
+            "filled": amt,
+            "remaining": 0.0,
+            "cost": cost,
+            "fee": {"currency": fee_currency, "cost": fee_cost},
+            "timestamp": int(time.time() * 1000),
+        }
+        if not hasattr(self, "_sim_orders"):
+            self._sim_orders = {}
+        self._sim_orders[order_id] = order
+        self._sim_orders[cid] = order
+        return order
+
     def _create_exchange(self):
         """Create a paper/demo exchange connection; live connections are disabled."""
         if not self.config.paper_trading:
@@ -866,6 +909,51 @@ class ExchangeConnector:
             except ccxt.BaseError as e:
                 logger.error("Sell order outcome is unknown for %s; manual reconciliation required", symbol)
                 raise RuntimeError("Exchange did not confirm sell order outcome") from e
+
+    def place_post_only_limit_buy(self, symbol: str, amount, price, client_order_id: str | None = None) -> dict | None:
+        """Post-only maker buy at the supplied limit price (never crosses the spread).
+
+        A post-only order is rejected by the exchange rather than taking liquidity,
+        so a book move surfaces as a rejection/error instead of a taker fill.
+        """
+        if self._is_simulated():
+            return self._simulated_limit_fill(symbol, amount, price, "buy", client_order_id)
+        with self._exchange_lock:
+            try:
+                params = {"postOnly": True}
+                if client_order_id:
+                    params["clientOrderId"] = client_order_id
+                order = self.exchange.create_order(
+                    symbol, "limit", "buy", float(amount), float(price), params
+                )
+                self._trades_today += 1
+                return order
+            except ccxt.InsufficientFunds as e:
+                logger.error("Insufficient funds for post-only buy on %s (%s)", symbol, type(e).__name__)
+                return None
+            except ccxt.BaseError as e:
+                # A post-only rejection or timeout is expected when the book moves
+                # away; propagate so the chase loop can re-quote or abort.
+                logger.error("Post-only buy outcome is unknown for %s; manual reconciliation required", symbol)
+                raise RuntimeError("Exchange did not confirm post-only buy outcome") from e
+
+    def place_post_only_limit_sell(self, symbol: str, amount, price, client_order_id: str | None = None) -> dict | None:
+        """Post-only maker sell at the supplied limit price (never crosses the spread)."""
+        if self._is_simulated():
+            return self._simulated_limit_fill(symbol, amount, price, "sell", client_order_id)
+        with self._exchange_lock:
+            try:
+                params = {"postOnly": True}
+                if client_order_id:
+                    params["clientOrderId"] = client_order_id
+                order = self.exchange.create_order(
+                    symbol, "limit", "sell", float(amount), float(price), params
+                )
+                self._trades_today += 1
+                return order
+            except ccxt.BaseError as e:
+                logger.error("Post-only sell outcome is unknown for %s; manual reconciliation required", symbol)
+                raise RuntimeError("Exchange did not confirm post-only sell outcome") from e
 
     def get_open_orders(self, symbol: str = None) -> list:
         """Get open orders; propagate failures instead of implying none exist."""

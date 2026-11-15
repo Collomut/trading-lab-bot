@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import math
+import numpy as np
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -23,6 +24,31 @@ from state_store import StateStore
 from postgres_state_store import PostgresStateStore
 
 logger = logging.getLogger("bot.risk")
+
+
+def calculate_parkinson_volatility(highs, lows, period: int = 14) -> float:
+    """Annualized Parkinson high-low realized volatility.
+
+    Uses the last `period` high/low pairs. Returns the 40% benchmark when fewer
+    than `period` valid bars are available, matching the sizing default so a
+    missing series never inflates or collapses a position.
+    """
+    if highs is None or lows is None:
+        return 0.40
+    try:
+        h = np.asarray(highs, dtype=float)[-period:]
+        l = np.asarray(lows, dtype=float)[-period:]
+    except (TypeError, ValueError):
+        return 0.40
+    valid = np.isfinite(h) & np.isfinite(l) & (h > 0) & (l > 0) & (h >= l)
+    h = h[valid]
+    l = l[valid]
+    if h.shape[0] < period or l.shape[0] < period:
+        return 0.40
+    log_hl = np.log(h / l)
+    parkinson_var = (1.0 / (4.0 * np.log(2.0) * period)) * float(np.sum(log_hl ** 2))
+    daily_vol = float(np.sqrt(parkinson_var))
+    return float(daily_vol * np.sqrt(365.25))
 
 
 @dataclass
@@ -767,6 +793,26 @@ class RiskManager:
             return persisted
         return "EXIT_ONLY" if getattr(self.config, "start_paused", False) else "ACTIVE"
 
+    @staticmethod
+    def _volatility_multiplier(target_volatility, current_parkinson_volatility) -> float:
+        """Volatility-targeting scale bounded to [0.50, 1.00].
+
+        Scales position size inversely with realized volatility so dollar-at-risk
+        stays roughly constant across calm and explosive regimes. Returns 1.0
+        (no scaling) when either input is missing or invalid, preserving prior
+        sizing behavior for callers that do not supply volatility data.
+        """
+        if target_volatility is None or current_parkinson_volatility is None:
+            return 1.0
+        try:
+            target = float(target_volatility)
+            current = float(current_parkinson_volatility)
+        except (TypeError, ValueError):
+            return 1.0
+        if not math.isfinite(target) or not math.isfinite(current) or target <= 0 or current <= 0:
+            return 1.0
+        return min(1.0, max(0.50, target / current))
+
     def calculate_position_size(
         self,
         portfolio_value: float,
@@ -775,10 +821,15 @@ class RiskManager:
         *,
         risk_multiplier: float = 1.0,
         entry_fee_rate: float = 0.0,
+        target_volatility: float | None = None,
+        current_parkinson_volatility: float | None = None,
     ) -> float:
         """
         Conservative position sizing:
         Ensures max capital at risk on stop-loss is <= max_risk_per_trade%.
+        Optionally scales the result by a volatility-targeting multiplier so
+        dollar-at-risk stays constant across regimes; omitted volatility inputs
+        leave sizing unchanged.
         """
         if not all(math.isfinite(value) for value in (portfolio_value, entry_price, stop_loss_price, risk_multiplier, entry_fee_rate)):
             return 0.0
@@ -796,7 +847,8 @@ class RiskManager:
         max_position_value = portfolio_value * (self.config.position_size_pct / 100)
         pct_based_size = max_position_value / entry_price
 
-        return min(risk_based_size, pct_based_size)
+        volatility_multiplier = self._volatility_multiplier(target_volatility, current_parkinson_volatility)
+        return min(risk_based_size, pct_based_size) * volatility_multiplier
 
     def calculate_stop_loss(self, entry_price: float, atr: float = 0.0) -> float:
         """Calculate initial stop-loss price, optionally adapting to ATR."""

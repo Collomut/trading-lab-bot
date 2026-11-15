@@ -54,7 +54,7 @@ from exchange import (
     validate_candle_sequence,
 )
 from main import run_backtest
-from risk_manager import Position, RiskManager
+from risk_manager import Position, RiskManager, calculate_parkinson_volatility
 from state_store import StateStore
 from shadow_ledger import ShadowLedger
 from strategies import (
@@ -1418,6 +1418,49 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertFalse(can_open)
             self.assertIn("Entry-only pause is active", reason)
 
+    def test_parkinson_volatility_flat_and_short_series(self):
+        """Parkinson volatility: flat bars -> ~0, short series -> 40% benchmark."""
+        highs = [100.0] * 20
+        lows = [100.0] * 20
+        self.assertAlmostEqual(calculate_parkinson_volatility(highs, lows, period=14), 0.0, places=6)
+        self.assertEqual(calculate_parkinson_volatility([100.0, 101.0], [99.0, 100.0], period=14), 0.40)
+        rising_highs = [100.0 + i for i in range(20)]
+        rising_lows = [98.0 + i for i in range(20)]
+        self.assertGreater(calculate_parkinson_volatility(rising_highs, rising_lows, period=14), 0.0)
+
+    def test_position_size_volatility_scaling(self):
+        """Volatility targeting scales size down in high-vol regimes; defaults unchanged."""
+        with TemporaryDirectory() as tmpdir:
+            rm = RiskManager(RiskConfig(max_risk_per_trade=1.0, position_size_pct=10.0), persistence_dir=tmpdir)
+            base = rm.calculate_position_size(10000.0, 100.0, 90.0)
+            self.assertAlmostEqual(base, 10.0)
+            # Missing volatility inputs leave sizing unchanged (backward compatible).
+            self.assertAlmostEqual(rm.calculate_position_size(10000.0, 100.0, 90.0, target_volatility=None), base)
+            # Volatility above target -> multiplier bounded at 0.5.
+            scaled = rm.calculate_position_size(
+                10000.0, 100.0, 90.0, target_volatility=0.40, current_parkinson_volatility=0.80,
+            )
+            self.assertAlmostEqual(scaled, base * 0.5)
+            # Volatility below target -> multiplier capped at 1.0.
+            self.assertAlmostEqual(
+                rm.calculate_position_size(
+                    10000.0, 100.0, 90.0, target_volatility=0.40, current_parkinson_volatility=0.20,
+                ),
+                base,
+            )
+
+    def test_verify_statistical_edge_significance(self):
+        """The research t-test harness flags a clearly positive series as significant."""
+        import importlib.util
+        path = Path(__file__).resolve().parent / "research" / "verify_statistical_edge.py"
+        spec = importlib.util.spec_from_file_location("verify_statistical_edge", str(path))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = module.verify_strategy_significance([5.0, -1.0] * 10)
+        self.assertTrue(result["is_significant_p05"])
+        self.assertGreater(result["profit_factor"], 1.0)
+        self.assertFalse(module.verify_strategy_significance([])["is_significant_p05"])
+
 
 # ==============================================================================
 # 4. StateStore & Persistence Suite
@@ -2374,6 +2417,29 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNotEqual(first, different)
         self.assertLessEqual(len(first), 36)
+
+    def test_post_only_chase_sends_unique_client_ids_per_requote(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(max_slippage_bps=30)
+        bot.exchange = Mock()
+        bot.exchange.get_order_book.return_value = {"bids": [[100.0, 10.0]]}
+        # First attempt stays open (must be canceled), second fills as a maker.
+        bot.exchange.place_post_only_limit_buy.side_effect = [
+            {"id": "a", "status": "open", "filled": 0.0},
+            {"id": "b", "status": "closed", "filled": 1.0, "average": 100.0},
+        ]
+        bot.risk_manager = Mock()
+        bot.risk_manager.store = Mock()
+
+        order, client_id = bot._post_only_limit_chase_buy("BTC/USDT", 0.01, "decision-1")
+
+        self.assertIsNotNone(order)
+        self.assertEqual(order["id"], "b")
+        sent_ids = [call.args[3] for call in bot.exchange.place_post_only_limit_buy.call_args_list]
+        self.assertEqual(len(sent_ids), 2)
+        self.assertEqual(sent_ids[0], client_id)
+        self.assertNotEqual(sent_ids[0], sent_ids[1])
+        bot.exchange.cancel_order.assert_called_once_with("a", "BTC/USDT")
 
     def test_only_confirmed_complete_fills_are_accepted(self):
         self.assertTrue(TradingBot._confirmed_full_fill({"status": "closed", "filled": 1.0}, 1.0))
