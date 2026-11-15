@@ -658,6 +658,7 @@ class WebDashboard:
             "market_summary": market_summary,
             "strategy_name": self.config.strategy.name.upper(),
             "timeframe": self.config.strategy.timeframe,
+            "shadow_ledger": self.bot.shadow_ledger.summary(),
             "trades": trades,
             "notifications": {
                 "enabled": self.config.enable_notifications,

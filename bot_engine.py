@@ -34,6 +34,7 @@ from strategies import (
 from risk_manager import RiskManager
 from shadow_strategy import CANDIDATE_ID, evaluate_shadow_candidate
 from regime_router import evaluate_regime_router
+from shadow_ledger import ShadowLedger
 
 logger = logging.getLogger("bot.engine")
 ESTIMATED_TAKER_FEE_RATE = 0.001
@@ -58,6 +59,7 @@ class TradingBot:
         )
         self.downtrend_recovery_strategy = DowntrendRsiRecoveryTestnetStrategy()
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
+        self.shadow_ledger = ShadowLedger(self.risk_manager.store)
         if (config.strategy.name in {"macro_donchian_ema72", "dynamic_regime"} and any(
                 position.exit_policy not in {"ema72_signal", "downtrend_rsi_recovery"}
                 for position in self.risk_manager.open_positions.values()
@@ -402,6 +404,25 @@ class TradingBot:
                 "signal": "HOLD",
                 "status": f"error_{type(exc).__name__}"[:48],
             }
+
+        # Advance the halt-free shadow ledger for the EMA72 candidate so its
+        # forward expectancy is measured independently of risk halts and the
+        # regime router. This is the evidence source for choosing the active
+        # strategy; it never places an order.
+        try:
+            if ema72_profile:
+                shadow_has_position = self.shadow_ledger.has_position("macro_donchian_ema72", symbol)
+                raw = self.strategy.analyze(df, symbol, in_position=shadow_has_position)
+                raw_indicators = raw.indicators if isinstance(raw.indicators, dict) else {}
+                swing = raw_indicators.get("swing_low_5")
+                atr_v = raw_indicators.get("atr", 0.0)
+                self.shadow_ledger.advance(
+                    "macro_donchian_ema72", symbol, ohlcv[-1], raw.signal.value,
+                    stop_ref=float(swing) if swing is not None else None,
+                    atr=float(atr_v) if atr_v is not None else 0.0,
+                )
+        except Exception as exc:
+            logger.debug("Shadow ledger advance failed for %s (%s)", symbol, type(exc).__name__)
 
         # Persist one explainable record per newly completed candle, including HOLDs.
         # Audit failure must not change strategy or order behavior.

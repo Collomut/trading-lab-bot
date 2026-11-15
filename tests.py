@@ -56,6 +56,7 @@ from exchange import (
 from main import run_backtest
 from risk_manager import Position, RiskManager
 from state_store import StateStore
+from shadow_ledger import ShadowLedger
 from strategies import (
     CombinedStrategy,
     EMA_Crossover_Strategy,
@@ -3494,6 +3495,71 @@ class TestBacktestingAndRealism(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "does not model macro_donchian_ema72"):
                 run_backtest(cfg)
         fetch_ohlcv.assert_not_called()
+
+
+class TestShadowLedger(unittest.TestCase):
+    """Halt-free, order-free forward expectancy ledger."""
+
+    def _store(self, tmpdir):
+        return StateStore(Path(tmpdir) / "state.db")
+
+    def test_next_open_entry_and_stop_first(self):
+        with TemporaryDirectory() as tmpdir:
+            ledger = ShadowLedger(self._store(tmpdir), initial_equity=10000.0)
+            # Candle 1: BUY queues an entry for the next open.
+            ledger.advance("macro_donchian_ema72", "BTC/USDT",
+                           [1, 100.0, 105.0, 99.0, 104.0, 1000.0], "BUY", stop_ref=95.0, atr=1.0)
+            self.assertEqual(len(ledger.trades), 0)
+            self.assertEqual(len(ledger.positions), 0)
+            self.assertTrue(ledger.has_position("macro_donchian_ema72", "BTC/USDT") is False)
+            # Candle 2: entry fills at open 101, then the low breaches the stop.
+            ledger.advance("macro_donchian_ema72", "BTC/USDT",
+                           [2, 101.0, 102.0, 90.0, 95.0, 1000.0], "HOLD", stop_ref=95.0, atr=1.0)
+            self.assertEqual(len(ledger.trades), 1)
+            self.assertEqual(ledger.trades[0]["reason"], "stop_loss")
+            self.assertLess(ledger.trades[0]["pnl"], 0)
+
+    def test_next_open_exit_and_persistence(self):
+        with TemporaryDirectory() as tmpdir:
+            store = self._store(tmpdir)
+            ledger = ShadowLedger(store, initial_equity=10000.0)
+            # Entry queued on candle 1.
+            ledger.advance("macro_donchian_ema72", "BTC/USDT",
+                           [1, 100.0, 105.0, 99.0, 104.0, 1000.0], "BUY", stop_ref=95.0, atr=1.0)
+            # Candle 2 fills entry and queues a SELL exit (close below EMA72).
+            ledger.advance("macro_donchian_ema72", "BTC/USDT",
+                           [2, 101.0, 102.0, 100.0, 100.5, 1000.0], "SELL", stop_ref=95.0, atr=1.0)
+            self.assertTrue(ledger.has_position("macro_donchian_ema72", "BTC/USDT"))
+            # Candle 3 executes the queued exit at its open.
+            ledger.advance("macro_donchian_ema72", "BTC/USDT",
+                           [3, 105.0, 106.0, 104.0, 105.5, 1000.0], "HOLD", stop_ref=95.0, atr=1.0)
+            self.assertEqual(len(ledger.trades), 1)
+            self.assertEqual(ledger.trades[0]["reason"], "signal_exit")
+            self.assertGreater(ledger.trades[0]["pnl"], 0)
+
+            # Persisted across reconstruction.
+            restored = ShadowLedger(store)
+            self.assertEqual(len(restored.trades), 1)
+            summary = restored.summary("macro_donchian_ema72")
+            self.assertEqual(summary["trades"], 1)
+            self.assertEqual(summary["wins"], 1)
+
+    def test_summary_profit_factor_and_no_stop_ref_holds(self):
+        with TemporaryDirectory() as tmpdir:
+            ledger = ShadowLedger(self._store(tmpdir))
+            # No stop_ref means no entry can be queued.
+            ledger.advance("c", "BTC/USDT", [1, 100.0, 105.0, 99.0, 104.0, 1000.0], "BUY")
+            self.assertEqual(len(ledger.pending_entries), 0)
+            # Directly seed two trades to exercise the PF computation.
+            ledger.trades = [
+                {"candidate_id": "c", "pnl": 10.0, "r_multiple": 1.0},
+                {"candidate_id": "c", "pnl": -5.0, "r_multiple": -0.5},
+            ]
+            summary = ledger.summary("c")
+            self.assertEqual(summary["profit_factor"], 2.0)
+            self.assertEqual(summary["wins"], 1)
+            self.assertEqual(summary["losses"], 1)
+            self.assertEqual(summary["avg_r_multiple"], 0.25)
 
 
 if __name__ == "__main__":
