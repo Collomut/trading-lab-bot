@@ -57,11 +57,11 @@ class RiskConfig:
 @dataclass
 class StrategyConfig:
     """Strategy parameters."""
-    name: str = os.getenv("STRATEGY", "combined")
+    name: str = os.getenv("STRATEGY", "macro_donchian_ema72")
     timeframe: str = os.getenv("TIMEFRAME", "1h")
     lookback_candles: int = int(os.getenv(
         "LOOKBACK_CANDLES",
-        "2500" if os.getenv("STRATEGY", "combined").strip().lower() in {"macro_donchian_ema72", "dynamic_regime"} else "150",
+        "2500" if os.getenv("STRATEGY", "macro_donchian_ema72").strip().lower() in {"macro_donchian_ema72", "dynamic_regime"} else "150",
     ))
     regime_filter_enabled: bool = field(default_factory=lambda: _env_bool("REGIME_FILTER_ENABLED", True))
     min_trend_adx: float = float(os.getenv("MIN_TREND_ADX", "20"))
@@ -182,20 +182,20 @@ class BotConfig:
         if not math.isfinite(self.risk.take_profit_pct) or self.risk.take_profit_pct <= 0:
             errors.append("TAKE_PROFIT_PCT must be a finite value greater than 0")
 
-        if self.risk.max_risk_per_trade <= 0 or self.risk.max_risk_per_trade > 2:
-            errors.append("MAX_RISK_PER_TRADE must be greater than 0 and no more than 2%")
-        if self.risk.max_open_positions < 1:
-            errors.append("MAX_OPEN_POSITIONS must be at least 1")
-        if self.risk.max_daily_loss_pct <= 0 or self.risk.max_daily_loss_pct > 5:
-            errors.append("MAX_DAILY_LOSS_PCT must be greater than 0 and no more than 5%")
-        if self.risk.max_rolling_drawdown_pct <= 0 or self.risk.max_rolling_drawdown_pct > 10:
-            errors.append("MAX_ROLLING_DRAWDOWN_PCT must be greater than 0 and no more than 10%")
-        if not 1 <= self.risk.max_consecutive_losses <= 20:
-            errors.append("MAX_CONSECUTIVE_LOSSES must be between 1 and 20")
+        if self.risk.max_risk_per_trade <= 0 or self.risk.max_risk_per_trade > 1:
+            errors.append("MAX_RISK_PER_TRADE must be greater than 0 and no more than 1%")
+        if not 1 <= self.risk.max_open_positions <= 3:
+            errors.append("MAX_OPEN_POSITIONS must be between 1 and 3")
+        if self.risk.max_daily_loss_pct <= 0 or self.risk.max_daily_loss_pct > 3:
+            errors.append("MAX_DAILY_LOSS_PCT must be greater than 0 and no more than 3%")
+        if self.risk.max_rolling_drawdown_pct <= 0 or self.risk.max_rolling_drawdown_pct > 5:
+            errors.append("MAX_ROLLING_DRAWDOWN_PCT must be greater than 0 and no more than 5%")
+        if not 1 <= self.risk.max_consecutive_losses <= 3:
+            errors.append("MAX_CONSECUTIVE_LOSSES must be between 1 and 3")
         if not (0 < self.risk.stop_loss_pct <= 10):
             errors.append("STOP_LOSS_PCT must be greater than 0 and no more than 10%")
-        if not (0 < self.risk.position_size_pct <= 50):
-            errors.append("POSITION_SIZE_PCT must be greater than 0 and no more than 50%")
+        if not (0 < self.risk.position_size_pct <= 10):
+            errors.append("POSITION_SIZE_PCT must be greater than 0 and no more than 10%")
         if not self.dashboard_token:
             errors.append("DASHBOARD_TOKEN is required because the Railway dashboard exposes account and trading controls")
         if not math.isfinite(self.strategy.min_trend_adx) or not (0 <= self.strategy.min_trend_adx <= 100):

@@ -9,7 +9,7 @@ When a reset occurs:
 
 ## Safe Recovery Procedure
 
-**NEVER blindly delete the SQLite database `state.db` on Railway.**
+**NEVER blindly delete the SQLite database `bot_state.sqlite3` on Railway.**
 Deleting the database erases unresolved order intent journals, risk circuit breaker history, and audit trails.
 
 ### Step 1: Verify the Testnet Reset
@@ -28,7 +28,7 @@ The system provides `snapshot_and_reset_for_testnet_wipe()` in `state_store.py`:
 You can execute this in a one-liner via Railway CLI or python script:
 ```python
 from state_store import StateStore
-store = StateStore("/app/data/state.db") # or local persistence path
+store = StateStore("/app/data/bot_state.sqlite3")  # or local persistence path
 summary = store.snapshot_and_reset_for_testnet_wipe("Binance Spot Testnet monthly reset confirmed")
 print(f"Backup created at: {summary['backup_file']}")
 ```

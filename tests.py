@@ -283,8 +283,9 @@ class TestConfigurationAndValidation(unittest.TestCase):
 
     def test_default_strategy_profile_matches_example_configuration(self):
         strategy = StrategyConfig()
+        self.assertEqual(strategy.name, "macro_donchian_ema72")
         self.assertEqual(strategy.timeframe, "1h")
-        self.assertEqual(strategy.lookback_candles, 150)
+        self.assertEqual(strategy.lookback_candles, 2500)
         self.assertEqual(strategy.trading_pairs, [
             "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
             "XRP/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT",
@@ -2608,6 +2609,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
             bot.config = BotConfig(dashboard_token="test_token")
+            bot.config.strategy.name = "combined"  # exercise the legacy risk-managed path
             bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
             bot.exchange = Mock()
             bot.exchange.get_usdt_balance.return_value = 10000.0
@@ -2751,6 +2753,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
             bot.config = BotConfig(dashboard_token="test_token")
+            bot.config.strategy.name = "combined"  # exercise the legacy risk-managed path
             bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
             bot.exchange = Mock()
             bot.exchange.get_usdt_balance.return_value = 10000.0
@@ -3467,6 +3470,7 @@ class TestBacktestingAndRealism(unittest.TestCase):
 
     def test_backtest_exploratory_warning_and_next_bar_logic(self):
         cfg = BotConfig()
+        cfg.strategy.name = "combined"  # generic replay only models legacy strategies
         cfg.strategy.trading_pairs = ["BTC/USDT"]
         
         dates = pd.date_range("2026-01-01", periods=100, freq="15min")

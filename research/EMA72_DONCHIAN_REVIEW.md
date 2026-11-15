@@ -42,7 +42,7 @@ These small, halt-truncated samples are not valid estimates of sustained profita
 
 ## Reproduction and assumptions
 
-Run `python research/backtest_ema72_donchian.py`. Machine-readable output is `research/results/ema72_donchian_results.json`. The replay currently relies on local uncommitted additions to `research/backtest_strategy.py` for the swing-low/4% stop and disabling legacy trailing. A clean checkout at the current commit will not reproduce this run until those research-simulator changes are included. They do not affect runtime trading code.
+Run `python research/download_binance_klines.py` first to fetch the hourly Binance Spot archive into `research/data/` (intentionally git-ignored for size), then run `python research/backtest_ema72_donchian.py`. Machine-readable output is `research/results/ema72_donchian_results.json`. The research simulator code is committed; the only local prerequisite is the downloaded historical data, which is not tracked by git.
 
 - Symbols: BTCUSDT, ETHUSDT, SOLUSDT, hourly Binance Spot OHLCV.
 - Entry: completed close above the prior 168-bar high and EMA480; enter at the next bar's open.

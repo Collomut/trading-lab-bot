@@ -11,6 +11,7 @@ This is the orchestrator that:
 """
 
 import logging
+import logging.handlers
 import time
 import json
 import os
@@ -96,8 +97,12 @@ class TradingBot:
             console.setFormatter(console_fmt)
             bot_logger.addHandler(console)
 
-            # File handler
-            file_handler = logging.FileHandler(self.config.log_file, encoding="utf-8")
+            # File handler with size-based rotation so a long-running worker
+            # cannot fill the persistent volume.
+            file_handler = logging.handlers.RotatingFileHandler(
+                self.config.log_file, encoding="utf-8",
+                maxBytes=10 * 1024 * 1024, backupCount=3,
+            )
             file_handler.setLevel(logging.DEBUG)
             file_fmt = logging.Formatter(
                 "%(asctime)s │ %(name)-15s │ %(levelname)-7s │ %(message)s"
