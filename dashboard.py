@@ -726,7 +726,7 @@ class WebDashboard:
                 "consensus_required", "entry_gates", "close", "ema480", "ema72", "ema9",
                 "ema20", "ema36", "ema50", "ema200", "rsi", "donchian_high168", "swing_low_5",
                 "entry_ready", "exit_ready", "breakout_ready", "max_atr_pct", "macro_bullish",
-                "pulled_back", "reclaimed",
+                "pulled_back", "reclaimed", "ema200_24h_slope_pct", "atr",
             ):
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):

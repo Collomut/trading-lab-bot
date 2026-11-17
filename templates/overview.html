@@ -996,11 +996,18 @@ function renderMarketPulse(d) {
       const macroPassed = Boolean(indicators.macro_bullish);
       const pullbackPassed = Boolean(indicators.pulled_back);
       const reclaimPassed = Boolean(indicators.reclaimed);
+      const closeVsEma200 = ((close - ema200) / ema200 * 100);
+      const closeVsEma20 = ((close - ema20) / ema20 * 100);
       const checks = [
-        ['Macro 200 EMA', macroPassed, macroPassed ? 'Passed' : 'Below / Flat'],
-        ['Pullback 20 EMA', pullbackPassed, pullbackPassed ? 'Touched' : 'Waiting'],
-        ['Reclaim 9 EMA', reclaimPassed, reclaimPassed ? 'Reclaimed' : 'Waiting'],
+        ['Macro 200 EMA', macroPassed, `${formatPrice(ema200)} (${closeVsEma200 >= 0 ? '+' : ''}${closeVsEma200.toFixed(1)}%)`],
+        ['Pullback 20 EMA', pullbackPassed, `${formatPrice(ema20)} (${closeVsEma20 >= 0 ? '+' : ''}${closeVsEma20.toFixed(1)}%)`],
+        ['Reclaim 9 EMA', reclaimPassed, `${formatPrice(ema9)}`],
       ];
+      if (Number.isFinite(Number(indicators.atr_pct))) {
+        const atrVal = Number(indicators.atr_pct);
+        const atrMax = Number(indicators.max_atr_pct || 3.0);
+        checks.push(['ATR band (14)', atrVal <= atrMax, `${atrVal.toFixed(2)}% (≤${atrMax.toFixed(1)}%)`]);
+      }
       for (const [label, passed, text] of checks) {
         const row = document.createElement('div');
         row.className = 'pulse-gate';
