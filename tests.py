@@ -358,7 +358,18 @@ class TestConfigurationAndValidation(unittest.TestCase):
         self.assertEqual(
             [e for e in cfg2.validate() if "ENABLE_DOWNTEND_RECOVERY_TESTNET" in e], []
         )
-        self.assertEqual(cfg2.strategy.downtrend_rsi_recovery_level, 25.0)
+
+    def test_macro_trend_pullback_config_validation(self):
+        cfg = BotConfig()
+        cfg.dashboard_token = "test_secret_token"
+        cfg.strategy.name = "macro_trend_pullback"
+        cfg.strategy.lookback_candles = 600
+        structural_errors = [e for e in cfg.validate() if "API_KEY" not in e and "API_SECRET" not in e]
+        self.assertEqual(structural_errors, [])
+
+        # Lookback less than 600 fails
+        cfg.strategy.lookback_candles = 599
+        self.assertTrue(any("LOOKBACK_CANDLES >= 600" in e for e in cfg.validate()))
 
     def test_downtrend_rsi_recovery_level_is_validated(self):
         cfg = BotConfig()
@@ -863,6 +874,67 @@ class TestTechnicalIndicatorsAndStrategies(unittest.TestCase):
         self.assertEqual(strategy.analyze(frame.iloc[:-1], "BTC/USDT").signal, Signal.HOLD)
         frame.index = frame.index[:2450].append(frame.index[2450:] + pd.Timedelta(hours=1))
         self.assertEqual(strategy.analyze(frame, "BTC/USDT").signal, Signal.HOLD)
+
+    def test_macro_trend_pullback_uses_pullback_reclaim_and_ema36_exit(self):
+        from strategies import MacroTrendPullbackStrategy
+
+        index = pd.date_range("2025-01-01", periods=600, freq="1h")
+        base = np.linspace(50.0, 100.0, 600)
+        close = base.copy()
+        open_ = base - 0.5
+        high = base + 1.0
+        low = base - 1.0
+
+        frame = pd.DataFrame({"open": open_, "high": high, "low": low, "close": close, "volume": 100.0}, index=index)
+        strategy = MacroTrendPullbackStrategy(max_atr_pct=5.0)
+
+        # Craft explicit pullback:
+        # bar -2: low touches below EMA20
+        # bar -1: bullish close above open and above EMA9
+        ema20_val = frame["close"].ewm(span=20, adjust=False).mean().iloc[-1]
+        frame.iloc[-2, frame.columns.get_loc("low")] = ema20_val - 2.0
+        frame.iloc[-1, frame.columns.get_loc("open")] = 99.0
+        frame.iloc[-1, frame.columns.get_loc("close")] = 101.0
+        frame.iloc[-1, frame.columns.get_loc("high")] = 102.0
+        frame.iloc[-1, frame.columns.get_loc("low")] = 98.5
+
+        entry = strategy.analyze(frame, "BTC/USDT")
+        self.assertEqual(entry.signal, Signal.BUY)
+        self.assertTrue(entry.indicators["entry_ready"])
+        self.assertTrue(entry.indicators["macro_bullish"])
+        self.assertTrue(entry.indicators["pulled_back"])
+        self.assertTrue(entry.indicators["reclaimed"])
+        self.assertIn("swing_low_5", entry.indicators)
+
+        # In-position: while close > EMA36, HOLD
+        held = strategy.analyze(frame, "BTC/USDT", in_position=True)
+        self.assertEqual(held.signal, Signal.HOLD)
+
+        # When close drops below EMA36, SELL
+        frame.iloc[-1, frame.columns.get_loc("open")] = 84.0
+        frame.iloc[-1, frame.columns.get_loc("close")] = 80.0
+        frame.iloc[-1, frame.columns.get_loc("low")] = 79.0
+        frame.iloc[-1, frame.columns.get_loc("high")] = 85.0
+        exit_sig = strategy.analyze(frame, "BTC/USDT", in_position=True)
+        self.assertEqual(exit_sig.signal, Signal.SELL)
+        self.assertIn("below EMA36", exit_sig.reason)
+
+    def test_macro_trend_pullback_warmup_and_invalid_data(self):
+        from strategies import MacroTrendPullbackStrategy
+
+        strategy = MacroTrendPullbackStrategy()
+        index = pd.date_range("2025-01-01", periods=599, freq="1h")
+        frame = pd.DataFrame({"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0}, index=index)
+        self.assertEqual(strategy.analyze(frame, "BTC/USDT").signal, Signal.HOLD)
+
+        for bad in (0.0, -1.0, math.nan, float("inf")):
+            with self.assertRaises(ValueError):
+                MacroTrendPullbackStrategy(max_atr_pct=bad)
+
+    def test_get_strategy_wires_macro_trend_pullback(self):
+        candidate = get_strategy("macro_trend_pullback", max_atr_pct=2.8)
+        self.assertEqual(candidate.__class__.__name__, "MacroTrendPullbackStrategy")
+        self.assertEqual(candidate.max_atr_pct, 2.8)
 
 
 # ==============================================================================

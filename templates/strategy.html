@@ -2,7 +2,7 @@
 const pct=v=>`${Number(v||0).toLocaleString()}%`;
 const readable=v=>String(v||'').replaceAll('_',' ').replace(/\b[a-z]/g,c=>c.toUpperCase());
 const readableReason=v=>String(v||'').replace(/needs_(\d+)_closed_hourly_candles_received_(\d+)/gi,(_,need,count)=>`needs ${Number(need).toLocaleString()} completed hourly candles; ${Number(count).toLocaleString()} received`).replaceAll('_',' ');
-const strategyNames={dynamic_regime:'Dynamic regime routing',macro_donchian_ema72:'Donchian breakout · EMA 72'};
+const strategyNames={dynamic_regime:'Dynamic regime routing',macro_donchian_ema72:'Donchian breakout · EMA 72',macro_trend_pullback:'Trend pullback · EMA 36'};
 function renderMarketChecks(d){
  const box=document.getElementById('regimes');
  const activeStrategy=String(d.strategy_name||'').toLowerCase();

@@ -124,8 +124,8 @@
             cell(row, resultLabel, result >= 0 ? 'positive' : 'negative');
             cell(row, priceText(position.stop_loss_price));
             cell(row, position.take_profit_price === null
-              ? 'EMA72 close'
-              : `${priceText(position.take_profit_price)}${position.exit_policy === 'ema72_signal' ? ' / EMA72 exit' : ''}`);
+              ? (position.exit_policy === 'ema36_signal' ? 'EMA36 close' : 'EMA72 close')
+              : `${priceText(position.take_profit_price)}${position.exit_policy === 'ema72_signal' ? ' / EMA72 exit' : position.exit_policy === 'ema36_signal' ? ' / EMA36 exit' : ''}`);
             cell(row, position.break_even_activated ? 'Trailing' : 'Initial');
             const action = row.insertCell();
             const button = document.createElement('button');

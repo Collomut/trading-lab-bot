@@ -61,7 +61,9 @@ class StrategyConfig:
     timeframe: str = os.getenv("TIMEFRAME", "1h")
     lookback_candles: int = int(os.getenv(
         "LOOKBACK_CANDLES",
-        "2500" if os.getenv("STRATEGY", "macro_donchian_ema72").strip().lower() in {"macro_donchian_ema72", "dynamic_regime"} else "150",
+        "600" if os.getenv("STRATEGY", "macro_donchian_ema72").strip().lower() == "macro_trend_pullback"
+        else "2500" if os.getenv("STRATEGY", "macro_donchian_ema72").strip().lower() in {"macro_donchian_ema72", "dynamic_regime"}
+        else "150",
     ))
     regime_filter_enabled: bool = field(default_factory=lambda: _env_bool("REGIME_FILTER_ENABLED", True))
     min_trend_adx: float = float(os.getenv("MIN_TREND_ADX", "20"))
@@ -182,7 +184,7 @@ class BotConfig:
             errors.append("STOP_LOSS_PCT > 10% defeats the purpose of a stop-loss")
         if self.risk.position_size_pct > 50.0:
             errors.append("POSITION_SIZE_PCT > 50% is dangerously high")
-        strategy_names = {"combined", "ema_crossover", "rsi_mean_reversion", "macd", "macro_donchian_ema72", "dynamic_regime"}
+        strategy_names = {"combined", "ema_crossover", "rsi_mean_reversion", "macd", "macro_donchian_ema72", "dynamic_regime", "macro_trend_pullback"}
         if self.strategy.name not in strategy_names:
             errors.append(f"STRATEGY must be one of: {', '.join(sorted(strategy_names))}")
         supported_timeframes = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}
@@ -244,14 +246,15 @@ class BotConfig:
         if (not math.isfinite(self.strategy.downtrend_rsi_recovery_level)
                 or not (10 <= self.strategy.downtrend_rsi_recovery_level <= 45)):
             errors.append("DOWNTREND_RSI_RECOVERY_LEVEL must be a finite value between 10 and 45")
-        if self.strategy.name in {"macro_donchian_ema72", "dynamic_regime"}:
+        if self.strategy.name in {"macro_donchian_ema72", "dynamic_regime", "macro_trend_pullback"}:
             if (not self.exchange.paper_trading or self.exchange.paper_environment not in {"testnet", "demo"}
                     or self.exchange.name.strip().lower() != "binance"):
                 errors.append(f"{self.strategy.name} requires Binance Spot Testnet or Binance Demo paper trading")
             if self.strategy.timeframe != "1h":
                 errors.append(f"{self.strategy.name} requires TIMEFRAME=1h")
-            if self.strategy.lookback_candles < 2500:
-                errors.append(f"{self.strategy.name} requires LOOKBACK_CANDLES >= 2500 for its contiguous EMA480 warmup")
+            min_lookback = 600 if self.strategy.name == "macro_trend_pullback" else 2500
+            if self.strategy.lookback_candles < min_lookback:
+                errors.append(f"{self.strategy.name} requires LOOKBACK_CANDLES >= {min_lookback} for its indicator warmup")
             if self.max_testnet_price_divergence_pct > 0.5:
                 errors.append(f"{self.strategy.name} caps MAX_TESTNET_PRICE_DIVERGENCE_PCT at 0.5%")
             if self.risk.max_risk_per_trade > 1.0:
@@ -265,7 +268,7 @@ class BotConfig:
             if self.risk.max_rolling_drawdown_pct > 5.0:
                 errors.append(f"{self.strategy.name} caps MAX_ROLLING_DRAWDOWN_PCT at 5%")
             # The 2026-11-15 halt-cap sweep (research/backtest_halt_cap_sweep.py) showed
-            # the EMA72 route is positive at a 4-loss budget in validation; the
+            # the trend route is positive at a 4-5 loss budget in validation; the
             # default remains 3 (conservative) but 4-5 is allowed for this profile.
             if self.risk.max_consecutive_losses > 5:
                 errors.append(f"{self.strategy.name} keeps MAX_CONSECUTIVE_LOSSES at 5 or lower")

@@ -86,10 +86,10 @@ def _readable_router_error(error: str) -> str:
     return ROUTER_ERROR_MESSAGES.get(error, "Market data is unavailable; this check was skipped.")
 
 
-def _validate_ohlcv(ohlcv: list) -> tuple[pd.DataFrame | None, str | None]:
-    if not isinstance(ohlcv, list) or len(ohlcv) < MIN_CANDLES:
+def _validate_ohlcv(ohlcv: list, min_candles: int = MIN_CANDLES) -> tuple[pd.DataFrame | None, str | None]:
+    if not isinstance(ohlcv, list) or len(ohlcv) < min_candles:
         count = len(ohlcv) if isinstance(ohlcv, list) else 0
-        return None, f"needs_{MIN_CANDLES}_closed_hourly_candles_received_{count}"
+        return None, f"needs_{min_candles}_closed_hourly_candles_received_{count}"
     try:
         frame = pd.DataFrame(
             ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
@@ -148,7 +148,7 @@ def _classify_closed_bar(close, index: int, adx, atr, ema200) -> tuple[str, dict
     }
 
 
-def evaluate_regime_router(ohlcv: list, active_strategy: str, *, enable_downtrend_recovery: bool = False) -> dict:
+def evaluate_regime_router(ohlcv: list, active_strategy: str, *, enable_downtrend_recovery: bool = False, min_candles: int | None = None) -> dict:
     """Return a fail-closed regime observation and optional Testnet entry route.
 
     Three consecutive completed hourly bars must classify identically before a
@@ -176,7 +176,10 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str, *, enable_downtren
         "entry_authorized": False,
         "reason": "No validated strategy is available for this regime.",
     }
-    frame, error = _validate_ohlcv(ohlcv)
+    min_required = min_candles if min_candles is not None else (
+        600 if str(active_strategy).strip().lower() == "macro_trend_pullback" else MIN_CANDLES
+    )
+    frame, error = _validate_ohlcv(ohlcv, min_candles=min_required)
     if error:
         result.update(
             status="unavailable",
@@ -221,10 +224,11 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str, *, enable_downtren
             entry_route_enabled=policy["entry_enabled"],
             reason="Stable uptrend confirmed; the allowlisted EMA72 trend candidate may evaluate an entry. Risk and execution checks still control order placement.",
         )
-    elif regime == "uptrend" and str(active_strategy).strip().lower() == ACTIVE_CANDIDATE:
+    elif regime == "uptrend" and str(active_strategy).strip().lower() in {ACTIVE_CANDIDATE, "macro_trend_pullback"}:
+        strat_id = str(active_strategy).strip().lower()
         result.update(
-            candidate_strategy=ACTIVE_CANDIDATE,
-            selected_strategy=ACTIVE_CANDIDATE,
+            candidate_strategy=strat_id,
+            selected_strategy=strat_id,
             route="observe_existing_strategy_only",
             reason="The configured Testnet strategy is the only trend candidate; its existing rules still decide signals.",
         )

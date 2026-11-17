@@ -530,6 +530,149 @@ class DowntrendRsiRecoveryTestnetStrategy:
         return TradeSignal(Signal.HOLD, symbol, 0.0, "No RSI recovery entry in the confirmed downtrend", indicators)
 
 
+class MacroTrendPullbackStrategy:
+    """Multi-timeframe trend continuation strategy: 1H pullback re-entry in confirmed macro uptrend.
+
+    This candidate safely increases completed trade frequency without lowering
+    risk standards or chasing breakout tops.
+    
+    Rules:
+      1. Macro Trend: 1H Close > EMA200, EMA20 > EMA50, and EMA200 is rising over 24h.
+      2. Pullback: Current or previous 1H Low touches or dips below EMA20 (value zone).
+      3. Reclaim: Completed 1H candle closes bullish (Close > Open) and reclaims EMA9.
+      4. Volatility Gate: ATR14 / Close * 100 <= max_atr_pct (default 3.0%).
+      5. Exit: Completed 1H close below trailing EMA36 (locks in trend gains faster than EMA72).
+      6. Stop Reference: Prior 5-bar swing low, floored at 4% below entry price.
+    """
+
+    MIN_CANDLES = 600
+    INTERVAL = pd.Timedelta(hours=1)
+    STRATEGY_ID = "macro_trend_pullback"
+
+    def __init__(self, max_atr_pct: float = 3.0):
+        value = float(max_atr_pct)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("max_atr_pct must be a finite value greater than 0")
+        self.max_atr_pct = value
+
+    def analyze(self, df: pd.DataFrame, symbol: str, *, in_position: bool = False) -> TradeSignal:
+        empty = TradeSignal(Signal.HOLD, symbol, 0.0, f"Waiting for {self.MIN_CANDLES} contiguous hourly candles", {})
+        required = {"open", "high", "low", "close"}
+        if df is None or len(df) < self.MIN_CANDLES or not required.issubset(df.columns):
+            return empty
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "Hourly candle timestamps are unavailable", {})
+        window = df.iloc[-self.MIN_CANDLES:]
+        if window.index.has_duplicates or not window.index.is_monotonic_increasing:
+            return TradeSignal(Signal.HOLD, symbol, 0.0, "Candle timestamps are invalid", {})
+        if not window.index.to_series().diff().iloc[1:].eq(self.INTERVAL).all():
+            return TradeSignal(Signal.HOLD, symbol, 0.0, f"A gap exists in the {self.MIN_CANDLES}-candle strategy warmup", {})
+
+        try:
+            close = pd.to_numeric(window["close"], errors="raise")
+            high = pd.to_numeric(window["high"], errors="raise")
+            low = pd.to_numeric(window["low"], errors="raise")
+            open_ = pd.to_numeric(window["open"], errors="raise")
+            values = np.concatenate((close.to_numpy(), high.to_numpy(), low.to_numpy(), open_.to_numpy()))
+            if not np.isfinite(values).all() or (close <= 0).any() or (high <= 0).any() or (low <= 0).any() or (open_ <= 0).any():
+                raise ValueError("non-finite or non-positive candle values")
+            if (high < low).any() or (close > high).any() or (close < low).any() or (open_ > high).any() or (open_ < low).any():
+                raise ValueError("inconsistent OHLC values")
+
+            ema9 = EMAIndicator(close=close, window=9).ema_indicator()
+            ema20 = EMAIndicator(close=close, window=20).ema_indicator()
+            ema50 = EMAIndicator(close=close, window=50).ema_indicator()
+            ema36 = EMAIndicator(close=close, window=36).ema_indicator()
+            ema200 = EMAIndicator(close=close, window=200).ema_indicator()
+            atr = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
+            swing_low = low.shift(1).rolling(5, min_periods=5).min()
+
+            i = len(window) - 1
+            close_now = float(close.iloc[i])
+            open_now = float(open_.iloc[i])
+            low_now = float(low.iloc[i])
+            low_prev = float(low.iloc[i - 1])
+            ema9_now = float(ema9.iloc[i])
+            ema20_now = float(ema20.iloc[i])
+            ema20_prev = float(ema20.iloc[i - 1])
+            ema50_now = float(ema50.iloc[i])
+            ema36_now = float(ema36.iloc[i])
+            ema200_now = float(ema200.iloc[i])
+            ema200_24h_ago = float(ema200.iloc[i - 24])
+            atr_now = float(atr.iloc[i])
+            swing_now = float(swing_low.iloc[i])
+
+            check_vals = (
+                close_now, open_now, low_now, low_prev, ema9_now, ema20_now,
+                ema20_prev, ema50_now, ema36_now, ema200_now, ema200_24h_ago,
+                atr_now, swing_now
+            )
+            if not all(math.isfinite(v) and v > 0 for v in check_vals):
+                raise ValueError("indicator warmup is incomplete")
+
+            atr_pct = atr_now / close_now * 100.0
+        except (TypeError, ValueError, OverflowError, IndexError) as exc:
+            return TradeSignal(Signal.HOLD, symbol, 0.0, f"Invalid strategy data ({type(exc).__name__})", {})
+
+        macro_bullish = bool(close_now > ema200_now and ema20_now > ema50_now and ema200_now > ema200_24h_ago)
+        pulled_back = bool(low_now <= ema20_now or low_prev <= ema20_prev)
+        reclaimed = bool(close_now > open_now and close_now > ema9_now)
+        atr_within_band = bool(atr_pct <= self.max_atr_pct)
+        entry_ready = bool(macro_bullish and pulled_back and reclaimed and atr_within_band)
+        exit_ready = bool(close_now < ema36_now)
+
+        indicators = {
+            "close": close_now,
+            "ema9": round(ema9_now, 4),
+            "ema20": round(ema20_now, 4),
+            "ema36": round(ema36_now, 4),
+            "ema50": round(ema50_now, 4),
+            "ema200": round(ema200_now, 4),
+            "ema200_24h_slope_pct": round((ema200_now / ema200_24h_ago - 1.0) * 100.0, 4),
+            "swing_low_5": round(swing_now, 4),
+            "atr": round(atr_now, 4),
+            "atr_pct": round(atr_pct, 4),
+            "max_atr_pct": self.max_atr_pct,
+            "strategy": self.STRATEGY_ID,
+            "macro_bullish": macro_bullish,
+            "pulled_back": pulled_back,
+            "reclaimed": reclaimed,
+            "entry_ready": entry_ready,
+            "exit_ready": exit_ready,
+        }
+
+        if in_position:
+            if exit_ready:
+                return TradeSignal(
+                    Signal.SELL, symbol, 0.85,
+                    f"Completed 1h close below EMA36 ({close_now:.8g} < {ema36_now:.8g})",
+                    indicators,
+                )
+            return TradeSignal(
+                Signal.HOLD, symbol, 0.0,
+                "Position open; waiting for a completed close below EMA36",
+                indicators,
+            )
+
+        if entry_ready:
+            return TradeSignal(
+                Signal.BUY, symbol, 0.85,
+                "1H EMA20 pullback reclaimed with bullish close in confirmed macro uptrend",
+                indicators,
+            )
+
+        if not macro_bullish:
+            reason = "No macro uptrend (Close must exceed rising EMA200 with EMA20 > EMA50)"
+        elif not pulled_back:
+            reason = "Waiting for price pullback to EMA20 value zone"
+        elif not reclaimed:
+            reason = "Pullback observed; waiting for bullish close above EMA9 to confirm reclaim"
+        else:
+            reason = f"Setup skipped: ATR14 {atr_pct:.2f}% exceeds {self.max_atr_pct:.2f}% limit"
+
+        return TradeSignal(Signal.HOLD, symbol, 0.0, reason, indicators)
+
+
 class CombinedStrategy:
     """
     Combined rules-based strategy:
@@ -760,6 +903,7 @@ def get_strategy(
         "macd": MACD_Strategy,
         "combined": CombinedStrategy,
         "macro_donchian_ema72": MacroDonchianEma72Strategy,
+        "macro_trend_pullback": MacroTrendPullbackStrategy,
         # Dynamic routing currently has one evidence-screened Testnet candidate;
         # the router selects it only in stable uptrends and otherwise returns HOLD.
         "dynamic_regime": MacroDonchianEma72Strategy,
@@ -774,6 +918,8 @@ def get_strategy(
             min_trend_adx=min_trend_adx,
             max_atr_pct=max_atr_pct,
         )
+    if name == "macro_trend_pullback":
+        return MacroTrendPullbackStrategy(max_atr_pct=max_atr_pct)
     if name in {"macro_donchian_ema72", "dynamic_regime"}:
         # The EMA72 profile uses its own research-validated volatility band so the
         # legacy MAX_ATR_PCT default for the combined strategy cannot leak in.
