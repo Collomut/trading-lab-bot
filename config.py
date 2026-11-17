@@ -8,7 +8,8 @@ import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-load_dotenv()
+if "BOT_TEST_SUITE" not in os.environ and "PYTEST_CURRENT_TEST" not in os.environ:
+    load_dotenv()
 
 
 def _env_bool(name: str, default: bool, *, strict: bool = False) -> bool:

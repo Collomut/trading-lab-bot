@@ -441,6 +441,7 @@ class WebDashboard:
         # the dashboard show a valid balance while still blocking trading if
         # full account reconciliation is unavailable.
         account_issue = ""
+        account = None
         try:
             account = await loop.run_in_executor(None, exchange.fetch_balance_snapshot)
             usdt_balance = float((account.get("free") or {}).get("USDT") or 0.0)
