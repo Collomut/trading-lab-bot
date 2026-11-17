@@ -137,7 +137,7 @@ function renderRegimeRouter(d){
  for(const [symbol,item] of entries){
   const observed=item?.regime_router||{},row=document.createElement('div');row.className='limit-row';
   const name=document.createElement('span');name.textContent=symbol;
-  const routeText=dynamic?(observed.selected_strategy==='macro_donchian_ema72'?'EMA72 trend strategy selected':observed.selected_strategy==='macro_trend_pullback'?'Trend pullback strategy selected':'No entry strategy · stand aside'):(observed.route==='observe_existing_strategy_only'?'Observe current strategy':'No strategy selected');
+  const routeText=dynamic?(observed.selected_strategy==='macro_donchian_ema72'?'EMA72 trend strategy selected':observed.selected_strategy==='macro_trend_pullback'?'Trend pullback strategy selected':'No entry strategy · stand aside'):(observed.route==='observe_existing_strategy_only'?'Observe current strategy':'Observation only · active strategy applies');
   const label=document.createElement('strong');label.textContent=`${titles[observed.regime]||'Uncertain'} · ${routeText}`;
   row.append(name,label);box.append(row);
   const reason=document.createElement('p');reason.className='help';reason.textContent=readableReason(observed.reason||'Regime observation unavailable; no strategy change is made.');box.append(reason);
