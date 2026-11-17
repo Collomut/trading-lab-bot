@@ -907,6 +907,7 @@ function renderMarketPulse(d) {
   const signals = d.latest_signals && typeof d.latest_signals === 'object' ? d.latest_signals : {};
   const entries = Object.entries(signals);
   const isDonchian = String(d.strategy_name || '').toLowerCase() === 'macro_donchian_ema72';
+  const isPullback = String(d.strategy_name || '').toLowerCase() === 'macro_trend_pullback';
   grid.replaceChildren();
 
   if (!entries.length) {
@@ -927,9 +928,18 @@ function renderMarketPulse(d) {
     const close = Number(indicators.close);
     const ema = Number(indicators.ema480);
     const breakout = Number(indicators.donchian_high168);
-    const valid = [close, ema, breakout].every(value => Number.isFinite(value) && value > 0);
-    const entryReady = valid && signal === 'BUY' && close > ema && close > breakout && indicators.entry_ready === true;
-    if (entryReady || (!isDonchian && signal === 'BUY')) readyCount++;
+    const ema200 = Number(indicators.ema200);
+    const ema20 = Number(indicators.ema20);
+    const ema9 = Number(indicators.ema9);
+    const validDonchian = [close, ema, breakout].every(value => Number.isFinite(value) && value > 0);
+    const validPullback = [close, ema200, ema20, ema9].every(value => Number.isFinite(value) && value > 0);
+    const valid = isPullback ? validPullback : validDonchian;
+    const entryReady = isDonchian
+      ? (validDonchian && signal === 'BUY' && close > ema && close > breakout && indicators.entry_ready === true)
+      : isPullback
+      ? (validPullback && signal === 'BUY' && indicators.entry_ready === true)
+      : (signal === 'BUY');
+    if (entryReady || (!isDonchian && !isPullback && signal === 'BUY')) readyCount++;
     const stamp = Date.parse(item?.timestamp || '');
     if (Number.isFinite(stamp)) newest = Math.max(newest, stamp);
 
@@ -980,6 +990,37 @@ function renderMarketPulse(d) {
         : bothPriceFiltersPass ? 'Price filters clear · no new BUY signal'
         : `${gapPct.toFixed(1)}% below the higher required price level`;
       card.append(foot);
+    } else if (isPullback && validPullback) {
+      const gates = document.createElement('div');
+      gates.className = 'pulse-gates';
+      const macroPassed = Boolean(indicators.macro_bullish);
+      const pullbackPassed = Boolean(indicators.pulled_back);
+      const reclaimPassed = Boolean(indicators.reclaimed);
+      const checks = [
+        ['Macro 200 EMA', macroPassed, macroPassed ? 'Passed' : 'Below / Flat'],
+        ['Pullback 20 EMA', pullbackPassed, pullbackPassed ? 'Touched' : 'Waiting'],
+        ['Reclaim 9 EMA', reclaimPassed, reclaimPassed ? 'Reclaimed' : 'Waiting'],
+      ];
+      for (const [label, passed, text] of checks) {
+        const row = document.createElement('div');
+        row.className = 'pulse-gate';
+        const name = document.createElement('span');
+        name.textContent = label;
+        const value = document.createElement('strong');
+        value.className = passed ? 'gate-pass' : 'gate-wait';
+        value.textContent = text;
+        row.append(name, value);
+        gates.append(row);
+      }
+      card.append(gates);
+      const foot = document.createElement('div');
+      foot.className = `pulse-entry ${entryReady ? 'entry-ready' : ''}`;
+      foot.textContent = entryReady ? 'BUY signal · pullback reclaim met'
+        : !macroPassed ? 'Awaiting macro uptrend (Close > EMA200)'
+        : !pullbackPassed ? 'In trend · waiting for pullback to EMA20'
+        : !reclaimPassed ? 'Pullback active · waiting for bullish 9 EMA reclaim'
+        : 'Setup complete · checking risk limits';
+      card.append(foot);
     } else {
       const reason = document.createElement('div');
       reason.className = 'pulse-reason';
@@ -1000,6 +1041,8 @@ function renderMarketPulse(d) {
 
   summary.textContent = isDonchian
     ? `${readyCount} of ${entries.length} entry setups currently meet both breakout and long-term trend rules.`
+    : isPullback
+    ? `${readyCount} of ${entries.length} markets currently show a confirmed pullback reclaim entry.`
     : `${readyCount} of ${entries.length} markets currently show a BUY signal from the active strategy.`;
   updated.textContent = newest ? `Checks updated ${new Date(newest).toLocaleTimeString()}` : `Completed ${d.timeframe || 'market'} checks`;
 }

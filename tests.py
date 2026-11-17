@@ -1813,7 +1813,7 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
         connector.exchange = Mock()
         connector.exchange.parse_timeframe.return_value = 60
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        start = (now_ms // 60_000) * 60_000 - 180_000
+        start = (now_ms // 60_000) * 60_000 - 600_000
         connector.exchange.fetch_ohlcv.return_value = [
             [start, 100, 101, 99, 100, 10],
             [start + 120_000, 100, 101, 99, 100, 10],
@@ -4006,7 +4006,13 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
         logs_page = (Path("templates") / "logs.html").read_text(encoding="utf-8")
         overview_page = (Path("templates") / "overview.html").read_text(encoding="utf-8")
+        positions_page = (Path("templates") / "positions.html").read_text(encoding="utf-8")
         self.assertIn("macro_donchian_ema72:'Donchian breakout · EMA 72'", strategy_page)
+        self.assertIn("macro_trend_pullback:'Trend pullback · EMA 36'", strategy_page)
+        self.assertIn("Macro 200 EMA", overview_page)
+        self.assertIn("Pullback 20 EMA", overview_page)
+        self.assertIn("Reclaim 9 EMA", overview_page)
+        self.assertIn("EMA36 close", positions_page)
         self.assertIn("replaceAll('_',' ')", strategy_page)
         self.assertIn("replaceAll('_',' ')", logs_page)
         self.assertIn("readableReason", overview_page)

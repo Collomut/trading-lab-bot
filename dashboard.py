@@ -636,8 +636,10 @@ class WebDashboard:
             "daily_loss_limit_pct": self.config.risk.max_daily_loss_pct,
             "stop_loss_pct": self.config.risk.stop_loss_pct,
             "take_profit_pct": self.config.risk.take_profit_pct,
-            "take_profit_managed_by_strategy": self.config.strategy.name in {"macro_donchian_ema72", "dynamic_regime"},
+            "take_profit_managed_by_strategy": self.config.strategy.name in {"macro_donchian_ema72", "dynamic_regime", "macro_trend_pullback"},
             "strategy_exit_description": (
+                "Completed 1-hour close below EMA36; prior 5-bar swing low stop"
+                if self.config.strategy.name == "macro_trend_pullback" else
                 "Dynamic paper route: EMA72 candidate exits on a completed 1-hour close below EMA72; 100×ATR target is a distant backstop"
                 if self.config.strategy.name == "dynamic_regime" else
                 "Completed 1-hour close below EMA72; 100×ATR target is a distant backstop"
@@ -720,9 +722,10 @@ class WebDashboard:
             safe_indicators = {}
             for key in (
                 "market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend",
-                "consensus_required", "entry_gates", "close", "ema480", "ema72",
-                "ema20", "rsi", "donchian_high168", "swing_low_5", "entry_ready", "exit_ready",
-                "breakout_ready", "max_atr_pct",
+                "consensus_required", "entry_gates", "close", "ema480", "ema72", "ema9",
+                "ema20", "ema36", "ema50", "ema200", "rsi", "donchian_high168", "swing_low_5",
+                "entry_ready", "exit_ready", "breakout_ready", "max_atr_pct", "macro_bullish",
+                "pulled_back", "reclaimed",
             ):
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):

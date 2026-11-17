@@ -24,18 +24,47 @@ function renderMarketChecks(d){
   // Use the configured strategy as the source of truth. A HOLD/error result can
   // legitimately have empty indicators, which previously hid the EMA72 view.
   const isDonchian=activeDonchian||indicators.strategy==='macro_donchian_ema72';
+  const isPullback=activeStrategy==='macro_trend_pullback'||indicators.strategy==='macro_trend_pullback';
   const gateSummary=isDonchian
    ? item?.signal==='BUY'?'Breakout entry conditions pass':item?.signal==='SELL'?'EMA72 exit condition passed':'No breakout entry; exits are checked only for open positions'
+   : isPullback
+   ? item?.signal==='BUY'?'Pullback reclaim entry conditions pass':item?.signal==='SELL'?'EMA36 exit condition passed':'Waiting for pullback reclaim; exits are checked only for open positions'
    : buyCandidate?(blockers.length?`BUY setup blocked by ${blockers.join(', ')}`:'BUY setup passes strategy gates'):'No BUY consensus · gate status is informational';
   const hasDonchianValues=[indicators.close,indicators.ema480,indicators.ema72,indicators.donchian_high168].every(v=>Number.isFinite(Number(v))&&Number(v)>0);
+  const hasPullbackValues=[indicators.close,indicators.ema200,indicators.ema20,indicators.ema9].every(v=>Number.isFinite(Number(v))&&Number(v)>0);
   value.textContent=isDonchian
    ? hasDonchianValues?`${item?.signal||'—'} · Close ${Number(indicators.close).toLocaleString()} · EMA480 ${Number(indicators.ema480).toLocaleString()} · EMA72 ${Number(indicators.ema72).toLocaleString()}`:`${item?.signal||'HOLD'} · ${readableReason(item?.reason||'Waiting for an eligible market regime')}`
+   : isPullback
+   ? hasPullbackValues?`${item?.signal||'—'} · Close ${Number(indicators.close).toLocaleString()} · EMA200 ${Number(indicators.ema200).toLocaleString()} · EMA20 ${Number(indicators.ema20).toLocaleString()} · EMA9 ${Number(indicators.ema9).toLocaleString()}`:`${item?.signal||'HOLD'} · ${readableReason(item?.reason||'Waiting for valid strategy data')}`
    : `${names[indicators.market_regime]||'Unknown'} · ${adx} · ${atr} · ${item?.signal||'—'}`;
   row.append(label,value);box.append(row);
   const gateNote=document.createElement('p');gateNote.className='help';gateNote.textContent=gateSummary;box.append(gateNote);
   const reason=document.createElement('p');reason.className='help';reason.textContent=readableReason(item?.reason||'Decision reason unavailable');box.append(reason);
   const votes=indicators.strategy_votes;
-  if(isDonchian){
+  if(isPullback){
+   const agreement=document.createElement('div');agreement.className='vote-agreement';
+   const valid=hasPullbackValues;
+   const result=document.createElement('strong');result.className=`vote-chip vote-result ${valid?(indicators.entry_ready?'is-buy':'is-wait'):'is-wait'}`;
+   const atrBlocked=valid&&indicators.macro_bullish&&indicators.pulled_back&&indicators.reclaimed&&indicators.entry_ready!==true;
+   result.textContent=valid?`Trend Pullback · ${indicators.entry_ready?'ENTRY READY':atrBlocked?'ENTRY BLOCKED · ATR BAND':'WAITING FOR ENTRY'}`:'Trend Pullback · WARMUP / DATA CHECK';agreement.append(result);
+   const chips=document.createElement('div');chips.className='vote-chips';chips.setAttribute('aria-label','Pullback and EMA strategy rules');
+   if(valid){
+    const rules=[
+     ['Macro trend (EMA200)',Boolean(indicators.macro_bullish),'PASS','WAIT'],
+     ['EMA20 pullback',Boolean(indicators.pulled_back),'PASS','WAIT'],
+     ['EMA9 reclaim',Boolean(indicators.reclaimed),'PASS','WAIT'],
+     ['EMA36 exit',Boolean(indicators.exit_ready),'TRIGGERED','CLEAR'],
+    ];
+    if(Number.isFinite(Number(indicators.atr_pct))&&Number.isFinite(Number(indicators.max_atr_pct))){
+     rules.splice(3,0,['ATR band',Number(indicators.atr_pct)<=Number(indicators.max_atr_pct),'PASS','BLOCK']);
+    }
+    for(const [name,passed,yes,no] of rules){const chip=document.createElement('span');chip.className=`vote-chip ${name==='EMA36 exit'&&passed?'is-sell':passed?'is-buy':'is-wait'}`;chip.textContent=`${name} · ${passed?yes:no}`;chips.append(chip)}
+   }else{
+    const chip=document.createElement('span');chip.className='vote-chip is-wait';chip.textContent=readableReason(item?.reason||'Waiting for valid strategy data');chips.append(chip)
+   }
+   agreement.append(chips);box.append(agreement);
+   const note=document.createElement('p');note.className='help';note.textContent='This strategy enters pullbacks to EMA20 with a confirmed EMA9 reclaim during macro uptrends. EMA36 is an exit rule for open positions.';box.append(note)
+  }else if(isDonchian){
    const agreement=document.createElement('div');agreement.className='vote-agreement';
    const valid=hasDonchianValues;
    const result=document.createElement('strong');result.className=`vote-chip vote-result ${valid?(indicators.entry_ready?'is-buy':'is-wait'):'is-wait'}`;
@@ -99,7 +128,7 @@ function renderRegimeRouter(d){
  for(const [symbol,item] of entries){
   const observed=item?.regime_router||{},row=document.createElement('div');row.className='limit-row';
   const name=document.createElement('span');name.textContent=symbol;
-  const routeText=dynamic?(observed.selected_strategy==='macro_donchian_ema72'?'EMA72 trend strategy selected':'No entry strategy · stand aside'):(observed.route==='observe_existing_strategy_only'?'Observe current strategy':'No strategy selected');
+  const routeText=dynamic?(observed.selected_strategy==='macro_donchian_ema72'?'EMA72 trend strategy selected':observed.selected_strategy==='macro_trend_pullback'?'Trend pullback strategy selected':'No entry strategy · stand aside'):(observed.route==='observe_existing_strategy_only'?'Observe current strategy':'No strategy selected');
   const label=document.createElement('strong');label.textContent=`${titles[observed.regime]||'Uncertain'} · ${routeText}`;
   row.append(name,label);box.append(row);
   const reason=document.createElement('p');reason.className='help';reason.textContent=readableReason(observed.reason||'Regime observation unavailable; no strategy change is made.');box.append(reason);
@@ -117,7 +146,8 @@ async function refresh(){
   const strategyLabel=strategyNames[String(d.strategy_name||'').toLowerCase()]||readable(d.strategy_name)||'Strategy';
   document.getElementById('strategy').textContent=`${strategyLabel} · ${d.timeframe} · ${d.exchange} · ${d.paper_trading?`Paper · ${d.paper_environment==='demo'?'Binance Demo':'Spot Testnet'}`:'Live mode reported'}`;
   const ema72Profile=['MACRO_DONCHIAN_EMA72','DYNAMIC_REGIME'].includes(String(d.strategy_name||'').toUpperCase());
-  const entries=[['Risk per trade',pct(d.risk_per_trade_pct)],['Max position',pct(d.position_size_pct)],['Daily stop threshold',pct(d.daily_loss_limit_pct)],['Stop model',ema72Profile?'Prior 5-bar low, capped at 4%':pct(d.stop_loss_pct)],['Target / exit',d.take_profit_managed_by_strategy?d.strategy_exit_description:pct(d.take_profit_pct)],['Entry filter',ema72Profile?(String(d.strategy_name).toUpperCase()==='DYNAMIC_REGIME'?'Stable uptrend + 168-bar breakout above EMA480':'168-bar breakout above EMA480'):d.regime_filter_enabled?`ADX ≥ ${d.min_trend_adx} · ATR ≤ ${pct(d.max_atr_pct)}`:'No regime filter'],['Open positions',String(d.max_positions)],['Bot status',d.halted?'Paused':'Running']];
+  const isPullbackProfile=String(d.strategy_name||'').toUpperCase()==='MACRO_TREND_PULLBACK';
+  const entries=[['Risk per trade',pct(d.risk_per_trade_pct)],['Max position',pct(d.position_size_pct)],['Daily stop threshold',pct(d.daily_loss_limit_pct)],['Stop model',ema72Profile||isPullbackProfile?'Prior 5-bar low, capped at 4%':pct(d.stop_loss_pct)],['Target / exit',d.take_profit_managed_by_strategy?d.strategy_exit_description:pct(d.take_profit_pct)],['Entry filter',isPullbackProfile?'Macro trend (EMA200) + EMA20 pullback + EMA9 reclaim':ema72Profile?(String(d.strategy_name).toUpperCase()==='DYNAMIC_REGIME'?'Stable uptrend + 168-bar breakout above EMA480':'168-bar breakout above EMA480'):d.regime_filter_enabled?`ADX ≥ ${d.min_trend_adx} · ATR ≤ ${pct(d.max_atr_pct)}`:'No regime filter'],['Open positions',String(d.max_positions)],['Bot status',d.halted?'Paused':'Running']];
   const box=document.getElementById('limits');box.replaceChildren();
   for(const [k,v] of entries){const row=document.createElement('div');row.className='limit-row';const label=document.createElement('span');label.textContent=k;const value=document.createElement('strong');value.textContent=v;row.append(label,value);box.append(row)}
   renderMarketChecks(d);
