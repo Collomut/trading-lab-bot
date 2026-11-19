@@ -47,7 +47,7 @@ import threading
 import time
 import urllib.error
 import unittest
-from contextlib import closing, redirect_stdout
+from contextlib import closing, nullcontext, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -1701,6 +1701,63 @@ class TestStateStoreAndPersistence(unittest.TestCase):
             self.assertEqual(store.unresolved_orders(), [])
             self.assertIsNone(store.read_state("baseline_asset_balances"))
 
+    def test_postgres_trade_recovery_merges_sqlite_and_jsonl_without_duplicates(self):
+        import postgres_state_store as postgres_store
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            legacy_db = root / "state.db"
+            store = StateStore(legacy_db)
+            sqlite_trade = {"symbol": "XRP/USDT", "timestamp": "2026-11-14T14:25:34Z", "pnl": None}
+            jsonl_only_trade = {"symbol": "BTC/USDT", "timestamp": "2026-11-15T00:00:00Z", "pnl": 0.25}
+            store.append_trade(sqlite_trade)
+            (root / "trades.jsonl").write_text(
+                json.dumps(sqlite_trade) + "\n" + json.dumps(jsonl_only_trade) + "\n",
+                encoding="utf-8",
+            )
+
+            recovered = postgres_store._trade_payload_rows(legacy_db, root / "trades.jsonl")
+            self.assertEqual(len(recovered), 2)
+            self.assertEqual({row[1]["symbol"] for row in recovered}, {"XRP/USDT", "BTC/USDT"})
+            self.assertTrue(all(row[0].startswith("runtime:") for row in recovered))
+
+            class Result:
+                def __init__(self, row):
+                    self.row = row
+
+                def fetchone(self):
+                    return self.row
+
+            class Connection:
+                def __init__(self):
+                    self.payloads = set()
+
+                def execute(self, query, params):
+                    payload = json.loads(params[0] if query.lstrip().startswith("SELECT") else params[1])
+                    if query.lstrip().startswith("SELECT"):
+                        return Result((1,) if json.dumps(payload, sort_keys=True) in self.payloads else None)
+                    self.payloads.add(json.dumps(payload, sort_keys=True))
+                    return Result((1,))
+
+            connection = Connection()
+            first = postgres_store._backfill_trade_rows(connection, recovered)
+            second = postgres_store._backfill_trade_rows(connection, recovered)
+            self.assertEqual(first, 2)
+            self.assertEqual(second, 0)
+
+    def test_postgres_trade_recovery_supports_legacy_sqlite_without_trade_table(self):
+        import postgres_state_store as postgres_store
+
+        with TemporaryDirectory() as temp_dir:
+            legacy_db = Path(temp_dir) / "legacy.db"
+            with closing(sqlite3.connect(legacy_db)) as conn:
+                conn.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+            trades_path = legacy_db.with_name("trades.jsonl")
+            trades_path.write_text(json.dumps({"symbol": "ETH/USDT"}) + "\n", encoding="utf-8")
+            recovered = postgres_store._trade_payload_rows(legacy_db, trades_path)
+            self.assertEqual(len(recovered), 1)
+            self.assertEqual(recovered[0][1]["symbol"], "ETH/USDT")
+
     def test_completed_postgres_import_does_not_require_legacy_sqlite_file(self):
         import postgres_state_store as postgres_store
 
@@ -1719,6 +1776,9 @@ class TestStateStoreAndPersistence(unittest.TestCase):
 
             def __exit__(self, *_args):
                 return False
+
+            def transaction(self):
+                return nullcontext()
 
             def execute(self, query):
                 if "to_regclass" in query:
