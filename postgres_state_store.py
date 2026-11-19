@@ -9,6 +9,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
@@ -28,6 +29,74 @@ def _executemany(conn, query, params):
     """Run a batch using psycopg 3's cursor-level executemany API."""
     with conn.cursor() as cursor:
         cursor.executemany(query, params)
+
+
+def _trade_payload_rows(sqlite_path: str | Path, trades_path: str | Path) -> list[tuple[str, dict, str]]:
+    """Read and deduplicate durable SQLite and JSONL trade history.
+
+    Both stores contain a mirror of runtime trades. Hashing the compact JSON
+    payload gives a stable id across those mirrors and makes recovery safe to
+    repeat after a migration marker already exists.
+    """
+    rows: dict[str, tuple[str, dict, str]] = {}
+
+    def add(payload, created_at: str | None = None):
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            raise ValueError("trade entry must be a JSON object")
+        encoded = json.dumps(payload, allow_nan=False, separators=(",", ":"))
+        source_id = "runtime:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        timestamp = str(payload.get("timestamp") or created_at or datetime.now(timezone.utc).isoformat())
+        rows.setdefault(source_id, (source_id, payload, timestamp))
+
+    source = Path(sqlite_path)
+    if source.is_file():
+        with closing(sqlite3.connect(source)) as conn:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "trades" in tables:
+                for row in conn.execute("SELECT payload, created_at FROM trades ORDER BY id"):
+                    try:
+                        add(row[0], row[1])
+                    except (ValueError, TypeError) as exc:
+                        raise RuntimeError("SQLite trade history contains an invalid row; import refused") from exc
+
+    trade_file = Path(trades_path)
+    if trade_file.exists():
+        with trade_file.open("r", encoding="utf-8") as stream:
+            for line_number, raw in enumerate(stream, start=1):
+                if not raw.strip():
+                    continue
+                try:
+                    add(raw)
+                except (ValueError, TypeError) as exc:
+                    raise RuntimeError(
+                        f"Trade history line {line_number} is invalid; import refused"
+                    ) from exc
+    return list(rows.values())
+
+
+def _backfill_trade_rows(conn, trade_rows: list[tuple[str, dict, str]]) -> int:
+    """Add missing legacy trades without duplicating payloads already in Postgres."""
+    inserted = 0
+    for source_id, payload, created_at in trade_rows:
+        encoded = json.dumps(payload, allow_nan=False, separators=(",", ":"))
+        already_present = conn.execute(
+            "SELECT 1 FROM bot_private.trades WHERE payload=%s::jsonb LIMIT 1",
+            (encoded,),
+        ).fetchone()
+        if already_present:
+            continue
+        result = conn.execute("""
+            INSERT INTO bot_private.trades(source_id,payload,created_at)
+            VALUES(%s,%s::jsonb,%s)
+            ON CONFLICT(source_id) DO NOTHING
+            RETURNING id
+        """, (source_id, encoded, created_at)).fetchone()
+        inserted += int(result is not None)
+    return inserted
 
 def _conninfo_from_url(value: str) -> dict:
     """Parse PostgreSQL URIs without libpq's locale-dependent URI decoding."""
@@ -171,7 +240,24 @@ class PostgresStateStore:
                     if exists else None
                 )
             if marker:
+                # Earlier importer versions copied JSONL but forgot the SQLite
+                # trades table. On subsequent starts, safely recover only trade
+                # records; never re-import account state, positions, or orders.
+                legacy_trades = _trade_payload_rows(source, trades_path) if source.is_file() else []
+                recovered = 0
+                with check_pool.connection() as conn, conn.transaction():
+                    recovered = _backfill_trade_rows(conn, legacy_trades)
+                    if recovered:
+                        conn.execute("""
+                            INSERT INTO bot_private.audit_events(event_type,details_json,created_at)
+                            VALUES(%s,%s::jsonb,%s)
+                        """, (
+                            "legacy_trade_history_recovered",
+                            json.dumps({"recovered_trades": recovered}, allow_nan=False),
+                            datetime.now(timezone.utc).isoformat(),
+                        ))
                 return {"status": "already_imported", "counts": marker["counts_json"],
+                        "recovered_trades": recovered,
                         "backup": "not required; a verified import marker already exists"}
         finally:
             check_pool.close()
@@ -180,12 +266,12 @@ class PostgresStateStore:
         # A stable online backup remains on the Railway volume for rollback/audit.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = source.with_name(f"{source.stem}_pre_supabase_{stamp}{source.suffix}")
-        with sqlite3.connect(source) as src, sqlite3.connect(backup) as dst:
+        with closing(sqlite3.connect(source)) as src, closing(sqlite3.connect(backup)) as dst:
             src.backup(dst)
         digest = hashlib.sha256(backup.read_bytes()).hexdigest()
 
         sqlite_rows = {}
-        with sqlite3.connect(backup) as src:
+        with closing(sqlite3.connect(backup)) as src:
             src.row_factory = sqlite3.Row
             tables = {r["name"] for r in src.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -195,28 +281,19 @@ class PostgresStateStore:
                 raise RuntimeError("SQLite source schema is incomplete; import refused")
             for table in sorted(required):
                 sqlite_rows[table] = [dict(row) for row in src.execute(f"SELECT * FROM {table}")]
+            # Trade rows are part of the SQLite schema from newer builds, but
+            # are optional for older databases. A second JSONL mirror is merged
+            # below and deduplicated by canonical payload.
+            sqlite_rows["trades"] = []
+            if "trades" in tables:
+                sqlite_rows["trades"] = [dict(row) for row in src.execute(
+                    "SELECT source_id,payload,created_at FROM trades ORDER BY id"
+                )]
             quick = src.execute("PRAGMA quick_check").fetchone()[0]
             if quick != "ok":
                 raise RuntimeError("SQLite integrity check failed; import refused")
 
-        trade_rows = []
-        trade_file = Path(trades_path)
-        if trade_file.exists():
-            with trade_file.open("r", encoding="utf-8") as f:
-                for line_number, raw in enumerate(f, start=1):
-                    if not raw.strip():
-                        continue
-                    try:
-                        payload = json.loads(raw)
-                        if not isinstance(payload, dict):
-                            raise ValueError("trade entry must be a JSON object")
-                        json.dumps(payload, allow_nan=False)
-                    except (ValueError, TypeError) as exc:
-                        raise RuntimeError(
-                            f"Trade history line {line_number} is invalid; import refused"
-                        ) from exc
-                    trade_rows.append((f"sqlite-jsonl:{line_number}", payload,
-                                       str(payload.get("timestamp") or cls._now())))
+        trade_rows = _trade_payload_rows(backup, trades_path)
 
         store = cls(database_url, require_import=False)
         counts = {key: len(rows) for key, rows in sqlite_rows.items()}
@@ -229,7 +306,18 @@ class PostgresStateStore:
                 if marker:
                     if marker["source_sha256"] != digest:
                         raise RuntimeError("Supabase was already imported from a different SQLite snapshot")
-                    return {"status": "already_imported", "counts": marker["counts_json"], "backup": str(backup)}
+                    recovered = _backfill_trade_rows(conn, trade_rows)
+                    if recovered:
+                        conn.execute("""
+                            INSERT INTO bot_private.audit_events(event_type,details_json,created_at)
+                            VALUES(%s,%s::jsonb,%s)
+                        """, (
+                            "legacy_trade_history_recovered",
+                            json.dumps({"recovered_trades": recovered}, allow_nan=False),
+                            cls._now(),
+                        ))
+                    return {"status": "already_imported", "counts": marker["counts_json"],
+                            "recovered_trades": recovered, "backup": str(backup)}
 
                 existing = conn.execute("""
                     SELECT
