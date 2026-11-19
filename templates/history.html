@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Trades · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m9">
-  <script src="/assets/app.js?v=m9" defer></script>
+  <link rel="stylesheet" href="/assets/app.css?v=m10">
+  <script src="/assets/app.js?v=m10" defer></script>
 </head>
 <body>
   <nav><div class="nav-inner">
@@ -23,11 +23,11 @@
       <section class="card metric-card"><div class="metric-label">Closed trades</div><div class="metric" id="count" data-skeleton aria-busy="true">—</div></section>
       <section class="card metric-card"><div class="metric-label">Win / loss</div><div class="metric" id="wins" data-skeleton aria-busy="true">—</div></section>
       <section class="card metric-card"><div class="metric-label">Reconciled P&amp;L</div><div class="metric" id="sum" data-skeleton aria-busy="true">—</div></section>
-      <section class="card metric-card"><div class="metric-label">Profit factor</div><div class="metric" id="profit-factor" data-skeleton aria-busy="true">—</div><div class="metric-label">Gross gains ÷ gross losses</div><div class="metric-label" id="profit-factor-note">Loading trade history…</div></section>
+      <section class="card metric-card"><div class="metric-label">Profit factor</div><div class="metric" id="profit-factor" data-skeleton aria-busy="true">—</div><div class="metric-label">Net gains ÷ net losses</div><div class="metric-label" id="profit-factor-note">Loading trade history…</div></section>
     </div>
     <p id="accounting-note" class="notice" hidden></p>
     <div id="history" class="table-wrap"><div class="empty" data-skeleton aria-busy="true">Loading…</div></div>
-    <footer>Profit factor uses reconciled closed trades only; values above 1 mean recorded gross gains exceed gross losses before any unrecorded costs. It does not predict future results. <a href="/terms#pnl">P&amp;L definitions</a></footer>
+    <footer>Net P&amp;L includes recorded fees for reconciled closes. Profit factor compares reconciled net gains with net losses; a value above 1 describes this recorded sample and does not predict future results. <a href="/terms#pnl">P&amp;L definitions</a></footer>
   </main>
 <script>
 const money=v=>'$'+Number(v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -35,19 +35,19 @@ function addCell(row,v,cls=''){const td=document.createElement('td');td.textCont
 function finishLoading(){document.querySelectorAll('[data-skeleton]').forEach(el=>{el.removeAttribute('data-skeleton');el.setAttribute('aria-busy','false')})}
 async function refresh(){try{
   const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error(`Status unavailable (${r.status})`);
-  const d=await r.json(),sells=(d.trades||[]).filter(t=>t.action==='SELL'),complete=sells.filter(t=>t.accounting_complete!==false&&t.pnl!==null&&t.pnl!==undefined),incomplete=sells.length-complete.length;
+  const d=await r.json(),sells=(d.trades||[]).filter(t=>t.action==='SELL'),isComplete=t=>t.accounting_complete!==false&&t.pnl!==null&&t.pnl!==undefined&&Number.isFinite(Number(t.pnl))&&t.fee!==null&&t.fee!==undefined&&Number.isFinite(Number(t.fee))&&Number(t.fee)>=0,complete=sells.filter(isComplete),incomplete=sells.length-complete.length;
   const wins=complete.filter(t=>Number(t.pnl)>0).length,losses=complete.filter(t=>Number(t.pnl)<0).length,total=complete.reduce((n,t)=>n+Number(t.pnl),0);
   document.getElementById('count').textContent=sells.length;
   document.getElementById('wins').textContent=`${wins} / ${losses}`;
   const sum=document.getElementById('sum');sum.textContent=incomplete?'Pending review':money(total);sum.className='metric '+(!incomplete&&total>0?'positive':!incomplete&&total<0?'negative':'');
   const pf=document.getElementById('profit-factor');pf.textContent=d.profit_factor==null?'N/A':Number(d.profit_factor).toFixed(2);
   const pfNote=document.getElementById('profit-factor-note');
-  pfNote.textContent=incomplete?'Some closed trades need fee/fill reconciliation.':!complete.length?'No closed trades yet.':Number(d.gross_loss||0)===0?'No gross losses recorded; the denominator is zero.':'Calculated from reconciled closed trades.';
+  pfNote.textContent=incomplete?'Some closed trades need fee/fill reconciliation.':!complete.length?'No closed trades yet.':Number(d.gross_loss||0)===0?'No net losses recorded; the denominator is zero.':'Calculated from reconciled closed trades.';
   const note=document.getElementById('accounting-note');note.hidden=!incomplete;note.textContent=incomplete?`${incomplete} closed trade${incomplete===1?' has':'s have'} incomplete fee or partial-fill accounting. Those results are excluded from P&L and profit factor; review the exchange fills before resuming.`:'';
   const wrap=document.getElementById('history');wrap.replaceChildren();
   if(!sells.length){const p=document.createElement('div');p.className='empty';p.textContent='No closed trades recorded';wrap.append(p)}
-  else{const t=document.createElement('table'),h=t.createTHead().insertRow();['Time (UTC)','Pair','Exit','P&L','Reason'].forEach(x=>{const th=document.createElement('th');th.textContent=x;h.append(th)});const b=t.createTBody();
-    for(const trade of [...sells].reverse()){const row=b.insertRow(),valid=trade.accounting_complete!==false&&trade.pnl!==null&&trade.pnl!==undefined;addCell(row,(trade.timestamp||'').replace('T',' ').slice(0,19));addCell(row,trade.symbol||'—');addCell(row,money(trade.price));addCell(row,valid?money(trade.pnl):'Pending reconciliation',valid?(trade.pnl>0?'positive':trade.pnl<0?'negative':''):'');addCell(row,trade.reason||'—')}wrap.append(t)}
+  else{const t=document.createElement('table'),h=t.createTHead().insertRow();['Time (UTC)','Pair','Exit','Net P&L','Fees','Accounting','Reason'].forEach(x=>{const th=document.createElement('th');th.textContent=x;h.append(th)});const b=t.createTBody();
+    for(const trade of [...sells].reverse()){const row=b.insertRow(),valid=isComplete(trade);addCell(row,(trade.timestamp||'').replace('T',' ').slice(0,19));addCell(row,trade.symbol||'—');addCell(row,money(trade.price));addCell(row,valid?money(trade.pnl):'Pending review',valid?(Number(trade.pnl)>0?'positive':Number(trade.pnl)<0?'negative':''):'');addCell(row,valid?money(trade.fee):'—');addCell(row,valid?'Reconciled':'Review needed',valid?'positive':'');addCell(row,trade.reason||'—')}wrap.append(t)}
   document.getElementById('state').textContent=`Updated ${new Date().toLocaleTimeString()}`;document.getElementById('dot').className='dot ok';finishLoading()
 }catch(e){document.getElementById('state').textContent=e.message;document.getElementById('dot').className='dot bad';document.getElementById('profit-factor-note').textContent='Trade history unavailable; retrying…';const wrap=document.getElementById('history');if(wrap.querySelector('[data-skeleton]'))wrap.textContent='Could not load trade history. Retrying…';finishLoading()}}
 refresh();setInterval(refresh,15000);

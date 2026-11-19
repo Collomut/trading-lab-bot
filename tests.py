@@ -4126,8 +4126,11 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
     def test_trade_history_explains_profit_factor_and_incomplete_accounting(self):
         history = (Path("templates") / "history.html").read_text(encoding="utf-8")
         self.assertIn("Profit factor", history)
-        self.assertIn("Gross gains ÷ gross losses", history)
-        self.assertIn("Pending reconciliation", history)
+        self.assertIn("Net gains ÷ net losses", history)
+        self.assertIn("Net P&amp;L includes recorded fees", history)
+        self.assertIn("'Net P&L','Fees','Accounting'", history)
+        self.assertIn("valid?'Reconciled':'Review needed'", history)
+        self.assertIn("Pending review", history)
         self.assertIn("incomplete fee or partial-fill accounting", history)
         self.assertIn("profit-factor-note", history)
         self.assertIn("d.profit_factor==null?'N/A'", history)
