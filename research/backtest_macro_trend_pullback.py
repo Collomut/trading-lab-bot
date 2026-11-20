@@ -17,7 +17,9 @@ from backtest_strategy import (
     STRESS_SLIPPAGE_BPS, simulate, summarize,
 )
 
-SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+BASE_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+EXPANDED_SYMBOLS = BASE_SYMBOLS + ("BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "LINKUSDT")
+UNIVERSES = {"three_symbols": BASE_SYMBOLS, "eight_symbols": EXPANDED_SYMBOLS}
 HOUR_MS = 3_600_000
 SPLITS = {
     "train_2021_02_to_2023": (
@@ -84,10 +86,10 @@ def build_signals(symbol: str, max_atr_pct: float = 3.0) -> pd.DataFrame:
 
 
 def main() -> dict:
-    frames = {symbol: build_signals(symbol) for symbol in SYMBOLS}
+    frames = {symbol: build_signals(symbol) for symbol in EXPANDED_SYMBOLS}
     result: dict = {
         "candidate": "MacroTrendPullback",
-        "symbols": list(SYMBOLS),
+        "universes": {name: list(symbols) for name, symbols in UNIVERSES.items()},
         "timeframe": "1h",
         "splits": {},
     }
@@ -99,27 +101,41 @@ def main() -> dict:
         result["splits"][split] = {}
         for cost_name, fee, slip in cost_scenarios:
             result["splits"][split][cost_name] = {}
-            for halt_name, enforce, loss_limit in (
-                ("no_halts", False, 3),
-                ("halt_cap_5", True, 5),
-            ):
-                records = simulate(
-                    frames, start_ms=start, end_ms=end,
-                    fee_bps=fee, slippage_bps=slip,
-                    enforce_halts=enforce,
-                    consecutive_loss_limit=loss_limit,
-                    stop_profile="swing_low_floor_4pct",
-                    target_atr_multiple=100.0,
-                    enable_breakeven_trailing=False,
-                )
-                stats = summarize(records, initial_equity=10000.0)
-                result["splits"][split][cost_name][halt_name] = stats
+            for universe_name, symbols in UNIVERSES.items():
+                result["splits"][split][cost_name][universe_name] = {}
+                selected_frames = {symbol: frames[symbol] for symbol in symbols}
+                for halt_name, enforce, loss_limit in (
+                    ("no_halts", False, 3),
+                    ("halt_cap_3", True, 3),
+                    ("halt_cap_5", True, 5),
+                ):
+                    sim = simulate(
+                        selected_frames, fee, slip,
+                        start_timestamp_ms=start, end_timestamp_ms=end,
+                        enforce_risk_halts=enforce,
+                        max_consecutive_losses=loss_limit,
+                        initial_stop_model="swing_low_floor_4pct",
+                        take_profit_atr_multiple=100.0,
+                        enable_breakeven_trailing=False,
+                    )
+                    stats = summarize("macro_trend_pullback", sim)
+                    result["splits"][split][cost_name][universe_name][halt_name] = stats
 
     OUT.mkdir(parents=True, exist_ok=True)
     out_file = OUT / "macro_trend_pullback_results.json"
     with open(out_file, "w") as f:
         json.dump(result, f, indent=2)
     print(f"Saved results to {out_file}")
+    for split, costs in result["splits"].items():
+        for cost_name, halt_modes in costs.items():
+            for universe_name, halts in halt_modes.items():
+                for halt_name, stats in halts.items():
+                    print(
+                        f"{split}/{cost_name}/{universe_name}/{halt_name}: "
+                        f"trades={stats['closed_trades']}, PF={stats['profit_factor']}, "
+                        f"net=${stats['net_pnl_usdt']}, DD={stats['max_drawdown_pct']}%, "
+                        f"halt={stats['halt_reason'] or '-'}"
+                    )
     return result
 
 

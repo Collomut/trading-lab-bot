@@ -27,6 +27,14 @@ def _env_bool(name: str, default: bool, *, strict: bool = False) -> bool:
     return accepted[value]
 
 
+def _downtrend_recovery_enabled() -> bool:
+    """Read the correctly spelled switch, preserving compatibility with the old typo."""
+    for name in ("ENABLE_DOWNTREND_RECOVERY_TESTNET", "ENABLE_DOWNTEND_RECOVERY_TESTNET"):
+        if name in os.environ:
+            return _env_bool(name, False)
+    return False
+
+
 @dataclass
 class ExchangeConfig:
     """Exchange connection settings."""
@@ -81,7 +89,7 @@ class StrategyConfig:
     # Opt-in only: the downtrend RSI recovery experiment is entry-disabled by
     # default because its independent replay was net-negative (PF < 1) in every
     # historical slice. Takes effect only under STRATEGY=dynamic_regime.
-    enable_downtrend_recovery_testnet: bool = field(default_factory=lambda: _env_bool("ENABLE_DOWNTEND_RECOVERY_TESTNET", False))
+    enable_downtrend_recovery_testnet: bool = field(default_factory=_downtrend_recovery_enabled)
     # RSI(14) recovery level for the opt-in downtrend experiment. The default
     # was lowered from 40 to 25 after research/backtest_downtrend_variants.py
     # showed the deeper trigger trades less often but with a higher profit
@@ -243,7 +251,7 @@ class BotConfig:
                 or not (0 < self.strategy.ema72_take_profit_atr_multiple <= 100)):
             errors.append("EMA72_TAKE_PROFIT_ATR_MULTIPLE must be a finite value greater than 0 and no more than 100")
         if self.strategy.enable_downtrend_recovery_testnet and self.strategy.name != "dynamic_regime":
-            errors.append("ENABLE_DOWNTEND_RECOVERY_TESTNET requires STRATEGY=dynamic_regime")
+            errors.append("ENABLE_DOWNTREND_RECOVERY_TESTNET requires STRATEGY=dynamic_regime")
         if (not math.isfinite(self.strategy.downtrend_rsi_recovery_level)
                 or not (10 <= self.strategy.downtrend_rsi_recovery_level <= 45)):
             errors.append("DOWNTREND_RSI_RECOVERY_LEVEL must be a finite value between 10 and 45")

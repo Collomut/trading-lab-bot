@@ -7,15 +7,26 @@
 by default**. Its independent replay was net-negative (PF < 1) in every
 historical slice, and its losses could trigger the portfolio-wide loss halt that
 also stops the better EMA72 uptrend route. Re-enable the low-risk experiment
-only with `ENABLE_DOWNTEND_RECOVERY_TESTNET=true` under `STRATEGY=dynamic_regime`.
+only with `ENABLE_DOWNTREND_RECOVERY_TESTNET=true` under `STRATEGY=dynamic_regime`.
 See `docs/audits/REGIME_ROUTER_AUDIT.md`.
+
+**Update (2026-11-20):** Railway's Binance Demo profile was running
+`macro_trend_pullback`, so the router was only observing and every downtrend
+remained ineligible for entries. After confirming Demo mode, zero tracked
+positions, and no unresolved order intents, the service was switched to
+`STRATEGY=dynamic_regime`, a 2,500-candle warmup, and an RSI-25 recovery route
+opt-in for Demo-only forward observation. This is not a live strategy or a
+claim of profitability. The route retains one-fifth risk, a one-position cap,
+and the existing loss, drawdown, stop, reconciliation, and order-quality
+controls. See `ACTIVE_STRATEGY_REVIEW_2026-11-20.md` for current evidence and
+its weak historical results.
 
 
 ## Decision
 
 The predeclared family screen found every tested family net-negative after modeled fees and slippage; profit factors were below 1. The EMA72/Donchian candidate had positive strategy-only historical slices, but exceeded the 5% training drawdown limit and was stopped after few trades by the configured loss controls. Neither establishes a regime-specific edge, and the historical archive is not an untouched holdout.
 
-The active `dynamic_regime` profile selects `macro_donchian_ema72` in a confirmed uptrend. A follow-up added `downtrend_rsi_recovery_testnet` as a Testnet-only experiment in confirmed downtrends, because the live router was observing downtrend on BTC, ETH, and SOL and had no entry candidate. The recovery route is capped at 0.20% of equity risk per trade, allows at most one recovery position, keeps the four-percent-capped swing stop and 2×ATR target, and does not use trailing stops. It has not passed historical stress costs and is not eligible for live trading. Range, high-volatility, transition, invalid-data, and unavailable-data states still generate no new entries. Open positions retain their entry-time exit policy. Existing risk checks, stops, loss halts, market-quality checks, and Testnet-only config restrictions remain authoritative.
+The active `dynamic_regime` profile selects `macro_donchian_ema72` in a confirmed uptrend. The optional `downtrend_rsi_recovery_testnet` experiment may evaluate entries in stable downtrends on paper Demo/Testnet when explicitly enabled. It is capped at 0.20× configured risk per trade, allows at most one recovery position, keeps the four-percent-capped swing stop and 2×ATR target, and does not use trailing stops. It has not passed historical stress costs and is not eligible for live trading. Range, high-volatility, transition, invalid-data, and unavailable-data states still generate no new entries. Open positions retain their entry-time exit policy. Existing risk checks, stops, loss halts, and market-quality checks remain authoritative.
 
 ## Downtrend recovery experiment
 

@@ -32,7 +32,7 @@ python main.py --once
 
 ## Operating boundaries
 
-- The default `macro_donchian_ema72` profile is a guarded Demo/Testnet research candidate, not a validated profitable strategy. The optional `dynamic_regime` profile routes stable uptrends to EMA72/Donchian and otherwise stands aside; its stable-downtrend RSI recovery experiment replayed net-negative (PF < 1) in every historical slice and is therefore entry-disabled by default (opt-in via `ENABLE_DOWNTEND_RECOVERY_TESTNET=true`).
+- The default `macro_donchian_ema72` profile is a guarded Demo/Testnet research candidate, not a validated profitable strategy. The optional `dynamic_regime` profile routes stable uptrends to EMA72/Donchian and otherwise stands aside; its stable-downtrend RSI recovery experiment replayed net-negative (PF < 1) in most historical slices and is therefore disabled by default (paper opt-in via `ENABLE_DOWNTREND_RECOVERY_TESTNET=true`).
 - The EMA72/Donchian candidate was positive in strategy-only historical slices but breached the training drawdown screen and quickly reached existing loss halts. No range or high-volatility strategy passed the cost-adjusted screen, so those regimes are deliberately not traded.
 - `python main.py --once` can place paper orders in the configured Demo or Testnet account. Do not use it as a read-only health check.
 - `python main.py --backtest` is an exploratory replay for legacy strategies; it does not simulate the EMA72 candidate or dynamic routing. Use dedicated research scripts and documented historical data for candidate evaluation.

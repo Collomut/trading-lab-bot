@@ -53,6 +53,6 @@ lever to raise trade count without sacrificing the uptrend route's PF.
 `DowntrendRsiRecoveryTestnetStrategy` now takes a configurable
 `rsi_recovery_level` (default **25**, was hard-coded 40), wired through
 `DOWNTREND_RSI_RECOVERY_LEVEL` (valid 10-45) in config and `bot_engine`. The
-route remains entry-disabled by default (`ENABLE_DOWNTEND_RECOVERY_TESTNET`,
+route remains entry-disabled by default (`ENABLE_DOWNTREND_RECOVERY_TESTNET`,
 `STRATEGY=dynamic_regime`). The original 40 threshold is recoverable via the
 env var.

@@ -12,7 +12,10 @@ from pathlib import Path
 
 OUT = Path(__file__).parent / "data"
 OUT.mkdir(exist_ok=True)
-SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+# Keep research data aligned with the production eight-pair watchlist. The
+# expanded universe is survivorship-biased and must be reported separately
+# from the three major pairs in any strategy comparison.
+SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "LINKUSDT")
 START_YEAR, START_MONTH = 2021, 1
 END_YEAR, END_MONTH = 2026, 10  # completed months only
 BASE = "https://data.binance.vision/data/spot/monthly/klines/{symbol}/1h/{symbol}-1h-{year:04d}-{month:02d}.zip"

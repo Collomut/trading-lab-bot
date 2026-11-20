@@ -1,19 +1,21 @@
 # Strategy research
 
-This folder contains the reproducible strategy comparison used to decide whether a higher-frequency strategy was justified. The result was negative: no evaluated variant had sufficiently positive evidence to change production entry rules.
+This folder contains reproducible strategy comparisons. None establish a live-trading edge. A weak downtrend candidate is enabled on the current Binance Demo service only as a bounded forward-observation experiment; it does not change live-order eligibility.
 
-`REGIME_ROUTER_REVIEW.md` documents the guarded `dynamic_regime` Testnet router. Its executable allowlist contains `macro_donchian_ema72` for stable uptrends and `downtrend_rsi_recovery_testnet` for stable downtrends. The recovery route uses one fifth of the configured risk per trade and one open recovery position at most; it remains an unvalidated Testnet experiment because its historical stress-cost checks lost money. Range, high-volatility, transition, and invalid-data conditions still route to no new entry. No route has been established as profitable or ready for live orders.
+`REGIME_ROUTER_REVIEW.md` documents the guarded `dynamic_regime` paper router. Its executable allowlist contains `macro_donchian_ema72` for stable uptrends and the opt-in `downtrend_rsi_recovery_testnet` candidate for stable downtrends. The recovery route uses one fifth of normal risk per trade and at most one open recovery position; it remains an unvalidated Demo/Testnet experiment because its historical training and validation replays lost money and stressed validation costs were negative. Range, high-volatility, transition, and invalid-data conditions still route to no new entry. No route has been established as profitable or ready for live orders. The current Railway Demo opt-in and its reason are recorded in `ACTIVE_STRATEGY_REVIEW_2026-11-20.md`.
 
-`backtest_downtrend_rsi_recovery.py` compares the recovery candidate on the three-pair and eight-pair universes. `backtest_rsi_recovery_thresholds.py` screens RSI recovery levels 30, 35, 40, 45, and 50 with the same costs and risk rules; the results are in `results/rsi_recovery_thresholds.json`. The eight-pair universe created more historical opportunities in some periods, but did not produce a robust profitable result. The broader list is enabled on Binance Testnet only to gather prospective observations under the same strict risk controls.
+`backtest_downtrend_rsi_recovery.py` compares the recovery candidate on the three-pair and eight-pair universes. `backtest_rsi_recovery_thresholds.py` screens RSI recovery levels 30, 35, 40, 45, and 50 with the same costs and risk rules; the results are in `results/rsi_recovery_thresholds.json`. The eight-pair universe created more historical opportunities in some periods, but did not produce a robust profitable result. The broader list is used for paper observation only; it is not evidence that the strategy is profitable.
 
 `backtest_range_rsi_mean_reversion.py` (2026-11-15) replays a pre-registered range-regime RSI mean-reversion candidate for the previously empty "range" regime (stable ADX≤18/ATR≤3% range, RSI14 cross up through 30, RSI≥50/EMA20 exits, 0.50× risk). It replayed net-negative on the eight-coin universe and in the 2026 review, so `range` still routes to no entry; results are in `results/range_rsi_mean_reversion_results.json`.
 
 ## Reproduction
 
 1. Use Python with the application's pinned requirements installed.
-2. Run `python research/download_binance_klines.py` to fetch official Binance Spot monthly 1-hour archives for BTCUSDT, ETHUSDT, and SOLUSDT through October 2026. The fetched CSVs are stored under `research/data/`, which is intentionally git-ignored because it is large.
+2. Run `python research/download_binance_klines.py` to fetch official Binance Spot monthly 1-hour archives for the three-pair and eight-pair universes through October 2026. The fetched CSVs are stored under `research/data/`, which is intentionally git-ignored because it is large.
 3. Run `python research/backtest_strategy.py` for the current-strategy and gate variants.
 4. Run `python research/backtest_pullback.py` for the additional research-only pullback candidate.
+5. Run `python research/backtest_macro_trend_pullback.py` for the active-pullback chronology, three/eight-pair universe, and loss-halt sensitivity.
+6. Run `python research/backtest_downtrend_rsi_recovery.py` for the exact RSI-25 recovery route configured for the limited Demo observation.
 
 The scripts write compact JSON results under `research/results/`. The methodology, assumptions, findings, and limits are summarized in `STRATEGY_REEVALUATION.md`.
 
