@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>Experiments · Trading Lab</title>
+  <link rel="stylesheet" href="/assets/app.css?v=m13">
+  <script src="/assets/app.js?v=m13" defer></script>
+</head>
+<body>
+<nav><div class="nav-inner">
+  <a class="brand" href="/">TRADING LAB</a>
+  <div class="nav-links">
+    <a class="nav-link" href="/">Overview</a>
+    <a class="nav-link" href="/positions">Positions</a>
+    <a class="nav-link" href="/history">Trades</a>
+    <a class="nav-link" href="/strategy">Strategy</a>
+    <a class="nav-link active" href="/experiments">Experiments</a>
+    <a class="nav-link" href="/logs">Logs</a>
+    <a class="nav-link" href="/terms">Glossary</a>
+  </div>
+  <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button>
+</div></nav>
+<main class="container">
+  <header class="page-head">
+    <div><div class="eyebrow">Research &amp; forward evaluation</div><h1>Experiments</h1></div>
+    <div class="status"><span id="exp-dot" class="dot"></span><span id="exp-state" data-skeleton aria-busy="true">Loading…</span></div>
+  </header>
+  <p class="intro">Test-only routes and simulated results live here. They are separate from the active strategy and do not prove future returns.</p>
+  <section class="card experiment-status-card">
+    <div><div class="eyebrow">Downtrend RSI recovery</div><h2>Paper-only experiment</h2></div>
+    <span id="recovery-status" class="log-badge is-wait" data-skeleton aria-busy="true">Checking status</span>
+    <p id="recovery-description" class="help">Loading experiment configuration…</p>
+  </section>
+  <section class="card section-card">
+    <div class="decision-section-heading"><div><h2>Shadow strategy ledger</h2><p class="help">This independent simulation uses recorded candles and modeled costs. It sends no orders and does not change the active strategy.</p></div></div>
+    <div id="shadow-results" class="experiment-results"><div class="decision-empty" data-skeleton aria-busy="true">Loading shadow results…</div></div>
+    <p class="experiment-footnote">Results are simulated. Fees, slippage, available history, and the number of completed trades limit how much they tell us. A profit factor or win rate is not a prediction.</p>
+  </section>
+  <section class="card section-card">
+    <h2>How the test route works</h2>
+    <div class="decision-flow-grid">
+      <div class="decision-step is-wait"><span class="decision-step-number">01</span><div class="decision-step-body"><strong>Confirm a downtrend</strong><span class="decision-step-state">Three completed hourly checks</span><p>ADX must be at least 25, price below EMA200, and EMA200 falling; volatility above the regime limit blocks entries.</p></div></div>
+      <div class="decision-step is-wait"><span class="decision-step-number">02</span><div class="decision-step-body"><strong>Wait for RSI recovery</strong><span class="decision-step-state">Long-only spot setup</span><p>If enabled for Demo or Testnet, the experiment waits for RSI to cross up through its configured recovery level after being oversold.</p></div></div>
+    </div>
+    <p class="help experiment-caution">This is a test candidate, not a short strategy or a live-market recommendation. Its historical replay was net-negative across the reviewed slices.</p>
+  </section>
+  <footer><a href="/strategy">Return to active strategy</a> · <a href="/logs">Review the decision log</a></footer>
+</main>
+<script>
+(() => {
+  const number=value=>Number(value);
+  const formatMoney=value=>`${number(value)<0?'−':''}$${Math.abs(number(value)).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  function renderCandidate(parent,label,data){
+    data=data||{};
+    const trades=Number(data.trades)||0;
+    const card=document.createElement('article');card.className='experiment-result-card';
+    const heading=document.createElement('h3');heading.textContent=label;card.append(heading);
+    if(!trades){const empty=document.createElement('p');empty.className='help';empty.textContent=Number(data.open_positions)>0?'No closed shadow trades yet; a simulated position is still open.':'No closed shadow trades recorded yet.';card.append(empty)}
+    const rows=[
+      ['Closed simulations',String(trades)],
+      ['Wins / losses',`${Number(data.wins)||0} / ${Number(data.losses)||0}`],
+      ['Simulated net P&L',formatMoney(data.total_pnl||0)],
+      ['Open simulations',String(Number(data.open_positions)||0)],
+    ];
+    if(trades){
+      rows.splice(2,0,['Win rate',`${Number(data.win_rate_pct).toFixed(1)}%`]);
+      const pf=data.profit_factor==null?Number.NaN:number(data.profit_factor);
+      rows.splice(3,0,['Profit factor',Number.isFinite(pf)?pf.toFixed(2):pf===Infinity?'∞*':'Not measurable']);
+    }
+    const list=document.createElement('div');list.className='experiment-result-list';
+    for(const [name,value] of rows){const row=document.createElement('div');row.className='limit-row';const key=document.createElement('span');key.textContent=name;const val=document.createElement('strong');val.textContent=value;row.append(key,val);list.append(row)}
+    card.append(list);parent.append(card);
+  }
+  async function refresh(){
+    const dot=document.getElementById('exp-dot'),state=document.getElementById('exp-state');
+    try{
+      const response=await fetch('/api/status',{cache:'no-store'});
+      if(!response.ok)throw new Error(`Status unavailable (${response.status})`);
+      const data=await response.json();
+      const recovery=Boolean(data.downtrend_recovery_testnet_enabled);
+      const dynamic=String(data.strategy_name||'').toUpperCase()==='DYNAMIC_REGIME';
+      const paper=Boolean(data.paper_trading)&&['demo','testnet'].includes(String(data.paper_environment||'').toLowerCase());
+      const badge=document.getElementById('recovery-status');
+      const description=document.getElementById('recovery-description');
+      badge.className=`log-badge ${recovery&&dynamic&&paper?'is-wait':''}`;
+      badge.textContent=recovery&&dynamic&&paper?'Enabled · paper evaluation':recovery?'Configured · unavailable in this profile':'Disabled';
+      description.textContent=!dynamic?'The current strategy profile is not the dynamic router, so the downtrend test route cannot be selected.':!paper?'The downtrend test route is restricted to Binance Demo or Spot Testnet paper trading.':recovery?'This candidate may evaluate an eligible downtrend on the configured paper account. It has no live-market mode.':'The candidate is currently disabled. It can only be enabled through the explicit paper-only configuration setting.';
+      const results=document.getElementById('shadow-results');results.replaceChildren();
+      const shadow=data.shadow_ledger_by_candidate||{};
+      renderCandidate(results,'EMA72 breakout · shadow simulation',shadow.macro_donchian_ema72);
+      renderCandidate(results,'Trend pullback · shadow simulation',shadow.macro_trend_pullback);
+      dot.className='dot ok';state.textContent=`Updated ${new Date().toLocaleTimeString()}`;
+    }catch(error){
+      dot.className='dot bad';state.textContent='Experiment data unavailable';
+      const description=document.getElementById('recovery-description');description.textContent=error.message;
+      const results=document.getElementById('shadow-results');results.replaceChildren();
+      const empty=document.createElement('div');empty.className='decision-empty';empty.textContent='Could not load experiment status. Check the dashboard connection and retry.';results.append(empty);
+    }
+  }
+  refresh();setInterval(refresh,30000);
+})();
+</script>
+</body>
+</html>

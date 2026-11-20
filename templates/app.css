@@ -1605,6 +1605,21 @@ footer {
 @media(max-width:760px) { .decision-overview { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:540px) { .decision-flow-grid { grid-template-columns:1fr; } .decision-section-heading { flex-direction:column; } }
 @media(max-width:360px) { .decision-overview { grid-template-columns:1fr; } }
+.experiment-status-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px 14px; }
+.experiment-status-card h2 { margin:0; font-size:18px; }
+.experiment-status-card .help { grid-column:1/-1; margin:0; }
+.experiment-results { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.experiment-result-card { min-width:0; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--paper); }
+.experiment-result-card h3 { margin:0 0 8px; font-size:13px; }
+.experiment-result-card > .help { min-height:30px; margin:0 0 8px; }
+.experiment-result-list { display:grid; gap:0; }
+.experiment-result-list .limit-row { padding:7px 0; font-size:11px; }
+.experiment-result-list .limit-row strong { text-align:right; font-variant-numeric:tabular-nums; }
+.experiment-footnote,.experiment-caution { color:var(--muted); font-size:11px; line-height:1.5; }
+.experiment-footnote { margin:10px 0 0; }
+.experiment-caution { margin-bottom:0; }
+@media(max-width:620px) { .experiment-results { grid-template-columns:1fr; } }
+@media(max-width:420px) { .experiment-status-card { grid-template-columns:1fr; } .experiment-status-card .help { grid-column:1; } }
 
 /* Compact, chart-first market panel. */
 .visually-hidden {

@@ -198,6 +198,7 @@ class WebDashboard:
         self.app.router.add_get('/history', self.handle_history)
         self.app.router.add_get('/logs', self.handle_logs)
         self.app.router.add_get('/strategy', self.handle_strategy)
+        self.app.router.add_get('/experiments', self.handle_experiments)
         self.app.router.add_get('/terms', self.handle_terms)
         self.app.router.add_get('/assets/{name}', self.handle_asset)
         self.app.router.add_get('/health/liveness', self.handle_liveness)
@@ -239,6 +240,9 @@ class WebDashboard:
 
     async def handle_strategy(self, request):
         return await self._serve_page("strategy.html")
+
+    async def handle_experiments(self, request):
+        return await self._serve_page("experiments.html")
 
     async def _serve_page(self, filename):
         html_path = Path(__file__).parent / "templates" / filename
@@ -668,6 +672,13 @@ class WebDashboard:
             "strategy_name": self.config.strategy.name.upper(),
             "timeframe": self.config.strategy.timeframe,
             "shadow_ledger": self.bot.shadow_ledger.summary(),
+            "shadow_ledger_by_candidate": {
+                candidate: self.bot.shadow_ledger.summary(candidate)
+                for candidate in ("macro_donchian_ema72", "macro_trend_pullback")
+            },
+            "downtrend_recovery_testnet_enabled": bool(
+                self.config.strategy.enable_downtrend_recovery_testnet
+            ),
             "trades": trades,
             "notifications": {
                 "enabled": self.config.enable_notifications,
