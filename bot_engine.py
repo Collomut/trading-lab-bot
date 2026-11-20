@@ -932,10 +932,21 @@ class TradingBot:
             client_id = str(intent.get("client_order_id") or "")
             if not symbol or not client_id:
                 raise unresolved("missing_symbol_or_client_id")
-            try:
-                request = json.loads(intent.get("request_json") or "{}")
-            except (TypeError, json.JSONDecodeError) as exc:
-                raise unresolved("invalid_request_record") from exc
+            # SQLite returns the legacy JSON column as text, while Postgres
+            # JSONB drivers return it as a decoded mapping. Accept both storage
+            # representations so migrated maker intents can be reconciled.
+            raw_request = intent.get("request_json")
+            if isinstance(raw_request, dict):
+                request = raw_request
+            elif isinstance(raw_request, str):
+                try:
+                    request = json.loads(raw_request or "{}")
+                except json.JSONDecodeError as exc:
+                    raise unresolved("invalid_request_record") from exc
+            else:
+                raise unresolved("invalid_request_record")
+            if not isinstance(request, dict):
+                raise unresolved("invalid_request_record")
 
             # The maker chase used the stable parent id plus suffixes 1-4. Check
             # every possible order so an old still-working requote can never be

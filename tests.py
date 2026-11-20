@@ -99,6 +99,11 @@ class TestShadowLogSafety(unittest.TestCase):
         })
         self.assertIn("persisted exchange stop", safe["message"])
 
+        diagnostic = WebDashboard._safe_log_details("reconciliation_failed", {
+            "reason": "Exchange reconciliation failed: unresolved local order intent exists (invalid_request_record)",
+        })
+        self.assertIn("invalid_request_record", diagnostic["message"])
+
         unsafe = WebDashboard._safe_log_details("reconciliation_failed", {
             "reason": "Exchange reconciliation failed: traceback with credential=private-value",
         })
@@ -2722,6 +2727,33 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 event["event_type"] == "order_reconciled_no_fill"
                 for event in store.list_events(10)
             ))
+
+    def test_reconciliation_accepts_postgres_jsonb_request_mapping(self):
+        bot = object.__new__(TradingBot)
+        bot.risk_manager = Mock()
+        client_id = TradingBot._client_order_id("SOL/USDT", "buy", "supabase-jsonb")
+        bot.risk_manager.store.unresolved_orders.return_value = [{
+            "client_order_id": client_id,
+            "symbol": "SOL/USDT",
+            "side": "BUY",
+            "state": "UNKNOWN",
+            "exchange_order_id": None,
+            "request_json": {
+                "symbol": "SOL/USDT", "side": "buy", "amount": "6.917", "post_only": True,
+            },
+        }]
+        bot.exchange = Mock()
+        bot.exchange.fetch_order_by_client_id.side_effect = [
+            {"id": f"order-{i}", "status": "canceled", "filled": 0}
+            for i in range(5)
+        ]
+
+        bot._reconcile_terminal_no_fill_order_intents()
+
+        self.assertEqual(bot.exchange.fetch_order_by_client_id.call_count, 5)
+        bot.risk_manager.store.update_order.assert_called_once()
+        bot.risk_manager.store.mark_order_applied.assert_called_once_with(client_id)
+        bot.risk_manager.store.append_event.assert_called_once()
 
     def test_reconciliation_keeps_maker_intent_unresolved_if_any_quote_is_open(self):
         with TemporaryDirectory() as persistence_dir:
