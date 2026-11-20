@@ -915,21 +915,27 @@ class TradingBot:
 
     def _reconcile_terminal_no_fill_order_intents(self) -> None:
         """Resolve journaled orders only when Binance confirms every attempt ended unfilled."""
+        def unresolved(detail: str) -> ValueError:
+            # Include a short, non-sensitive reason in the audit event so a
+            # blocked reconciliation can be diagnosed without exposing raw
+            # exchange responses, credentials, or full client order IDs.
+            return ValueError(f"unresolved local order intent exists ({detail})")
+
         for intent in self.risk_manager.store.unresolved_orders():
             if not isinstance(intent, dict):
-                raise ValueError("unresolved local order intent exists")
+                raise unresolved("invalid_intent")
             if intent.get("state") not in {"PENDING", "SUBMITTED", "UNKNOWN", "OPEN", "PARTIALLY_FILLED"}:
                 # A terminal but unapplied fill may represent real inventory or
                 # proceeds; it must be repaired by the position/trade ledger.
-                raise ValueError("unresolved local order intent exists")
+                raise unresolved("terminal_order_not_applied")
             symbol = str(intent.get("symbol") or "")
             client_id = str(intent.get("client_order_id") or "")
             if not symbol or not client_id:
-                raise ValueError("unresolved local order intent exists")
+                raise unresolved("missing_symbol_or_client_id")
             try:
                 request = json.loads(intent.get("request_json") or "{}")
             except (TypeError, json.JSONDecodeError) as exc:
-                raise ValueError("unresolved local order intent exists") from exc
+                raise unresolved("invalid_request_record") from exc
 
             # The maker chase used the stable parent id plus suffixes 1-4. Check
             # every possible order so an old still-working requote can never be
@@ -943,11 +949,11 @@ class TradingBot:
                 try:
                     order = self.exchange.fetch_order_by_client_id(candidate_id, symbol)
                 except Exception as exc:
-                    raise ValueError("unresolved local order intent exists") from exc
+                    raise unresolved(f"order_lookup_failed:{type(exc).__name__}") from exc
                 if not order:
                     continue
                 if not isinstance(order, dict):
-                    raise ValueError("unresolved local order intent exists")
+                    raise unresolved("invalid_exchange_order_response")
                 exchange_id = str(order.get("id") or "")
                 if exchange_id and exchange_id in seen_exchange_ids:
                     continue
@@ -955,12 +961,16 @@ class TradingBot:
                     seen_exchange_ids.add(exchange_id)
                 status = str(order.get("status", "")).lower()
                 try:
-                    filled = Decimal(str(order.get("filled") or 0))
+                    if order.get("filled") is None:
+                        raise unresolved("exchange_fill_quantity_missing")
+                    filled = Decimal(str(order["filled"]))
                 except (InvalidOperation, TypeError, ValueError) as exc:
-                    raise ValueError("unresolved local order intent exists") from exc
+                    if isinstance(exc, ValueError) and str(exc).startswith("unresolved local order intent exists"):
+                        raise
+                    raise unresolved("invalid_exchange_fill_quantity") from exc
                 if (status not in {"canceled", "cancelled", "rejected", "expired"}
                         or not filled.is_finite() or filled != 0):
-                    raise ValueError("unresolved local order intent exists")
+                    raise unresolved(f"attempt_not_confirmed_zero_fill:{status or 'unknown'}")
                 found_orders.append(order)
 
             if not found_orders and intent.get("exchange_order_id"):
@@ -969,12 +979,16 @@ class TradingBot:
                 try:
                     order = self.exchange.fetch_order(str(intent["exchange_order_id"]), symbol)
                     status = str(order.get("status", "")).lower() if isinstance(order, dict) else ""
-                    filled = Decimal(str(order.get("filled") or 0)) if isinstance(order, dict) else Decimal("-1")
+                    if not isinstance(order, dict) or order.get("filled") is None:
+                        raise unresolved("exchange_fill_quantity_missing")
+                    filled = Decimal(str(order["filled"]))
                 except Exception as exc:
-                    raise ValueError("unresolved local order intent exists") from exc
+                    if isinstance(exc, ValueError) and str(exc).startswith("unresolved local order intent exists"):
+                        raise
+                    raise unresolved(f"exchange_id_lookup_failed:{type(exc).__name__}") from exc
                 if (status not in {"canceled", "cancelled", "rejected", "expired"}
                         or not filled.is_finite() or filled != 0):
-                    raise ValueError("unresolved local order intent exists")
+                    raise unresolved(f"exchange_id_not_confirmed_zero_fill:{status or 'unknown'}")
                 found_orders.append(order)
 
             # No matching client order is also safe only because the private

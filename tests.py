@@ -2740,7 +2740,9 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 {"id": "order-1", "status": "open", "filled": 0},
             ]
 
-            with self.assertRaisesRegex(ValueError, "unresolved local order intent exists"):
+            with self.assertRaisesRegex(
+                    ValueError,
+                    r"unresolved local order intent exists \(attempt_not_confirmed_zero_fill:open\)"):
                 bot._reconcile_terminal_no_fill_order_intents()
 
             self.assertEqual(store.get_order(client_id)["state"], "SUBMITTED")
