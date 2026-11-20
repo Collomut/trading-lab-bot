@@ -4085,12 +4085,13 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
             strategy_page,
         )
 
-    def test_regime_router_panel_explains_dynamic_routing_and_fallback(self):
+    def test_strategy_decision_view_explains_dynamic_routing_and_fallback(self):
         strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
-        self.assertIn("Dynamic strategy selection · Paper", strategy_page)
-        self.assertIn("Other conditions stay flat because the tested alternatives have not passed cost-adjusted review.", strategy_page)
-        self.assertIn("three completed hourly candles", strategy_page)
-        self.assertIn("No entry strategy · stand aside", strategy_page)
+        self.assertIn("Dynamic regime routing", strategy_page)
+        self.assertIn("How a decision becomes an order", strategy_page)
+        self.assertIn("Recent decisions", strategy_page)
+        self.assertIn("Confirmed for 3 closed candles", strategy_page)
+        self.assertIn("Stand aside · no route", strategy_page)
 
     def test_machine_labels_are_formatted_for_dashboard_readers(self):
         strategy_page = (Path("templates") / "strategy.html").read_text(encoding="utf-8")
