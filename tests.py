@@ -1840,6 +1840,16 @@ class TestStateStoreAndPersistence(unittest.TestCase):
 class TestExchangeConnectorAndSecurity(unittest.TestCase):
     """Verifies exchange connector guardrails, live refusal, credential safety, and rate-limiting."""
 
+    def test_client_order_lookup_distinguishes_not_found_from_exchange_failure(self):
+        connector = object.__new__(ExchangeConnector)
+        connector.exchange = Mock()
+        connector.exchange.fetch_order.side_effect = ccxt.OrderNotFound("order does not exist")
+        self.assertIsNone(connector.fetch_order_by_client_id("cb-missing", "SOL/USDT"))
+
+        connector.exchange.fetch_order.side_effect = ccxt.NetworkError("service unavailable")
+        with self.assertRaisesRegex(RuntimeError, "Client order status is unavailable"):
+            connector.fetch_order_by_client_id("cb-unknown", "SOL/USDT")
+
     @patch("exchange.ccxt.binance")
     def test_live_exchange_initialization_is_refused(self, binance_factory):
         config = ExchangeConfig(
@@ -2588,8 +2598,9 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         # First attempt stays open (must be canceled), second fills as a maker.
         bot.exchange.place_post_only_limit_buy.side_effect = [
             {"id": "a", "status": "open", "filled": 0.0},
-            {"id": "b", "status": "closed", "filled": 1.0, "average": 100.0},
+            {"id": "b", "status": "closed", "filled": 0.01, "average": 100.0},
         ]
+        bot.exchange.fetch_order.return_value = {"id": "a", "status": "canceled", "filled": 0.0}
         bot.risk_manager = Mock()
         bot.risk_manager.store = Mock()
 
@@ -2602,6 +2613,138 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         self.assertEqual(sent_ids[0], client_id)
         self.assertNotEqual(sent_ids[0], sent_ids[1])
         bot.exchange.cancel_order.assert_called_once_with("a", "BTC/USDT")
+        bot.exchange.fetch_order.assert_called_once_with("a", "BTC/USDT")
+
+    def test_post_only_chase_requotes_only_after_confirmed_zero_fill_cancel(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(max_slippage_bps=30)
+        bot.exchange = Mock()
+        bot.exchange.get_order_book.return_value = {"bids": [[100.0, 10.0]]}
+        bot.exchange.place_post_only_limit_buy.side_effect = [
+            {"id": "a", "status": "open", "filled": 0.0},
+            {"id": "b", "status": "open", "filled": 0.0},
+        ]
+        bot.exchange.fetch_order.side_effect = [
+            {"id": "a", "status": "canceled", "filled": 0.0},
+            {"id": "b", "status": "canceled", "filled": 0.0},
+        ]
+        bot.risk_manager = Mock()
+        bot.risk_manager.store = Mock()
+
+        order, client_id = bot._post_only_limit_chase_buy(
+            "BTC/USDT", 0.01, "decision-no-fill", max_requotes=2
+        )
+
+        self.assertIsNone(order)
+        self.assertEqual(bot.exchange.place_post_only_limit_buy.call_count, 2)
+        self.assertEqual(bot.exchange.cancel_order.call_count, 2)
+        self.assertEqual(bot.exchange.fetch_order.call_count, 2)
+        bot.risk_manager.store.update_order.assert_called_with(
+            client_id, "CANCELED", exchange_order_id="b", filled=Decimal("0.0"),
+            average=None, response={"id": "b", "status": "canceled", "filled": 0.0},
+        )
+        bot.risk_manager.store.mark_order_applied.assert_called_once_with(client_id)
+
+    def test_post_only_chase_does_not_requote_when_cancel_remains_open(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(max_slippage_bps=30)
+        bot.exchange = Mock()
+        bot.exchange.get_order_book.return_value = {"bids": [[100.0, 10.0]]}
+        bot.exchange.place_post_only_limit_buy.return_value = {
+            "id": "a", "status": "open", "filled": 0.0,
+        }
+        bot.exchange.fetch_order.return_value = {
+            "id": "a", "status": "open", "filled": 0.0,
+        }
+        bot.exchange.fetch_order_by_client_id.side_effect = RuntimeError("not terminal")
+        bot.risk_manager = Mock()
+        bot.risk_manager.store = Mock()
+        bot.risk_manager.store.get_order.return_value = {"state": "UNKNOWN"}
+
+        with self.assertRaisesRegex(RuntimeError, "outcome remains unknown"):
+            bot._post_only_limit_chase_buy(
+                "BTC/USDT", 0.01, "decision-cancel-uncertain", max_requotes=5
+            )
+
+        bot.exchange.place_post_only_limit_buy.assert_called_once()
+        self.assertEqual(bot.risk_manager.store.update_order.call_count, 2)
+        self.assertEqual(bot.risk_manager.store.update_order.call_args.args[1], "UNKNOWN")
+
+    def test_post_only_partial_fill_stops_chase_and_preserves_unapplied_inventory(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(max_slippage_bps=30)
+        bot.exchange = Mock()
+        bot.exchange.get_order_book.return_value = {"bids": [[100.0, 10.0]]}
+        bot.exchange.place_post_only_limit_buy.return_value = {
+            "id": "a", "status": "open", "filled": 0.002,
+        }
+        bot.exchange.fetch_order.return_value = {
+            "id": "a", "status": "canceled", "filled": 0.002, "average": 100.0,
+        }
+        bot.risk_manager = Mock()
+        bot.risk_manager.store = Mock()
+
+        order, client_id = bot._post_only_limit_chase_buy(
+            "BTC/USDT", 0.01, "decision-partial", max_requotes=5
+        )
+
+        self.assertEqual(order["status"], "canceled")
+        bot.exchange.place_post_only_limit_buy.assert_called_once()
+        self.assertEqual(bot.risk_manager.store.update_order.call_count, 2)
+        self.assertEqual(bot.risk_manager.store.update_order.call_args.args[1], "PARTIAL_CLOSED")
+        bot.risk_manager.store.mark_order_applied.assert_not_called()
+
+    def test_reconciliation_clears_maker_intent_only_after_all_quotes_are_terminal_unfilled(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            store = bot.risk_manager.store
+            client_id = TradingBot._client_order_id("SOL/USDT", "buy", "candle-1")
+            store.create_order_intent(
+                client_id, "SOL/USDT", "buy", "6.917",
+                {"symbol": "SOL/USDT", "side": "buy", "amount": "6.917", "post_only": True},
+            )
+            store.update_order(client_id, "SUBMITTED")
+            bot.exchange = Mock()
+            bot.exchange.fetch_order_by_client_id.side_effect = [
+                {"id": f"order-{i}", "status": "canceled", "filled": 0}
+                for i in range(5)
+            ]
+
+            bot._reconcile_terminal_no_fill_order_intents()
+
+            self.assertEqual(store.unresolved_orders(), [])
+            reconciled = store.get_order(client_id)
+            self.assertEqual(reconciled["state"], "CANCELED")
+            self.assertEqual(reconciled["applied"], 1)
+            self.assertEqual(bot.exchange.fetch_order_by_client_id.call_count, 5)
+            self.assertTrue(any(
+                event["event_type"] == "order_reconciled_no_fill"
+                for event in store.list_events(10)
+            ))
+
+    def test_reconciliation_keeps_maker_intent_unresolved_if_any_quote_is_open(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            store = bot.risk_manager.store
+            client_id = TradingBot._client_order_id("SOL/USDT", "buy", "candle-2")
+            store.create_order_intent(
+                client_id, "SOL/USDT", "buy", "6.917",
+                {"symbol": "SOL/USDT", "side": "buy", "amount": "6.917", "post_only": True},
+            )
+            store.update_order(client_id, "SUBMITTED")
+            bot.exchange = Mock()
+            bot.exchange.fetch_order_by_client_id.side_effect = [
+                {"id": "order-0", "status": "canceled", "filled": 0},
+                {"id": "order-1", "status": "open", "filled": 0},
+            ]
+
+            with self.assertRaisesRegex(ValueError, "unresolved local order intent exists"):
+                bot._reconcile_terminal_no_fill_order_intents()
+
+            self.assertEqual(store.get_order(client_id)["state"], "SUBMITTED")
+            self.assertEqual(len(store.unresolved_orders()), 1)
 
     def test_only_confirmed_complete_fills_are_accepted(self):
         self.assertTrue(TradingBot._confirmed_full_fill({"status": "closed", "filled": 1.0}, 1.0))

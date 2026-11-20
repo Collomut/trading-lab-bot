@@ -635,40 +635,116 @@ class TradingBot:
                     self.risk_manager.halt(f"Buy order was rejected for {symbol}; operator review required")
                     return None, client_id
                 raw_status = str(order.get("status", "")).lower()
-                if raw_status in {"closed", "canceled", "rejected", "expired"}:
+                if raw_status in {"closed", "canceled", "cancelled", "rejected", "expired"}:
                     break
-                # Still open / partially filled: cancel and re-quote one touch higher.
+                # Still open / partially filled: cancel and confirm the exchange
+                # state before sending a replacement. A successful cancel request
+                # alone does not prove that the order stopped working.
                 order_id = str(order.get("id") or "")
-                if order_id:
+                if not order_id:
+                    raise RuntimeError("open post-only order has no exchange order id")
+                try:
                     self.exchange.cancel_order(order_id, symbol)
+                except Exception:
+                    # The cancel response can be lost after the exchange acted.
+                    # Always read the order state before deciding whether to retry.
+                    logger.warning("Cancel response was uncertain for post-only order %s; verifying exchange state", order_id)
+                try:
+                    confirmed = self.exchange.fetch_order(order_id, symbol)
+                except Exception as exc:
+                    raise RuntimeError("post-only cancellation outcome could not be verified") from exc
+                if not isinstance(confirmed, dict):
+                    raise RuntimeError("post-only cancellation returned no order state")
+                confirmed_status = str(confirmed.get("status", "")).lower()
+                confirmed_filled = Decimal(str(confirmed.get("filled") or 0))
+                if (not confirmed_filled.is_finite() or confirmed_filled < 0
+                        or confirmed_filled > amount_decimal):
+                    raise RuntimeError("exchange returned an invalid fill amount after cancellation")
+                if confirmed_status not in {"closed", "canceled", "cancelled", "rejected", "expired"}:
+                    # Do not place another quote while this one might still fill.
+                    self.risk_manager.store.update_order(
+                        client_id, "UNKNOWN", exchange_order_id=order_id,
+                        filled=confirmed_filled,
+                        average=confirmed.get("average") or confirmed.get("price"),
+                        response={"attempt_client_order_id": attempt_client_id,
+                                  "exchange_status": confirmed_status or "unknown",
+                                  "cancel_unconfirmed": True},
+                    )
+                    raise RuntimeError("post-only order remains open or its exchange state is unknown")
+                order = confirmed
+                raw_status = confirmed_status
+                if confirmed_filled > 0:
+                    # A partial fill is already real inventory. Stop the chase and
+                    # let the normal position/risk path manage only that quantity.
+                    break
             if not order:
                 self.risk_manager.store.update_order(client_id, "REJECTED", response={"result": "chase_ended_without_order"})
                 self.risk_manager.store.mark_order_applied(client_id)
                 return None, client_id
             raw_status = str(order.get("status", "")).lower()
             filled = order.get("filled") or 0
+            filled_decimal = Decimal(str(filled))
+            if not filled_decimal.is_finite() or filled_decimal < 0 or filled_decimal > amount_decimal:
+                raise RuntimeError("exchange returned an invalid fill amount")
             state = {
                 "closed": "FILLED", "open": "OPEN", "new": "OPEN",
                 "partially_filled": "PARTIALLY_FILLED", "canceled": "CANCELED",
-                "rejected": "REJECTED", "expired": "EXPIRED",
+                "cancelled": "CANCELED", "rejected": "REJECTED", "expired": "EXPIRED",
             }.get(raw_status, "UNKNOWN")
+            if state in {"CANCELED", "EXPIRED"} and filled_decimal >= amount_decimal * Decimal("0.99999999"):
+                # The final quantity may have filled immediately before cancel.
+                state = "FILLED"
+                order = {**order, "status": "closed"}
+            elif state in {"CANCELED", "EXPIRED"} and filled_decimal > 0:
+                state = "PARTIAL_CLOSED"
+            elif state == "FILLED" and filled_decimal < amount_decimal * Decimal("0.99999999"):
+                state = "PARTIAL_CLOSED"
             average = order.get("average") or order.get("price")
             self.risk_manager.store.update_order(
                 client_id, state, exchange_order_id=order.get("id"),
                 filled=filled, average=average, response=order,
             )
-            if state != "FILLED":
-                # A maker entry that did not fill is aborted cleanly; no taker penalty.
+            if state in {"CANCELED", "REJECTED", "EXPIRED"}:
+                # A verified zero-fill maker entry is aborted cleanly.
                 self.risk_manager.store.mark_order_applied(client_id)
                 logger.info("Post-only entry for %s not filled (state %s); no position opened", symbol, state)
                 return None, client_id
+            if state in {"PARTIAL_CLOSED", "PARTIALLY_FILLED", "OPEN", "UNKNOWN"}:
+                if state != "PARTIAL_CLOSED":
+                    raise RuntimeError("post-only order did not reach a confirmed terminal fill state")
+                # Leave partial inventory unapplied so reconciliation blocks any
+                # further entry until the position ledger records the actual fill.
             return order, client_id
         except Exception as exc:
-            self.risk_manager.store.update_order(client_id, "UNKNOWN")
+            existing = self.risk_manager.store.get_order(client_id)
+            if existing and existing.get("state") not in {"UNKNOWN", "FILLED", "PARTIAL_CLOSED", "CANCELED", "REJECTED", "EXPIRED"}:
+                self.risk_manager.store.update_order(client_id, "UNKNOWN")
             try:
                 order = self.exchange.fetch_order_by_client_id(last_attempt_client_id, symbol)
                 if not order:
                     raise RuntimeError("order was not returned by reconciliation")
+                status = str(order.get("status", "")).lower()
+                filled = Decimal(str(order.get("filled") or 0))
+                if (status not in {"closed", "canceled", "cancelled", "rejected", "expired"}
+                        or not filled.is_finite() or filled < 0 or filled > amount_decimal):
+                    raise RuntimeError("reconciled post-only order is not terminal")
+                if filled >= amount_decimal * Decimal("0.99999999"):
+                    state = "FILLED"
+                    order = {**order, "status": "closed"}
+                elif filled > 0:
+                    state = "PARTIAL_CLOSED"
+                    order = {**order, "status": "canceled"}
+                else:
+                    state = {"rejected": "REJECTED", "expired": "EXPIRED"}.get(status, "CANCELED")
+                existing = self.risk_manager.store.get_order(client_id)
+                if existing and existing.get("state") in {"UNKNOWN", "SUBMITTED"}:
+                    self.risk_manager.store.update_order(
+                        client_id, state, exchange_order_id=order.get("id"),
+                        filled=filled, average=order.get("average") or order.get("price"),
+                        response={**order, "attempt_client_order_id": last_attempt_client_id},
+                    )
+                if state in {"CANCELED", "REJECTED", "EXPIRED"}:
+                    self.risk_manager.store.mark_order_applied(client_id)
                 return order, client_id
             except Exception:
                 raise RuntimeError("Post-only order outcome remains unknown; operator reconciliation required") from exc
@@ -836,6 +912,93 @@ class TradingBot:
             return notional.is_finite() and notional < Decimal(str(min_cost))
         except Exception:
             return False
+
+    def _reconcile_terminal_no_fill_order_intents(self) -> None:
+        """Resolve journaled orders only when Binance confirms every attempt ended unfilled."""
+        for intent in self.risk_manager.store.unresolved_orders():
+            if not isinstance(intent, dict):
+                raise ValueError("unresolved local order intent exists")
+            if intent.get("state") not in {"PENDING", "SUBMITTED", "UNKNOWN", "OPEN", "PARTIALLY_FILLED"}:
+                # A terminal but unapplied fill may represent real inventory or
+                # proceeds; it must be repaired by the position/trade ledger.
+                raise ValueError("unresolved local order intent exists")
+            symbol = str(intent.get("symbol") or "")
+            client_id = str(intent.get("client_order_id") or "")
+            if not symbol or not client_id:
+                raise ValueError("unresolved local order intent exists")
+            try:
+                request = json.loads(intent.get("request_json") or "{}")
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("unresolved local order intent exists") from exc
+
+            # The maker chase used the stable parent id plus suffixes 1-4. Check
+            # every possible order so an old still-working requote can never be
+            # hidden by a canceled final attempt.
+            candidate_ids = [client_id]
+            if str(intent.get("side", "")).upper() == "BUY" and request.get("post_only") is True:
+                candidate_ids.extend(f"{client_id}{attempt}" for attempt in range(1, 5))
+            found_orders = []
+            seen_exchange_ids = set()
+            for candidate_id in candidate_ids:
+                try:
+                    order = self.exchange.fetch_order_by_client_id(candidate_id, symbol)
+                except Exception as exc:
+                    raise ValueError("unresolved local order intent exists") from exc
+                if not order:
+                    continue
+                if not isinstance(order, dict):
+                    raise ValueError("unresolved local order intent exists")
+                exchange_id = str(order.get("id") or "")
+                if exchange_id and exchange_id in seen_exchange_ids:
+                    continue
+                if exchange_id:
+                    seen_exchange_ids.add(exchange_id)
+                status = str(order.get("status", "")).lower()
+                try:
+                    filled = Decimal(str(order.get("filled") or 0))
+                except (InvalidOperation, TypeError, ValueError) as exc:
+                    raise ValueError("unresolved local order intent exists") from exc
+                if (status not in {"canceled", "cancelled", "rejected", "expired"}
+                        or not filled.is_finite() or filled != 0):
+                    raise ValueError("unresolved local order intent exists")
+                found_orders.append(order)
+
+            if not found_orders and intent.get("exchange_order_id"):
+                # Fallback for exchanges that cannot resolve by client id while
+                # retaining a persisted exchange order id.
+                try:
+                    order = self.exchange.fetch_order(str(intent["exchange_order_id"]), symbol)
+                    status = str(order.get("status", "")).lower() if isinstance(order, dict) else ""
+                    filled = Decimal(str(order.get("filled") or 0)) if isinstance(order, dict) else Decimal("-1")
+                except Exception as exc:
+                    raise ValueError("unresolved local order intent exists") from exc
+                if (status not in {"canceled", "cancelled", "rejected", "expired"}
+                        or not filled.is_finite() or filled != 0):
+                    raise ValueError("unresolved local order intent exists")
+                found_orders.append(order)
+
+            # No matching client order is also safe only because the private
+            # exchange lookup returned a confirmed not-found result for every
+            # id. Account balances and open orders are checked separately in
+            # this same reconciliation pass before it is allowed to complete.
+            final_state = "CANCELED" if intent.get("state") != "PENDING" else "REJECTED"
+            response = {
+                "result": "exchange_confirmed_no_fill",
+                "orders_checked": len(candidate_ids),
+                "orders_found": len(found_orders),
+            }
+            self.risk_manager.store.update_order(
+                client_id, final_state,
+                exchange_order_id=(found_orders[-1].get("id") if found_orders else intent.get("exchange_order_id")),
+                filled="0", response=response,
+            )
+            self.risk_manager.store.mark_order_applied(client_id)
+            self.risk_manager.store.append_event("order_reconciled_no_fill", {
+                "symbol": symbol,
+                "side": str(intent.get("side", "")).lower(),
+                "orders_checked": len(candidate_ids),
+                "orders_found": len(found_orders),
+            })
 
     def _reconcile_exchange_state(self, *, allow_manual_review_rebaseline: bool = False) -> bool:
         """Block all order activity until authenticated account state matches local state."""
@@ -1066,6 +1229,7 @@ class TradingBot:
                             "difference": str(excess),
                             "below_minimum_notional": True,
                         })
+            self._reconcile_terminal_no_fill_order_intents()
             if self.risk_manager.store.unresolved_orders():
                 raise ValueError("unresolved local order intent exists")
             self._last_account_balance = balance

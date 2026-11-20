@@ -67,6 +67,7 @@
     risk_equity_basis_migrated:'Risk baseline corrected',
     mode_changed:'Trading mode changed',
     reconciliation_failed:'Account check failed',
+    order_reconciled_no_fill:'Unfilled order reconciled',
     protective_stop_placed:'Protective stop placed',
     protective_stop_filled:'Protective stop filled',
     protective_stop_cancelled:'Protective stop cancelled',
@@ -87,7 +88,7 @@
   };
   const readable=value=>String(value||'').replaceAll('_',' ').replace(/\b[a-z]/g,c=>c.toUpperCase());
   const readableReason=value=>String(value||'').replace(/needs_(\d+)_closed_hourly_candles_received_(\d+)/gi,(_,need,count)=>`needs ${Number(need).toLocaleString()} completed hourly candles; ${Number(count).toLocaleString()} received`).replaceAll('_',' ');
-  const category=e=>e.type==='market_check'?'market':e.type==='order_status'||e.type==='testnet_smoke_trade_completed'?'orders':'safety';
+  const category=e=>e.type==='market_check'?'market':e.type==='order_status'||e.type==='order_reconciled_no_fill'||e.type==='testnet_smoke_trade_completed'?'orders':'safety';
   const tone=value=>value==='BUY'||value==='FILLED'||value==='ACTIVE'?'is-buy':value==='SELL'||value==='REJECTED'||value==='UNKNOWN'?'is-sell':value==='HOLD'||value==='PENDING'?'is-wait':'';
   function appendText(parent,tag,className,value){
     const node=document.createElement(tag);
