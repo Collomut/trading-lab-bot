@@ -30,7 +30,8 @@ os.environ["BOT_TEST_SUITE"] = "1"
 for _k in (
     "STRATEGY", "TIMEFRAME", "LOOKBACK_CANDLES", "REGIME_FILTER_ENABLED", "MIN_TREND_ADX",
     "MAX_ATR_PCT", "EMA72_MAX_ATR_PCT", "EMA72_TAKE_PROFIT_ATR_MULTIPLE",
-    "ENABLE_DOWNTEND_RECOVERY_TESTNET", "DOWNTREND_RSI_RECOVERY_LEVEL", "TRADING_PAIRS",
+    "ENABLE_DOWNTREND_RECOVERY_TESTNET", "ENABLE_DOWNTEND_RECOVERY_TESTNET",
+    "DOWNTREND_RSI_RECOVERY_LEVEL", "TRADING_PAIRS",
     "MAX_RISK_PER_TRADE", "MAX_OPEN_POSITIONS", "STOP_LOSS_PCT", "TAKE_PROFIT_PCT",
     "MAX_DAILY_LOSS_PCT", "POSITION_SIZE_PCT", "MAX_ROLLING_DRAWDOWN_PCT",
     "MAX_CONSECUTIVE_LOSSES", "START_PAUSED", "POST_ONLY_ENTRIES", "ENABLE_NOTIFICATIONS",
@@ -361,12 +362,22 @@ class TestConfigurationAndValidation(unittest.TestCase):
     def test_downtrend_recovery_flag_is_off_by_default_and_requires_dynamic_regime(self):
         self.assertFalse(StrategyConfig().enable_downtrend_recovery_testnet)
 
+        with patch.dict(os.environ, {"ENABLE_DOWNTREND_RECOVERY_TESTNET": "true"}, clear=True):
+            self.assertTrue(StrategyConfig().enable_downtrend_recovery_testnet)
+        with patch.dict(os.environ, {
+            "ENABLE_DOWNTREND_RECOVERY_TESTNET": "false",
+            "ENABLE_DOWNTEND_RECOVERY_TESTNET": "true",
+        }, clear=True):
+            self.assertFalse(StrategyConfig().enable_downtrend_recovery_testnet)
+        with patch.dict(os.environ, {"ENABLE_DOWNTEND_RECOVERY_TESTNET": "true"}, clear=True):
+            self.assertTrue(StrategyConfig().enable_downtrend_recovery_testnet)
+
         cfg = BotConfig()
         cfg.dashboard_token = "test_secret_token"
         cfg.strategy.name = "macro_donchian_ema72"
         cfg.strategy.enable_downtrend_recovery_testnet = True
         self.assertTrue(
-            any("ENABLE_DOWNTEND_RECOVERY_TESTNET requires STRATEGY=dynamic_regime" in e
+            any("ENABLE_DOWNTREND_RECOVERY_TESTNET requires STRATEGY=dynamic_regime" in e
                 for e in cfg.validate())
         )
 
@@ -375,7 +386,7 @@ class TestConfigurationAndValidation(unittest.TestCase):
         cfg2.strategy.name = "dynamic_regime"
         self.assertFalse(cfg2.strategy.enable_downtrend_recovery_testnet)
         self.assertEqual(
-            [e for e in cfg2.validate() if "ENABLE_DOWNTEND_RECOVERY_TESTNET" in e], []
+            [e for e in cfg2.validate() if "ENABLE_DOWNTREND_RECOVERY_TESTNET" in e], []
         )
 
     def test_macro_trend_pullback_config_validation(self):

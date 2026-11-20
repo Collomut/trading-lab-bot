@@ -63,6 +63,7 @@ def run_universe(all_frames: dict[str, pd.DataFrame], symbols: tuple[str, ...], 
         take_profit_atr_multiple=2.0,
         sizing_multiplier_col="risk_multiplier",
         enable_breakeven_trailing=False,
+        max_open_positions_override=1,
     )
     result = summarize("downtrend_rsi_recovery_testnet", sim)
     result["halt_reason"] = sim["halt_reason"]
@@ -71,10 +72,12 @@ def run_universe(all_frames: dict[str, pd.DataFrame], symbols: tuple[str, ...], 
 
 
 def main() -> None:
-    all_frames = {symbol: build_signals(symbol) for symbol in EXPANDED_SYMBOLS}
+    # Match the executable config's current default RSI recovery level. The
+    # older downtrend_rsi_recovery_results.json used RSI 40, not the code's 25.
+    all_frames = {symbol: build_signals(symbol, rsi_recovery_level=25.0) for symbol in EXPANDED_SYMBOLS}
     payload = {
         "candidate": "downtrend_rsi_recovery_testnet",
-        "implementation": "Three consecutive completed hourly downtrend classifications; RSI14 crosses above 40; EMA20/RSI70 exits; swing-low stop capped at 4%; 2x ATR take-profit; 0.20x normal risk budget; same shared simulator portfolio caps and halts.",
+        "implementation": "Three consecutive completed hourly downtrend classifications; RSI14 crosses above the deployed default level 25; EMA20/RSI70 exits; swing-low stop capped at 4%; 2x ATR take-profit; 0.20x normal risk budget; one recovery position maximum; same shared simulator costs and halts.",
         "costs_per_side_bps": {"base": {"fee": FEE_BPS, "slippage": SLIPPAGE_BPS},
                                "stress": {"fee": STRESS_FEE_BPS, "slippage": STRESS_SLIPPAGE_BPS}},
         "limitations": ["Fixed 8-coin universe is survivorship-biased", "2026 review data has already been used in project research", "OHLCV cannot recreate spread, queue position, or exact intrabar execution", "Positive historical sample does not establish an edge"],
@@ -89,7 +92,7 @@ def main() -> None:
                 "eight_symbols": run_universe(all_frames, EXPANDED_SYMBOLS, start, end, fee, slip),
             }
     OUT.mkdir(exist_ok=True)
-    output = OUT / "downtrend_rsi_recovery_results.json"
+    output = OUT / "downtrend_rsi_recovery_level25_results.json"
     output.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
     for split, costs in payload["results"].items():
         print(split)

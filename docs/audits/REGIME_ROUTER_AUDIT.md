@@ -74,7 +74,7 @@ the profitable route.
 
 **Fix:** the downtrend route is now **entry-disabled by default**. It is
 available only via the explicit opt-in
-`ENABLE_DOWNTEND_RECOVERY_TESTNET=true` (validated to require
+`ENABLE_DOWNTREND_RECOVERY_TESTNET=true` (validated to require
 `STRATEGY=dynamic_regime`), for low-risk Testnet execution-evidence collection
 only. The classifier and dashboard diagnostics are unchanged.
 

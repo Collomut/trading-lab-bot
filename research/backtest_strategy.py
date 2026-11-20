@@ -258,7 +258,8 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
              trailing_uses_close: bool = False,
              gap_exit_atr_multiple: float | None = None,
              enable_breakeven_trailing: bool = True,
-             max_consecutive_losses: int | None = None):
+             max_consecutive_losses: int | None = None,
+             max_open_positions_override: int | None = None):
     # Use common timestamps across all selected Binance symbols and intervals.
     common = set(frames[next(iter(frames))].timestamp_ms)
     for f in frames.values():
@@ -334,7 +335,8 @@ def simulate(frames: dict, fee_bps: float, slip_bps: float, enforce_risk_halts: 
                 if prev_signal.signal != "BUY" or sym in positions:
                     continue
                 current_nav = cash + sum(p["qty"]*events[s].loc[ts].open for s,p in positions.items())
-                if (len(positions) >= MAX_OPEN_POSITIONS or cash <= 0
+                max_positions = MAX_OPEN_POSITIONS if max_open_positions_override is None else max_open_positions_override
+                if (len(positions) >= max_positions or cash <= 0
                         or not correlation_ok(sym, positions, frames, i-1, correlation_lookback_bars)):
                     continue
                 fill = float(events[sym].loc[ts].open) * (1 + slip)

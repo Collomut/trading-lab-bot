@@ -250,7 +250,7 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str, *, enable_downtren
                 route=policy["strategy"],
                 entry_route_enabled=True,
                 route_state="experimental_testnet_candidate",
-                reason="Stable downtrend confirmed; the opt-in low-risk RSI recovery experiment may evaluate on Testnet only. It has not passed live-market validation.",
+                reason="Stable downtrend confirmed; the opt-in low-risk RSI recovery experiment may evaluate on Binance Demo/Testnet only. It has not passed live-market validation.",
             )
         else:
             result.update(
@@ -262,7 +262,7 @@ def evaluate_regime_router(ohlcv: list, active_strategy: str, *, enable_downtren
                 reason=(
                     "Stable downtrend confirmed, but the RSI recovery experiment is entry-disabled: "
                     "its independent replay was net-negative (PF < 1) in every historical slice. "
-                    "Set ENABLE_DOWNTEND_RECOVERY_TESTNET=true to opt into the low-risk Testnet experiment."
+                    "Set ENABLE_DOWNTREND_RECOVERY_TESTNET=true to opt into the low-risk paper experiment."
                 ),
             )
     elif regime == "high_volatility":
