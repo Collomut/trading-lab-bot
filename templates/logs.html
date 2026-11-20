@@ -122,6 +122,8 @@
     if(raw.length)regimeFacts.push(`Recent bars: ${raw.map(readable).join(' → ')}`);
     if(router.indicators?.adx!=null)regimeFacts.push(`ADX ${Number(router.indicators.adx).toFixed(1)}`);
     if(router.indicators?.atr_pct!=null)regimeFacts.push(`ATR ${Number(router.indicators.atr_pct).toFixed(2)}%`);
+    if(router.indicators?.close!=null&&router.indicators?.ema200!=null)regimeFacts.push(`Close ${Number(router.indicators.close).toLocaleString()} · EMA200 ${Number(router.indicators.ema200).toLocaleString()}`);
+    if(router.indicators?.ema200_24h_slope_pct!=null)regimeFacts.push(`EMA200 24h slope ${Number(router.indicators.ema200_24h_slope_pct)>0?'+':''}${Number(router.indicators.ema200_24h_slope_pct).toFixed(2)}%`);
     step(1,'Market context',stable?`${readable(regime)} · stable`:`${readable(regime)} · not confirmed`,regimeFacts.join(' · ')||readableReason(router.reason||'Regime details were not stored with this older check.'),stable?'pass':'wait');
     const routeEnabled=router.entry_route_enabled===true;
     const routeLabel=strategy==='downtrend_rsi_recovery_testnet'?`RSI recovery experiment · ${routeEnabled?'enabled':'disabled'}`:strategy==='macro_donchian_ema72'?'EMA72 breakout':strategy==='macro_trend_pullback'?'Trend pullback':strategy?readable(strategy):'No strategy selected';
