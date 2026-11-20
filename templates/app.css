@@ -1431,6 +1431,21 @@ footer {
 .pulse-gate strong { font-size: .76rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .gate-pass { color: var(--green); }
 .gate-wait { color: var(--wait-ink); }
+.pulse-context { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.pulse-context-tag { display: inline-flex; align-items: center; min-height: 23px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--soft); font-size: .69rem; font-weight: 680; }
+.pulse-context-tag.tag-pass { color: var(--green); border-color: color-mix(in srgb, var(--green) 36%, var(--line)); background: var(--green-soft); }
+.pulse-context-tag.tag-wait { color: var(--wait-ink); border-color: color-mix(in srgb, var(--wait-ink) 34%, var(--line)); background: var(--wait-soft); }
+.pulse-progress { display: grid; gap: 5px; margin: 11px 0 10px; }
+.pulse-progress-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: .72rem; }
+.pulse-progress-head strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.pulse-progress-track { height: 6px; overflow: hidden; border-radius: 999px; background: var(--line); }
+.pulse-progress-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .35s ease; }
+.pulse-progress-fill.is-ready { background: var(--green); }
+.pulse-progress-note { color: var(--muted); font-size: .65rem; line-height: 1.35; }
+.pulse-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 9px; }
+.pulse-fact { display: grid; gap: 3px; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft); }
+.pulse-fact span { color: var(--muted); font-size: .62rem; line-height: 1.25; }
+.pulse-fact strong { overflow: hidden; color: var(--ink); font-size: .78rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .pulse-entry, .pulse-reason { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: .78rem; line-height: 1.45; }
 .pulse-entry { color: var(--wait-ink); }
 .pulse-entry.entry-ready { color: var(--green); font-weight: 700; }
@@ -1439,6 +1454,7 @@ footer {
 @keyframes pulse-spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) { .market-pulse-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 540px) { .market-pulse-grid { grid-template-columns: 1fr; } .pulse-heading { flex-direction: column; gap: 5px; } .pulse-updated { padding-top: 0; } }
+@media (max-width: 350px) { .pulse-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { .pulse-card, .pulse-loader { transition: none; animation: none !important; } .pulse-card:hover { transform: none; } }
 
 /* Indicator consensus: color plus text keeps each vote easy to scan. */
