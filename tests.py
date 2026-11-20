@@ -4249,6 +4249,27 @@ class TestDashboardAuthMiddleware(unittest.TestCase):
             risk, [], account_available=True, exchange_reconciled=False, unresolved_orders=[]
         ))
 
+    def test_reconciled_order_intent_halt_offers_review_only_when_flat_and_clean(self):
+        risk = SimpleNamespace(
+            _is_halted=True,
+            _halt_reason="Unresolved order intent exists; exchange reconciliation required",
+        )
+        self.assertTrue(WebDashboard._manual_resume_available(
+            risk, [], account_available=True, exchange_reconciled=True, unresolved_orders=[]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, [], account_available=True, exchange_reconciled=False, unresolved_orders=[]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, [], account_available=True, exchange_reconciled=True, unresolved_orders=[object()]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, [object()], account_available=True, exchange_reconciled=True, unresolved_orders=[]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, [], account_available=False, exchange_reconciled=True, unresolved_orders=[]
+        ))
+
 class TestTemplatesWordingAndMobileUx(unittest.TestCase):
     """Verifies plain-English wording, absence of misleading claims, glossary clarity, and mobile UI responsiveness."""
 

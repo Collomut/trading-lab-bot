@@ -185,6 +185,7 @@ class RiskManager:
         "Buy order state requires reconciliation",
         "Sell order state requires reconciliation",
         "Stop-exit order state requires reconciliation",
+        "Unresolved order intent exists",
         "Sell order for",
         "Stop-exit order for",
         "Partial sell for",
