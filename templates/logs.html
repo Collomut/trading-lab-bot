@@ -64,6 +64,7 @@
   const eventNames={
     worker_started:'Bot worker started',
     risk_halt:'Trading safety halt',
+    notification_delivery:'Email alert status',
     risk_equity_basis_migrated:'Risk baseline corrected',
     mode_changed:'Trading mode changed',
     reconciliation_failed:'Account check failed',
@@ -179,8 +180,10 @@
     }else if(e.type==='risk_equity_basis_migrated'){
       badgeText=d.legacy_equity_halt_cleared?'Old halt cleared':'Halt retained';
       badgeTone=d.legacy_equity_halt_cleared?'is-buy':'is-wait';
-    }else if(e.type==='risk_halt'||e.type==='analysis_error'||e.type==='market_data_issue'||e.type==='reconciliation_failed'){
+    }else if(e.type==='risk_halt'||e.type==='analysis_error'||e.type==='market_data_issue'||e.type==='reconciliation_failed'||(e.type==='notification_delivery'&&d.status==='failed')){
       badgeTone='is-alert';
+    }else if(e.type==='notification_delivery'&&d.status==='accepted_by_smtp'){
+      badgeTone='is-buy';
     }
     title.textContent=titleText;
     heading.append(title);
@@ -265,6 +268,9 @@
     }else if(e.type==='order_status'){
       const summary=[d.state,d.amount?('Amount '+d.amount):null,d.filled?('Filled '+d.filled):null,d.average?('Average '+d.average):null].filter(Boolean).join(' · ');
       if(summary)appendText(card,'p','log-reason',summary);
+    }else if(e.type==='notification_delivery'){
+      appendText(card,'p','log-reason',`Email · ${readable(d.category)} · ${d.status==='accepted_by_smtp'?'accepted by SMTP':'not accepted by SMTP'}`);
+      if(d.message)appendText(card,'p','log-reason',d.message);
     }else if(e.type==='testnet_smoke_trade_completed'){
       const formatValue=value=>{const number=Number(value);return Number.isFinite(number)?number.toLocaleString(undefined,{maximumFractionDigits:8}):String(value)};
       const summary=[d.amount?('Amount '+formatValue(d.amount)):null,d.buy_price?('Buy '+formatValue(d.buy_price)):null,d.sell_price?('Sell '+formatValue(d.sell_price)):null,(d.pnl_net_fees!==null&&d.pnl_net_fees!==undefined&&d.pnl_net_fees!=='')?('Net P&L '+formatValue(d.pnl_net_fees)):null,(d.accounting_complete===false)?'Fees incomplete':null].filter(Boolean).join(' · ');

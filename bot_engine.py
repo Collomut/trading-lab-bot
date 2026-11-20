@@ -12,6 +12,7 @@ This is the orchestrator that:
 
 import logging
 import logging.handlers
+import html
 import time
 import json
 import os
@@ -64,6 +65,9 @@ class TradingBot:
             )
         )
         self.risk_manager = RiskManager(config.risk, persistence_dir=config.data_dir)
+        # Route new safety halts into the notification system. RiskManager calls
+        # this only when a halt is newly raised or its reason changes.
+        self.risk_manager.on_halt = self._notify_safety_halt
         self.shadow_ledger = ShadowLedger(self.risk_manager.store)
         if (config.strategy.name in {"macro_donchian_ema72", "dynamic_regime", "macro_trend_pullback"} and any(
                 position.exit_policy not in {"ema72_signal", "downtrend_rsi_recovery", "ema36_signal"}
@@ -158,7 +162,7 @@ class TradingBot:
     def _send_telegram_notification(self, message: str):
         """Send notification to Telegram bot."""
         if not (self.config.telegram_bot_token and self.config.telegram_chat_id):
-            return
+            return False
         try:
             url = f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage"
             payload = {
@@ -170,13 +174,15 @@ class TradingBot:
             req = urllib.request.Request(url, data=data)
             urllib.request.urlopen(req, timeout=5)
             logger.info("Telegram notification dispatched successfully")
+            return True
         except Exception:
             logger.debug("Telegram notification delivery failed (details suppressed)")
+            return False
 
     def _send_email_notification(self, subject: str, message: str):
         """Send an email or carrier SMS notification via SMTP (multipart plain text + HTML)."""
         if not (self.config.smtp_host and self.config.alert_email):
-            return
+            return False
         try:
             import smtplib
             from email.mime.multipart import MIMEMultipart
@@ -197,8 +203,8 @@ class TradingBot:
             badge_color = "#2e7d32" if (is_buy or is_profit) else "#c62828"
 
             rows_html = "".join(
-                f"<tr><td style='padding:8px 12px;border-bottom:1px solid #eee;color:#555;'>{l.split(':', 1)[0]}</td>"
-                f"<td style='padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;color:#111;text-align:right;'>{l.split(':', 1)[1].strip() if ':' in l else ''}</td></tr>"
+                f"<tr><td style='padding:8px 12px;border-bottom:1px solid #eee;color:#555;'>{html.escape(l.split(':', 1)[0])}</td>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;color:#111;text-align:right;'>{html.escape(l.split(':', 1)[1].strip()) if ':' in l else ''}</td></tr>"
                 for l in details
             )
 
@@ -208,7 +214,7 @@ class TradingBot:
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background-color:#F7F4EE;margin:0;padding:24px 12px;color:#222;">
   <div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #dcd7cc;border-radius:10px;padding:24px;box-shadow:0 2px 10px rgba(0,0,0,0.04);">
     <div style="display:inline-block;padding:5px 12px;border-radius:4px;background:{badge_color};color:#ffffff;font-size:12px;font-weight:bold;letter-spacing:0.5px;margin-bottom:16px;">
-      {title}
+      {html.escape(title)}
     </div>
     <table style="width:100%;border-collapse:collapse;margin:12px 0 20px;font-size:14px;">
       {rows_html}
@@ -234,32 +240,39 @@ class TradingBot:
 
             recipients = [addr.strip() for addr in self.config.alert_email.split(",") if addr.strip()]
             if not recipients:
-                return
+                return False
 
             if self.config.smtp_port == 465:
                 server = smtplib.SMTP_SSL(self.config.smtp_host, self.config.smtp_port, timeout=10)
             else:
                 server = smtplib.SMTP(self.config.smtp_host, self.config.smtp_port, timeout=10)
-                try:
-                    server.starttls()
-                except Exception:
-                    pass
+                # Never fall back to sending SMTP credentials over a cleartext
+                # connection when STARTTLS negotiation fails.
+                server.starttls()
 
             if self.config.smtp_user and self.config.smtp_password:
                 server.login(self.config.smtp_user, self.config.smtp_password)
 
-            server.sendmail(sender, recipients, msg.as_string())
-            server.quit()
+            refused = server.sendmail(sender, recipients, msg.as_string())
+            if refused:
+                logger.warning("Email alert was refused for %s recipient(s)", len(refused))
+                return False
+            try:
+                server.quit()
+            except Exception:
+                logger.debug("SMTP connection did not close cleanly after accepting email")
             logger.info("Email alert dispatched to %s", self.config.alert_email)
+            return True
         except Exception as e:
             # SMTP exceptions can include server addresses and authentication
             # details. Keep diagnostics useful without logging exception text.
             logger.warning("Failed to send email notification (%s)", type(e).__name__)
+            return False
 
     def _send_discord_notification(self, message: str):
         """Send a notification to Discord webhook for instant push notifications."""
         if not self.config.discord_webhook_url:
-            return
+            return False
         try:
             payload = json.dumps({"content": message}).encode("utf-8")
             req = urllib.request.Request(
@@ -269,19 +282,102 @@ class TradingBot:
             )
             urllib.request.urlopen(req, timeout=5)
             logger.info("Discord webhook notification dispatched")
+            return True
         except Exception as e:
             # urllib errors can echo the full webhook URL, which contains its
             # bearer credential. Never write that URL to application logs.
             logger.warning("Failed to send Discord webhook notification (%s)", type(e).__name__)
+            return False
 
     def send_notification(self, message: str, subject: str = "Trading Bot Alert"):
         """Send notifications to all configured channels (Telegram, Email/SMS, Discord)."""
         if not self.config.enable_notifications:
-            return
+            return {"enabled": False, "channels": {}}
 
-        self._send_telegram_notification(message)
-        self._send_email_notification(subject, message)
-        self._send_discord_notification(message)
+        results = {}
+        if self.config.telegram_bot_token and self.config.telegram_chat_id:
+            results["telegram"] = "accepted" if self._send_telegram_notification(message) else "failed"
+        email_configured = bool(self.config.smtp_host and self.config.alert_email)
+        email_accepted = self._send_email_notification(subject, message)
+        if email_configured:
+            results["email"] = "accepted_by_smtp" if email_accepted else "failed"
+        if self.config.discord_webhook_url:
+            results["discord"] = "accepted" if self._send_discord_notification(message) else "failed"
+        if email_configured:
+            store = getattr(getattr(self, "risk_manager", None), "store", None)
+            if store is not None:
+                try:
+                    store.append_event("notification_delivery", {
+                        "channel": "email",
+                        "status": results["email"],
+                        "category": self._notification_category(subject),
+                    })
+                except Exception:
+                    logger.debug("Could not record email notification status")
+        return {"enabled": True, "channels": results}
+
+    @staticmethod
+    def _notification_category(subject: str) -> str:
+        title = str(subject).upper()
+        if "SAFETY HALT" in title:
+            return "safety_halt"
+        if "BUY SETUP" in title:
+            return "buy_setup"
+        return "trade_update"
+
+    def _send_notification_background(self, message: str, subject: str):
+        """Dispatch noncritical email/push alerts off the trading-cycle thread."""
+        if not getattr(self.config, "enable_notifications", False):
+            return
+        worker = threading.Thread(
+            target=self.send_notification,
+            args=(message,),
+            kwargs={"subject": subject},
+            name="trading-notification",
+            daemon=True,
+        )
+        worker.start()
+
+    def _notify_safety_halt(self, reason: str):
+        """Send a concise account-safety alert without exposing exchange secrets."""
+        environment = getattr(self.config.exchange, "paper_environment", "unknown")
+        mode = "Demo" if self.config.exchange.paper_trading else "Live"
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        message = (
+            "SAFETY HALT ACTIVE — NEW ENTRIES BLOCKED\n"
+            f"Environment: Binance {mode} ({environment})\n"
+            f"Time: {timestamp}\n"
+            f"What happened: {str(reason)[:500]}\n"
+            "What this means: the bot has stopped opening new positions.\n"
+            "Next step: review the dashboard and reconcile the exchange account before resuming."
+        )
+        self._send_notification_background(message, "Trading Bot Safety Halt")
+
+    def _notify_buy_setup(self, signal: TradeSignal):
+        """Alert once per completed-candle BUY setup; this does not imply an order."""
+        indicators = signal.indicators if isinstance(signal.indicators, dict) else {}
+        timeframe = str(getattr(self.config.strategy, "timeframe", "unknown"))
+        strategy = str(indicators.get("strategy") or self.config.strategy.name)
+        route = str(indicators.get("route") or indicators.get("selected_strategy") or strategy)
+        price = indicators.get("close")
+        try:
+            confidence = float(signal.confidence)
+            if not math.isfinite(confidence):
+                confidence = 0.0
+        except (TypeError, ValueError, OverflowError):
+            confidence = 0.0
+        message = (
+            "BUY SETUP DETECTED — NO ORDER CONFIRMED\n"
+            f"Pair: {signal.symbol}\n"
+            f"Timeframe: {timeframe}\n"
+            f"Strategy: {strategy}\n"
+            f"Route: {route}\n"
+            f"Confidence: {confidence:.0%}\n"
+            f"Last completed candle close: {price if price is not None else 'unavailable'}\n"
+            f"Reason: {str(signal.reason)[:500]}\n"
+            "This is a strategy setup alert, not a trade confirmation. Risk, account, and order checks may still block the entry."
+        )
+        self._send_notification_background(message, f"BUY Setup: {signal.symbol}")
 
     def analyze_market(self, symbol: str):
         """
@@ -491,6 +587,14 @@ class TradingBot:
 
         if signal.signal != Signal.HOLD:
             logger.info(str(signal))
+
+        if signal.signal == Signal.BUY:
+            # One alert per completed candle (the analyzer deduplicates candles).
+            # This is informational and explicitly does not confirm an order.
+            try:
+                self._notify_buy_setup(signal)
+            except Exception as exc:
+                logger.warning("Could not dispatch BUY setup alert (%s)", type(exc).__name__)
 
         # Execute based on signal
         try:

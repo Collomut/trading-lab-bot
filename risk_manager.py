@@ -271,6 +271,7 @@ class RiskManager:
         self._daily_loss_reset_date = datetime.now(timezone.utc).date()
         self._is_halted = False
         self._halt_reason = ""
+        self.on_halt = None
         self._equity_basis: str | None = None
         self._equity_basis_migration_pending = False
 
@@ -416,6 +417,13 @@ class RiskManager:
             self._save_daily_state()
         except Exception as exc:
             logger.critical("Could not persist trading halt state: %s", exc)
+        if not was_halted or previous_reason != self._halt_reason:
+            callback = self.on_halt
+            if callable(callback):
+                try:
+                    callback(self._halt_reason)
+                except Exception as exc:
+                    logger.warning("Safety-halt notification callback failed (%s)", type(exc).__name__)
 
     def _load_positions(self):
         """Load positions from disk upon bot startup."""

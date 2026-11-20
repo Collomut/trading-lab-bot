@@ -93,6 +93,17 @@ from regime_router import REGIME_ROUTE_POLICY, evaluate_regime_router
 
 
 class TestShadowLogSafety(unittest.TestCase):
+    def test_email_delivery_log_is_allowlisted_and_explains_smtp_status(self):
+        safe = WebDashboard._safe_log_details("notification_delivery", {
+            "channel": "email", "status": "accepted_by_smtp", "category": "safety_halt",
+            "recipient": "private@example.com", "password": "must not pass",
+        })
+        self.assertEqual(safe["channel"], "email")
+        self.assertEqual(safe["status"], "accepted_by_smtp")
+        self.assertIn("does not confirm inbox placement", safe["message"])
+        self.assertNotIn("recipient", safe)
+        self.assertNotIn("password", safe)
+
     def test_reconciliation_log_shows_safe_reason_and_hides_unrecognized_details(self):
         safe = WebDashboard._safe_log_details("reconciliation_failed", {
             "reason": "Exchange reconciliation failed: persisted exchange stop for XRP/USDT is missing or not fully filled",
@@ -1294,6 +1305,7 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertTrue(RiskManager.is_rolling_drawdown_halt("Rolling peak-to-trough drawdown limit reached: 5.2%"))
             self.assertTrue(RiskManager.is_reviewed_clear_halt("Buy fee details were incomplete for BTC/USDT; position protected with stop, operator reconciliation required"))
             self.assertFalse(RiskManager.is_reviewed_clear_halt("Open-position state is unreadable; operator reconciliation required"))
+            self.assertTrue(RiskManager.is_reviewed_clear_halt("Unresolved order intent exists; exchange reconciliation required"))
 
             # A previously-sticky execution halt is now recoverable via review.
             rm.halt("Buy fee details were incomplete for BTC/USDT; position protected with stop, operator reconciliation required")
@@ -1305,6 +1317,16 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             rm.halt("Open-position state is unreadable; operator reconciliation required")
             self.assertFalse(rm.acknowledge_manual_halt_review())
             self.assertTrue(rm._is_halted)
+
+    def test_halt_notifies_only_when_reason_changes(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.on_halt = Mock()
+            rm.halt("Unresolved order intent exists; exchange reconciliation required")
+            rm.halt("Unresolved order intent exists; exchange reconciliation required")
+            rm.halt("Exchange reconciliation failed; operator review required")
+            self.assertEqual(rm.on_halt.call_count, 2)
+            self.assertEqual(rm.on_halt.call_args.args[0], "Exchange reconciliation failed; operator review required")
 
     def test_manual_halt_survives_restart_across_utc_midnight(self):
         with TemporaryDirectory() as persistence_dir:
@@ -4008,10 +4030,12 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
              patch("exchange.ExchangeConnector"), \
              patch("smtplib.SMTP") as mock_smtp:
             server_instance = MagicMock()
+            server_instance.sendmail.return_value = {}
             mock_smtp.return_value = server_instance
 
             bot = TradingBot(config)
-            bot.send_notification("Test email body", subject="Test Subject")
+            result = bot.send_notification("Test email body", subject="Test Subject")
+            self.assertEqual(result["channels"]["email"], "accepted_by_smtp")
 
             mock_smtp.assert_called_with("smtp.example.com", 587, timeout=10)
             server_instance.starttls.assert_called_once()
@@ -4021,6 +4045,40 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(args[0], "alerts@example.com")
             self.assertEqual(args[1], ["trader@example.com"])
             self.assertIn("Test Subject", args[2])
+
+    def test_safety_halt_alert_contains_reason_and_remains_off_order_thread(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(
+            enable_notifications=True,
+            exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+        )
+        bot._send_notification_background = Mock()
+
+        bot._notify_safety_halt("Exchange reconciliation failed: unresolved order intent")
+
+        args, _kwargs = bot._send_notification_background.call_args
+        self.assertIn("Exchange reconciliation failed: unresolved order intent", args[0])
+        self.assertIn("NEW ENTRIES BLOCKED", args[0])
+        self.assertEqual(args[1], "Trading Bot Safety Halt")
+
+    def test_buy_setup_alert_is_explicitly_not_an_order(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(
+            enable_notifications=True,
+            strategy=SimpleNamespace(name="dynamic_regime", timeframe="1h"),
+        )
+        bot._send_notification_background = Mock()
+        signal = TradeSignal(
+            Signal.BUY, "BTC/USDT", 0.75, "EMA breakout confirmed",
+            {"strategy": "macro_donchian_ema72", "route": "uptrend", "close": 60000},
+        )
+
+        bot._notify_buy_setup(signal)
+
+        args, _kwargs = bot._send_notification_background.call_args
+        self.assertEqual(args[1], "BUY Setup: BTC/USDT")
+        self.assertIn("BUY SETUP DETECTED — NO ORDER CONFIRMED", args[0])
+        self.assertIn("Risk, account, and order checks may still block the entry", args[0])
 
     def test_notification_disabled(self):
         config = BotConfig(

@@ -683,7 +683,9 @@ class WebDashboard:
             "notifications": {
                 "enabled": self.config.enable_notifications,
                 "telegram": bool(self.config.telegram_bot_token and self.config.telegram_chat_id),
-                "email": bool(self.config.smtp_host and self.config.alert_email),
+                "email": bool(
+                    self.config.enable_notifications and self.config.smtp_host and self.config.alert_email
+                ),
                 "discord": bool(self.config.discord_webhook_url),
             },
         }
@@ -807,6 +809,22 @@ class WebDashboard:
             return safe
         if event_type == "risk_halt":
             return {"reason": str(details.get("reason", "Trading halted"))[:500]}
+        if event_type == "notification_delivery":
+            channel = details.get("channel")
+            status = details.get("status")
+            category = details.get("category")
+            if channel != "email" or status not in {"accepted_by_smtp", "failed"}:
+                return {}
+            return {
+                "channel": "email",
+                "status": status,
+                "category": str(category or "trade_update")[:32],
+                "message": (
+                    "SMTP accepted the email for delivery; this does not confirm inbox placement."
+                    if status == "accepted_by_smtp" else
+                    "Email could not be accepted by SMTP. Check the service logs and mail settings."
+                ),
+            }
         if event_type == "risk_equity_basis_migrated":
             cleared = details.get("legacy_equity_halt_cleared") is True
             return {
@@ -1148,6 +1166,11 @@ class WebDashboard:
     async def handle_test_notification(self, request):
         if not self._is_valid_origin(request):
             return web.json_response({"error": "Same-origin request required."}, status=403)
+        if not self.config.enable_notifications:
+            return web.json_response({
+                "success": False,
+                "message": "Notifications are disabled in the service settings.",
+            }, status=409)
 
         channels = []
         if self.config.telegram_bot_token and self.config.telegram_chat_id:
@@ -1170,14 +1193,28 @@ class WebDashboard:
             f"Active channels: {', '.join(channels)}"
         )
         try:
-            await loop.run_in_executor(
+            result = await loop.run_in_executor(
                 None,
                 lambda: self.bot.send_notification(test_msg, subject="🔔 Trading Bot Alert Test")
             )
+            channel_results = result.get("channels", {}) if isinstance(result, dict) else {}
+            failed = [name for name, status in channel_results.items() if status == "failed"]
+            if failed:
+                return web.json_response({
+                    "success": False,
+                    "message": f"The test alert was not accepted by: {', '.join(failed)}. Check the email alert status in Logs and the Railway mail settings.",
+                    "channels": channel_results,
+                }, status=502)
+            descriptions = [
+                "Email accepted by SMTP (inbox delivery is not guaranteed)"
+                if name == "email" and status == "accepted_by_smtp"
+                else f"{name.title()} accepted"
+                for name, status in channel_results.items()
+            ]
             return web.json_response({
-                "success": True,
-                "message": f"Test alert dispatched to: {', '.join(channels)}",
-                "channels": channels
+                "success": bool(channel_results),
+                "message": "; ".join(descriptions) if descriptions else "No alert channel accepted the test message.",
+                "channels": channel_results,
             })
         except Exception as exc:
             return web.json_response({"success": False, "message": str(exc)}, status=500)
