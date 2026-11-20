@@ -465,7 +465,7 @@ class TradingBot:
                 "market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend",
                 "consensus_required", "entry_gates", "close", "ema480", "ema72",
                 "ema20", "rsi", "donchian_high168", "swing_low_5", "entry_ready", "exit_ready",
-                "breakout_ready", "max_atr_pct", "strategy",
+                "breakout_ready", "max_atr_pct", "rsi_recovery_level", "strategy",
             ):
                 value = indicators.get(key)
                 if value is None or isinstance(value, (str, int, float, bool, dict)):

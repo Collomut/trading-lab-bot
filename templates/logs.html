@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Activity · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m8">
-  <script src="/assets/app.js?v=m8" defer></script>
+  <link rel="stylesheet" href="/assets/app.css?v=m11">
+  <script src="/assets/app.js?v=m11" defer></script>
 </head>
 <body>
 <nav><div class="nav-inner">
@@ -98,6 +98,61 @@
   }
   function addBadge(parent,text,kind){
     return appendText(parent,'span',`log-badge ${kind||''}`,text);
+  }
+  function appendDecisionPath(card,d){
+    const indicators=d.indicators||{},router=d.regime_router||{};
+    const votes=d.votes||{};
+    const signal=String(d.signal||'HOLD').toUpperCase();
+    const dynamic=router.status==='dynamic_testnet'||indicators.strategy==='dynamic_regime';
+    const strategy=String(router.selected_strategy||router.candidate_strategy||(indicators.strategy==='dynamic_regime'?'':indicators.strategy)||'').toLowerCase();
+    const panel=document.createElement('details');panel.className='log-decision';
+    appendText(panel,'summary','log-decision-summary','See the decision path');
+    const flow=document.createElement('div');flow.className='decision-flow-grid log-decision-flow';
+    const step=(number,title,status,detail,toneName='wait')=>{
+      const node=document.createElement('div');node.className=`decision-step is-${toneName}`;
+      appendText(node,'span','decision-step-number',String(number).padStart(2,'0'));
+      const body=document.createElement('div');body.className='decision-step-body';
+      appendText(body,'strong','',title);appendText(body,'span','decision-step-state',status);appendText(body,'p','',detail);
+      node.append(body);flow.append(node);
+    };
+    const raw=Array.isArray(router.raw_regimes)?router.raw_regimes:[];
+    const regime=String(router.regime||indicators.market_regime||'uncertain').toLowerCase();
+    const stable=raw.length===3&&raw.every(value=>value===raw[0]);
+    const regimeFacts=[];
+    if(raw.length)regimeFacts.push(`Recent bars: ${raw.map(readable).join(' → ')}`);
+    if(router.indicators?.adx!=null)regimeFacts.push(`ADX ${Number(router.indicators.adx).toFixed(1)}`);
+    if(router.indicators?.atr_pct!=null)regimeFacts.push(`ATR ${Number(router.indicators.atr_pct).toFixed(2)}%`);
+    step(1,'Market context',stable?`${readable(regime)} · stable`:`${readable(regime)} · not confirmed`,regimeFacts.join(' · ')||readableReason(router.reason||'Regime details were not stored with this older check.'),stable?'pass':'wait');
+    const routeEnabled=router.entry_route_enabled===true;
+    const routeLabel=strategy==='downtrend_rsi_recovery_testnet'?`RSI recovery experiment · ${routeEnabled?'enabled':'disabled'}`:strategy==='macro_donchian_ema72'?'EMA72 breakout':strategy==='macro_trend_pullback'?'Trend pullback':strategy?readable(strategy):'No strategy selected';
+    const routeStatus=!dynamic?'Configured strategy · regime is informational':routeEnabled?routeLabel:strategy?routeLabel:'No entry route';
+    const routeDetail=!dynamic?`${routeLabel} evaluates its configured entry rules; the regime router is observation-only.`:readableReason(router.reason||'No strategy route was enabled for this check.');
+    step(2,'Strategy route',routeStatus,routeDetail,routeEnabled?'pass':'wait');
+    let entryDetail='The active strategy did not report an entry-ready setup.';
+    if(strategy==='downtrend_rsi_recovery_testnet'){
+      const rsi=Number(indicators.rsi),level=Number(indicators.rsi_recovery_level);
+      const rsiText=Number.isFinite(rsi)?`RSI ${rsi.toFixed(1)}`:'RSI unavailable';
+      const levelText=Number.isFinite(level)?`recovery level ${level}`:'configured recovery level unavailable';
+      entryDetail=dynamic&&!routeEnabled?'The experimental candidate is disabled, so RSI recovery conditions were not evaluated.':`${rsiText} · ${levelText}. Rule: prior RSI below the level, current RSI at or above it.`;
+    }else if(strategy==='macro_donchian_ema72'){
+      const close=Number(indicators.close),high=Number(indicators.donchian_high168),ema=Number(indicators.ema480),atr=Number(indicators.atr_pct),cap=Number(indicators.max_atr_pct);
+      const parts=[];
+      if(Number.isFinite(close)&&Number.isFinite(high))parts.push(`close ${close.toLocaleString()} vs 168-hour high ${high.toLocaleString()}`);
+      if(Number.isFinite(close)&&Number.isFinite(ema))parts.push(`EMA480 ${ema.toLocaleString()}`);
+      if(Number.isFinite(atr)&&Number.isFinite(cap))parts.push(`ATR ${atr.toFixed(2)}% / ${cap.toFixed(2)}% limit`);
+      entryDetail=parts.join(' · ')||entryDetail;
+    }else if(strategy==='macro_trend_pullback'){
+      entryDetail=`Macro trend ${indicators.macro_bullish===true?'pass':'wait'} · EMA20 pullback ${indicators.pulled_back===true?'pass':'wait'} · EMA9 reclaim ${indicators.reclaimed===true?'pass':'wait'} · ATR ${indicators.atr_pct==null?'—':Number(indicators.atr_pct).toFixed(2)+'%'}.`;
+    }else if(Object.keys(votes).length){
+      const counts={BUY:0,SELL:0,HOLD:0};
+      for(const vote of Object.values(votes)){const name=String(vote?.signal||'HOLD').toUpperCase();if(Object.hasOwn(counts,name))counts[name]++}
+      entryDetail=`Indicator votes: ${counts.BUY} BUY · ${counts.SELL} SELL · ${counts.HOLD} HOLD.`;
+    }
+    const entryEvaluated=!(dynamic&&strategy==='downtrend_rsi_recovery_testnet'&&!routeEnabled);
+    step(3,'Entry rule',!entryEvaluated?'Not evaluated · candidate disabled':indicators.entry_ready===true?'Rule passed':'Rule not met',entryDetail,entryEvaluated&&indicators.entry_ready===true?'pass':'wait');
+    const outcome=signal==='BUY'?'Strategy produced a BUY signal; account, risk, position-size, and exchange checks still determine whether an order is sent.':signal==='SELL'?'Spot SELL is an exit decision for a held position; the bot does not open short positions.':'No order signal from this check.';
+    step(4,'Decision',`${signal} · ${readableReason(d.reason||'Reason unavailable')}`,outcome,signal==='BUY'?'pass':signal==='SELL'?'sell':'wait');
+    panel.append(flow);card.append(panel);
   }
   function renderEvent(e){
     const card=document.createElement('article');
@@ -203,6 +258,7 @@
       if(d.spread_sample_status==='ok'&&d.measured_spread_bps!=null)meta.push(`Spread ${d.measured_spread_bps} bps`);
       else if(d.spread_sample_status&&d.spread_sample_status!=='unknown')meta.push(`Spread ${String(d.spread_sample_status).replaceAll('_',' ')}`);
       if(meta.length)appendText(card,'p','log-reason',meta.join(' · '));
+      appendDecisionPath(card,d);
     }else if(e.type==='order_status'){
       const summary=[d.state,d.amount?('Amount '+d.amount):null,d.filled?('Filled '+d.filled):null,d.average?('Average '+d.average):null].filter(Boolean).join(' · ');
       if(summary)appendText(card,'p','log-reason',summary);

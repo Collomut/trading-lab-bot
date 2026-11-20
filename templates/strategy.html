@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strategy · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m8"><script src="/assets/app.js?v=m8" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link active" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Configuration</div><h1>Strategy &amp; risk</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state" data-skeleton aria-busy="true">Loading…</span></div></header><div class="grid two"><section class="card"><h2>Signal</h2><div id="strategy" class="metric-label" data-skeleton aria-busy="true">Loading…</div><p class="help">The active strategy defines the entry signal, exit signal, and protective stop. Backtest results do not predict future returns.</p></section><section class="card"><h2>Risk limits</h2><div id="limits"></div></section></div><section class="card section-card"><h2>Strategy blueprint &amp; mechanics</h2><p class="help">How the active strategy balances signal frequency, profit-to-loss expectancy, and execution costs.</p><div class="limit-list"><div class="limit-row"><span>Layer 1 · Macro trend anchor</span><strong>1H Close &gt; rising EMA200 &amp; EMA20 &gt; EMA50 (filters 100% of counter-trend bear traps)</strong></div><div class="limit-row"><span>Layer 2 · Pullback continuation</span><strong>1H Low touches EMA20 value zone + completed bullish close above EMA9 (3–5× higher frequency)</strong></div><div class="limit-row"><span>Layer 3 · Risk &amp; trailing exit</span><strong>Prior 5-bar swing low stop (floored at 4%) · trailing exit on 1H close below EMA36</strong></div><div class="limit-row"><span>Execution safeguard</span><strong>Maker post-only order chasing eliminates taker fee drag and spread slippage</strong></div></div></section><section class="card section-card"><h2>Latest market checks</h2><p class="help">Checks use completed candles. Entry and exit rules depend on the selected strategy; protective stops remain active between checks.</p><div id="regimes" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for market data…</div></div></section><section class="card section-card"><h2 id="router-title">Regime router</h2><p id="router-description" class="help">Market conditions are classified from completed hourly candles. Dynamic routing requires three completed hourly candles before enabling an entry route.</p><div id="router" class="limit-list"><div class="limit-row" data-skeleton aria-busy="true">Waiting for enough market history…</div></div></section><div class="notice compact"><strong>Limits are estimates.</strong><span>They do not cap losses during gaps, outages, or poor fills.</span></div><footer>Paper mode is for software practice; these rules have not proven a trading edge. <a href="/terms">Open glossary</a></footer></main><script>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strategy · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m11"><script src="/assets/app.js?v=m11" defer></script></head><body><nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link active" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav><main class="container"><header class="page-head"><div><div class="eyebrow">Configuration</div><h1>Strategy &amp; risk</h1></div><div class="status"><span id="dot" class="dot"></span><span id="state" data-skeleton aria-busy="true">Loading…</span></div></header><div class="grid two"><section class="card"><h2>Signal</h2><div id="strategy" class="metric-label" data-skeleton aria-busy="true">Loading…</div><p class="help">The active strategy defines the entry signal, exit signal, and protective stop. Backtest results do not predict future returns.</p></section><section class="card"><h2>Risk limits</h2><div id="limits"></div></section></div><section class="card section-card"><h2>How a decision becomes an order</h2><p class="help">Each step must pass in order. A market signal by itself does not place an order.</p><div class="decision-overview"><div class="decision-overview-step"><span>01</span><strong>Read market</strong><small>Confirm the regime from completed hourly candles.</small></div><div class="decision-overview-step"><span>02</span><strong>Select route</strong><small>Choose an allowed setup for that regime, or stand aside.</small></div><div class="decision-overview-step"><span>03</span><strong>Check entry</strong><small>Evaluate the exact rules for the active strategy.</small></div><div class="decision-overview-step"><span>04</span><strong>Protect account</strong><small>Account, risk, position, and execution checks run before an order.</small></div></div></section><section class="card section-card"><div class="decision-section-heading"><div><h2>Recent decisions</h2><p class="help">Open a market to see the regime, selected route, rule checks, and final HOLD / BUY / SELL reason.</p></div><a class="text-link" href="/logs">Full decision log →</a></div><div id="regimes" class="decision-market-list"><div class="decision-empty" data-skeleton aria-busy="true">Waiting for completed market data…</div></div></section><div class="notice compact"><strong>Limits are estimates.</strong><span>They do not cap losses during gaps, outages, or poor fills.</span></div><footer>Paper mode is for software practice; these rules have not proven a trading edge. <a href="/terms">Open glossary</a></footer></main><script>
 const pct=v=>`${Number(v||0).toLocaleString()}%`;
 const readable=v=>String(v||'').replaceAll('_',' ').replace(/\b[a-z]/g,c=>c.toUpperCase());
 const readableReason=v=>String(v||'').replace(/needs_(\d+)_closed_hourly_candles_received_(\d+)/gi,(_,need,count)=>`needs ${Number(need).toLocaleString()} completed hourly candles; ${Number(count).toLocaleString()} received`).replaceAll('_',' ');
@@ -6,12 +6,69 @@ const strategyNames={dynamic_regime:'Dynamic regime routing',macro_donchian_ema7
 function renderMarketChecks(d){
  const box=document.getElementById('regimes');
  const activeStrategy=String(d.strategy_name||'').toLowerCase();
- const activeDonchian=activeStrategy==='macro_donchian_ema72'||activeStrategy==='dynamic_regime';
+ const activeDynamic=activeStrategy==='dynamic_regime';
+ const activeDonchian=activeStrategy==='macro_donchian_ema72';
  const signals=d.latest_signals&&typeof d.latest_signals==='object'?d.latest_signals:{};
  const entries=Object.entries(signals);
  box.replaceChildren();
  if(!entries.length){const empty=document.createElement('div');empty.className='limit-row';empty.textContent='No completed market checks received yet. The page will retry automatically.';box.append(empty);return}
  for(const [symbol,item] of entries){
+  if(activeDynamic){
+   const indicators=item?.indicators&&typeof item.indicators==='object'?item.indicators:{};
+   const router=item?.regime_router&&typeof item.regime_router==='object'?item.regime_router:{};
+   const signal=String(item?.signal||'HOLD').toUpperCase();
+   const regime=String(router.regime||indicators.regime||'uncertain').toLowerCase();
+   const raw=Array.isArray(router.raw_regimes)?router.raw_regimes:[];
+   const stable=raw.length===3&&raw.every(value=>value===raw[0]);
+   const routed=router.entry_route_enabled===true;
+   const selected=String(router.selected_strategy||router.candidate_strategy||indicators.strategy||'').toLowerCase();
+   const routeName=selected==='downtrend_rsi_recovery_testnet'?`RSI recovery experiment · ${routed?'enabled':'disabled'}`:selected==='macro_donchian_ema72'?'EMA72 breakout':routed?readable(selected):'No entry strategy selected';
+   const card=document.createElement('details');card.className='decision-market';
+   const summary=document.createElement('summary');summary.className='decision-market-summary';
+   const main=document.createElement('span');main.className='decision-market-main';
+   const pair=document.createElement('strong');pair.textContent=symbol;
+   const context=document.createElement('span');context.className='decision-market-context';
+   context.textContent=`${readable(regime)} · ${routeName}`;
+   main.append(pair,context);
+   const badge=document.createElement('span');badge.className=`log-badge ${signal==='BUY'?'is-buy':signal==='SELL'?'is-sell':'is-wait'}`;badge.textContent=signal;
+   summary.append(main,badge);card.append(summary);
+   const flow=document.createElement('div');flow.className='decision-flow-grid';
+   const step=(number,title,state,detail,tone='wait')=>{
+    const node=document.createElement('div');node.className=`decision-step is-${tone}`;
+    const marker=document.createElement('span');marker.className='decision-step-number';marker.textContent=String(number).padStart(2,'0');
+    const body=document.createElement('div');body.className='decision-step-body';
+    const heading=document.createElement('strong');heading.textContent=title;
+    const statusLine=document.createElement('span');statusLine.className='decision-step-state';statusLine.textContent=state;
+    const explanation=document.createElement('p');explanation.textContent=detail;
+    body.append(heading,statusLine,explanation);node.append(marker,body);flow.append(node);
+   };
+   const regimeDetail=raw.length?`Recent closed bars: ${raw.map(readable).join(' → ')}.`:readableReason(router.reason||'Not enough data to confirm a market regime.');
+   step(1,'Market regime',stable?'Confirmed for 3 closed candles':'Not stable yet',regimeDetail,stable?'pass':'wait');
+   step(2,'Strategy route',routed?routeName:selected==='downtrend_rsi_recovery_testnet'?routeName:'Stand aside · no route',readableReason(router.reason||'No entry strategy is enabled for this market condition.'),routed?'pass':'wait');
+   let entryDetail='The selected strategy entry rule has not fired.';
+   let entryState=indicators.entry_ready===true?'Entry rule passed':'Waiting for entry rule';
+   if(selected==='downtrend_rsi_recovery_testnet'){
+    const level=Number(indicators.rsi_recovery_level);
+    const current=Number(indicators.rsi);
+    const threshold=Number.isFinite(level)?level:25;
+    entryDetail=!routed?'This experimental candidate is disabled, so its RSI entry rule was not evaluated.':Number.isFinite(current)?`RSI ${current.toFixed(1)} · recovery level ${threshold}. Entry requires the prior RSI below ${threshold} and the current RSI at or above it.`:`RSI recovery needs a completed hourly candle crossing up through ${threshold} after an oversold reading.`;
+    if(!routed)entryState='Not evaluated · candidate disabled';
+   }else if(selected==='macro_donchian_ema72'){
+    const close=Number(indicators.close),high=Number(indicators.donchian_high168),ema=Number(indicators.ema480),atr=Number(indicators.atr_pct),cap=Number(indicators.max_atr_pct);
+    const values=[close,high,ema].every(value=>Number.isFinite(value)&&value>0);
+    entryDetail=values?`Close ${close.toLocaleString()} · 168-hour high ${high.toLocaleString()} · EMA480 ${ema.toLocaleString()}${Number.isFinite(atr)&&Number.isFinite(cap)?` · ATR ${atr.toFixed(2)}% / ${cap.toFixed(2)}% limit`:''}.`:'Waiting for complete price and volatility data.';
+   }
+   if(signal==='BUY')entryState='BUY signal';
+   else if(signal==='SELL')entryState='SELL signal · exit rule';
+   step(3,'Strategy rule',entryState,entryDetail,signal==='BUY'?'pass':signal==='SELL'?'sell':'wait');
+   const actionDetail=signal==='BUY'?'A BUY signal still needs account, risk, position-size, and exchange checks before an order is sent.':signal==='SELL'?'Spot SELL signals close a tracked position; they do not open short positions.':readableReason(item?.reason||router.reason||'No order signal from this check.');
+   step(4,'Decision',`${signal} · ${readableReason(item?.reason||'Reason unavailable')}`,actionDetail,signal==='BUY'?'pass':signal==='SELL'?'sell':'wait');
+   card.append(flow);
+   const stamp=Date.parse(item?.timestamp||'');
+   if(Number.isFinite(stamp)){const time=document.createElement('p');time.className='decision-market-time';time.textContent=`Checked ${new Date(stamp).toLocaleString()} · ${item?.timeframe||d.timeframe||'1h'} completed candle`;card.append(time)}
+   box.append(card);
+   continue;
+  }
   const indicators=item?.indicators||{},row=document.createElement('div');row.className='limit-row';
   const label=document.createElement('span');label.textContent=symbol;
   const value=document.createElement('strong');
@@ -126,27 +183,6 @@ function renderMarketChecks(d){
   }
  }
 }
-function renderRegimeRouter(d){
- const box=document.getElementById('router'),signals=d.latest_signals&&typeof d.latest_signals==='object'?d.latest_signals:{};
- const dynamic=String(d.strategy_name||'').toLowerCase()==='dynamic_regime';
- document.getElementById('router-title').textContent=dynamic?'Dynamic strategy selection · Paper':'Regime observation';
- document.getElementById('router-description').textContent=dynamic?'The bot can use the EMA72 trend candidate after a stable uptrend. Other conditions stay flat because the tested alternatives have not passed cost-adjusted review. Open positions keep their original exits.':'Market conditions are classified from completed hourly candles. A regime must persist for three completed hourly candles before it is shown as stable.';
- const entries=Object.entries(signals);box.replaceChildren();
- if(!entries.length){const empty=document.createElement('div');empty.className='limit-row';empty.textContent='Waiting for completed hourly market data.';box.append(empty);return}
- const titles={uptrend:'Uptrend',downtrend:'Downtrend',range:'Range-bound',high_volatility:'High volatility',transition:'Transition / uncertain',uncertain:'Uncertain'};
- for(const [symbol,item] of entries){
-  const observed=item?.regime_router||{},row=document.createElement('div');row.className='limit-row';
-  const name=document.createElement('span');name.textContent=symbol;
-  const routeText=dynamic?(observed.selected_strategy==='macro_donchian_ema72'?'EMA72 trend strategy selected':observed.selected_strategy==='macro_trend_pullback'?'Trend pullback strategy selected':'No entry strategy · stand aside'):(observed.route==='observe_existing_strategy_only'?'Observe current strategy':'Observation only · active strategy applies');
-  const label=document.createElement('strong');label.textContent=`${titles[observed.regime]||'Uncertain'} · ${routeText}`;
-  row.append(name,label);box.append(row);
-  const reason=document.createElement('p');reason.className='help';reason.textContent=readableReason(observed.reason||'Regime observation unavailable; no strategy change is made.');box.append(reason);
-  const metrics=observed.indicators;
-  if(metrics&&Number.isFinite(Number(metrics.adx))&&Number.isFinite(Number(metrics.atr_pct))){
-   const detail=document.createElement('p');detail.className='help';detail.textContent=`ADX ${Number(metrics.adx).toFixed(1)} · ATR ${Number(metrics.atr_pct).toFixed(2)}% · 3-bar confirmation ${Array.isArray(observed.raw_regimes)&&new Set(observed.raw_regimes).size===1?'stable':'pending'}`;box.append(detail)
-  }
- }
-}
 async function refresh(){
  try{
   const r=await fetch('/api/status',{cache:'no-store'});
@@ -157,16 +193,14 @@ async function refresh(){
   const ema72Profile=['MACRO_DONCHIAN_EMA72','DYNAMIC_REGIME'].includes(String(d.strategy_name||'').toUpperCase());
   const isPullbackProfile=String(d.strategy_name||'').toUpperCase()==='MACRO_TREND_PULLBACK';
   const entries=[['Risk per trade',pct(d.risk_per_trade_pct)],['Max position',pct(d.position_size_pct)],['Daily stop threshold',pct(d.daily_loss_limit_pct)],['Stop model',ema72Profile||isPullbackProfile?'Prior 5-bar low, capped at 4%':pct(d.stop_loss_pct)],['Target / exit',d.take_profit_managed_by_strategy?d.strategy_exit_description:pct(d.take_profit_pct)],['Entry filter',isPullbackProfile?'Macro trend (EMA200) + EMA20 pullback + EMA9 reclaim':ema72Profile?(String(d.strategy_name).toUpperCase()==='DYNAMIC_REGIME'?'Stable uptrend + 168-bar breakout above EMA480':'168-bar breakout above EMA480'):d.regime_filter_enabled?`ADX ≥ ${d.min_trend_adx} · ATR ≤ ${pct(d.max_atr_pct)}`:'No regime filter'],['Open positions',String(d.max_positions)],['Bot status',d.halted?'Paused':'Running']];
-  if(isPullbackProfile){entries.splice(6,0,['Execution model','Maker post-only (zero taker fee drag)'])}
+  if(isPullbackProfile){entries.splice(6,0,['Execution model','Post-only maker attempt; may not fill, fees depend on tier'])}
   const box=document.getElementById('limits');box.replaceChildren();
   for(const [k,v] of entries){const row=document.createElement('div');row.className='limit-row';const label=document.createElement('span');label.textContent=k;const value=document.createElement('strong');value.textContent=v;row.append(label,value);box.append(row)}
   renderMarketChecks(d);
-  renderRegimeRouter(d);
   document.getElementById('dot').className='dot ok';document.getElementById('state').textContent=`Updated ${new Date().toLocaleTimeString()}`
  }catch(e){
   document.getElementById('dot').className='dot bad';document.getElementById('state').textContent=e.message;
   const box=document.getElementById('regimes');box.replaceChildren();const err=document.createElement('div');err.className='limit-row';err.textContent=`Market checks unavailable: ${e.message}`;box.append(err)
-  const router=document.getElementById('router');router.replaceChildren();const routerErr=document.createElement('div');routerErr.className='limit-row';routerErr.textContent='Regime observer unavailable; no strategy changes were made.';router.append(routerErr)
  }
 }
 refresh();setInterval(refresh,15000);
