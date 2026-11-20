@@ -725,7 +725,7 @@ class WebDashboard:
                 "market_regime", "adx", "atr_pct", "volume", "vol_avg20", "ema_trend",
                 "consensus_required", "entry_gates", "close", "ema480", "ema72", "ema9",
                 "ema20", "ema36", "ema50", "ema200", "rsi", "donchian_high168", "swing_low_5",
-                "entry_ready", "exit_ready", "breakout_ready", "max_atr_pct", "macro_bullish",
+                "entry_ready", "exit_ready", "breakout_ready", "max_atr_pct", "rsi_recovery_level", "macro_bullish",
                 "pulled_back", "reclaimed", "ema200_24h_slope_pct", "atr",
             ):
                 value = indicators.get(key)
@@ -737,12 +737,22 @@ class WebDashboard:
             router = router if isinstance(router, dict) else {}
             safe_router = {
                 key: router.get(key)
-                for key in ("regime", "route_state", "entry_route_enabled")
+                for key in ("status", "regime", "route_state", "entry_route_enabled")
                 if isinstance(router.get(key), (str, bool))
             }
-            for key in ("selected_strategy", "reason"):
+            for key in ("route", "candidate_strategy", "selected_strategy", "reason"):
                 if router.get(key) is not None:
                     safe_router[key] = str(router[key])[:240]
+            raw_regimes = router.get("raw_regimes")
+            if isinstance(raw_regimes, list):
+                safe_router["raw_regimes"] = [str(value)[:32] for value in raw_regimes[:3]]
+            router_indicators = router.get("indicators")
+            if isinstance(router_indicators, dict):
+                safe_router["indicators"] = {
+                    key: router_indicators[key]
+                    for key in ("adx", "atr_pct", "close", "ema200", "ema200_24h_slope_pct")
+                    if isinstance(router_indicators.get(key), (int, float))
+                }
             return {
                 "symbol": str(details.get("symbol", ""))[:32],
                 "timeframe": str(details.get("timeframe", ""))[:12],
