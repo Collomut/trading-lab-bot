@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m8"><script src="/assets/app.js?v=m8" defer></script></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m10"><script src="/assets/app.js?v=m10" defer></script></head><body>
 <nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link active" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link" href="/strategy">Strategy</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav>
 <main class="container"><header class="page-head"><div><div class="eyebrow">Paper-trading dashboard</div><h1>Overview</h1></div><div class="status"><span id="dot" class="dot"></span><span id="connection" data-skeleton aria-busy="true">Connecting…</span></div></header>
 <div class="notice compact"><strong>Practice mode</strong><span id="mode" data-skeleton aria-busy="true">Loading…</span><span class="muted-inline">· App-monitored exits can fail during outages.</span></div>
@@ -7,7 +7,7 @@
 <div class="overview-metrics"><section class="card metric-card"><div class="metric-label">Available USDT</div><div class="metric" id="cash-balance" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Tracked account value</div><div class="metric" id="net-worth" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Estimated P&amp;L (Net)</div><div class="metric" id="pnl" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Open positions</div><div class="metric" id="open-count" data-skeleton aria-busy="true">—</div></section></div>
 
 <section class="market-pulse card" aria-labelledby="market-pulse-title">
-  <div class="pulse-heading"><div><div class="eyebrow">Live strategy view</div><h2 id="market-pulse-title">Market pulse</h2><p class="help">See what the bot sees. Signals use the latest completed candle; this is not a forecast.</p></div><div class="pulse-updated"><span class="pulse-live-dot" aria-hidden="true"></span><span id="pulse-updated">Waiting for market data</span></div></div>
+  <div class="pulse-heading"><div><div class="eyebrow">Live strategy view</div><h2 id="market-pulse-title">What the bot sees</h2><p class="help">Latest completed-candle signals, selected strategy, and the rules still waiting. A BUY signal must also pass account, risk, and execution checks.</p></div><div class="pulse-updated"><span class="pulse-live-dot" aria-hidden="true"></span><span id="pulse-updated">Waiting for market data</span></div></div>
   <div id="pulse-summary" class="pulse-summary" aria-live="polite">Connecting to the latest strategy checks…</div>
   <div id="market-pulse-grid" class="market-pulse-grid"><div class="pulse-loading"><span class="pulse-loader" aria-hidden="true"></span><span>Loading market checks</span></div></div>
 </section>
@@ -908,6 +908,7 @@ function renderMarketPulse(d) {
   const entries = Object.entries(signals);
   const isDonchian = String(d.strategy_name || '').toLowerCase() === 'macro_donchian_ema72';
   const isPullback = String(d.strategy_name || '').toLowerCase() === 'macro_trend_pullback';
+  const isDynamic = String(d.strategy_name || '').toLowerCase() === 'dynamic_regime';
   grid.replaceChildren();
 
   if (!entries.length) {
@@ -924,6 +925,7 @@ function renderMarketPulse(d) {
   let newest = 0;
   for (const [symbol, item] of entries) {
     const indicators = item?.indicators && typeof item.indicators === 'object' ? item.indicators : {};
+    const router = item?.regime_router && typeof item.regime_router === 'object' ? item.regime_router : {};
     const signal = String(item?.signal || 'HOLD').toUpperCase();
     const close = Number(indicators.close);
     const ema = Number(indicators.ema480);
@@ -964,7 +966,109 @@ function renderMarketPulse(d) {
     price.textContent = valid ? formatPrice(close) : d.prices?.[symbol] != null ? formatPrice(d.prices[symbol]) : 'Price unavailable';
     card.append(price);
 
-    if (isDonchian && valid) {
+    if (isDynamic) {
+      const regime = String(router.regime || indicators.regime || 'uncertain').toLowerCase();
+      const routeStrategy = String(router.selected_strategy || indicators.strategy || '').toLowerCase();
+      const routeEnabled = router.entry_route_enabled === true;
+      const rawRegimes = Array.isArray(router.raw_regimes) ? router.raw_regimes : [];
+      const regimeConfirmed = routeEnabled || (rawRegimes.length === 3 && rawRegimes.every(value => value === rawRegimes[0]));
+      const marketFacts = router.indicators && typeof router.indicators === 'object' ? router.indicators : {};
+      const regimeText = regime === 'downtrend' ? 'Downtrend confirmed'
+        : regime === 'uptrend' ? 'Uptrend confirmed'
+        : regime === 'range' ? 'Range confirmed'
+        : regime === 'high_volatility' ? 'Volatility elevated' : 'Transition · waiting';
+      const strategyText = routeStrategy === 'downtrend_rsi_recovery_testnet' ? 'RSI recovery · Demo experiment'
+        : routeStrategy === 'macro_donchian_ema72' ? 'EMA72 / breakout'
+        : routeEnabled ? routeStrategy.replaceAll('_', ' ') : 'No entry strategy selected';
+
+      const context = document.createElement('div');
+      context.className = 'pulse-context';
+      const regimeTag = document.createElement('span');
+      regimeTag.className = `pulse-context-tag ${regimeConfirmed ? 'tag-pass' : 'tag-wait'}`;
+      regimeTag.textContent = regimeText;
+      const strategyTag = document.createElement('span');
+      strategyTag.className = 'pulse-context-tag';
+      strategyTag.textContent = strategyText;
+      context.append(regimeTag, strategyTag);
+      card.append(context);
+
+      const exitCheck = signal === 'SELL' || /position open/i.test(String(item?.reason || ''));
+      const ruleChecks = [
+        { label: 'Regime confirmed', passed: regimeConfirmed },
+        { label: 'Strategy route enabled', passed: routeEnabled },
+        { label: 'Entry trigger met', passed: signal === 'BUY' && indicators.entry_ready === true },
+      ];
+      const passedRules = ruleChecks.filter(check => check.passed).length;
+      if (!exitCheck) {
+        const progress = document.createElement('div');
+        progress.className = 'pulse-progress';
+        const progressHead = document.createElement('div');
+        progressHead.className = 'pulse-progress-head';
+        const progressLabel = document.createElement('span');
+        progressLabel.textContent = 'Entry rule progress';
+        const progressValue = document.createElement('strong');
+        progressValue.textContent = `${passedRules}/${ruleChecks.length} · ${Math.round(passedRules / ruleChecks.length * 100)}%`;
+        progressHead.append(progressLabel, progressValue);
+        const track = document.createElement('div');
+        track.className = 'pulse-progress-track';
+        track.setAttribute('role', 'progressbar');
+        track.setAttribute('aria-label', 'Strategy rule groups currently passing, not a win probability');
+        track.setAttribute('aria-valuemin', '0');
+        track.setAttribute('aria-valuemax', String(ruleChecks.length));
+        track.setAttribute('aria-valuenow', String(passedRules));
+        const fill = document.createElement('span');
+        fill.className = passedRules === ruleChecks.length ? 'pulse-progress-fill is-ready' : 'pulse-progress-fill';
+        fill.style.width = `${passedRules / ruleChecks.length * 100}%`;
+        track.append(fill);
+        const progressNote = document.createElement('span');
+        progressNote.className = 'pulse-progress-note';
+        progressNote.textContent = 'Share of displayed rule groups passing · not a probability of profit.';
+        progress.append(progressHead, track, progressNote);
+        card.append(progress);
+      }
+
+      const facts = document.createElement('div');
+      facts.className = 'pulse-facts';
+      const addFact = (label, value, state = '') => {
+        if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return;
+        const fact = document.createElement('div');
+        fact.className = 'pulse-fact';
+        const factLabel = document.createElement('span');
+        factLabel.textContent = label;
+        const factValue = document.createElement('strong');
+        factValue.textContent = state ? `${Number(value).toFixed(2)}${state}` : Number(value).toFixed(2);
+        fact.append(factLabel, factValue);
+        facts.append(fact);
+      };
+      if (routeStrategy === 'downtrend_rsi_recovery_testnet') {
+        const rsiLevel = Number(indicators.rsi_recovery_level);
+        addFact('RSI · recovery level', indicators.rsi, Number.isFinite(rsiLevel) ? ` / ${rsiLevel}` : '');
+        addFact('Trend strength · ADX', marketFacts.adx ?? indicators.adx);
+        addFact('Volatility · ATR', marketFacts.atr_pct ?? indicators.atr_pct, '%');
+      } else if (routeStrategy === 'macro_donchian_ema72') {
+        addFact('Volatility · ATR', indicators.atr_pct, '%');
+        addFact('Entry limit', indicators.max_atr_pct, '%');
+        if (Number.isFinite(close) && Number.isFinite(breakout) && breakout > 0) {
+          const distance = close > breakout ? (close / breakout - 1) * 100 : (breakout / close - 1) * 100;
+          addFact(close > breakout ? 'Above breakout' : 'Distance to breakout', distance, '%');
+        }
+      } else {
+        addFact('Trend strength · ADX', marketFacts.adx ?? indicators.adx);
+        addFact('Volatility · ATR', marketFacts.atr_pct ?? indicators.atr_pct, '%');
+      }
+      if (facts.childElementCount) card.append(facts);
+
+      const foot = document.createElement('div');
+      foot.className = `pulse-entry ${signal === 'BUY' ? 'entry-ready' : ''}`;
+      if (signal === 'SELL') foot.textContent = `SELL · ${readableReason(item?.reason || 'Exit condition met')}`;
+      else if (signal === 'BUY') foot.textContent = 'BUY signal · order still depends on account, risk, and execution checks.';
+      else if (routeStrategy === 'downtrend_rsi_recovery_testnet' && routeEnabled && !exitCheck) {
+        const rsiLevel = Number(indicators.rsi_recovery_level);
+        foot.textContent = `Waiting for RSI to dip below ${Number.isFinite(rsiLevel) ? rsiLevel : 25} and then cross back above it on a completed hourly candle.`;
+      }
+      else foot.textContent = readableReason(item?.reason || router.reason || 'Waiting for a valid strategy entry');
+      card.append(foot);
+    } else if (isDonchian && valid) {
       const required = Math.max(ema, breakout);
       const gapPct = Math.max(0, (required / close - 1) * 100);
       const gates = document.createElement('div');
@@ -1046,7 +1150,13 @@ function renderMarketPulse(d) {
     grid.append(card);
   }
 
-  summary.textContent = isDonchian
+  if (isDynamic) {
+    const routedCount = entries.filter(([, item]) => item?.regime_router?.entry_route_enabled === true).length;
+    const buyCount = entries.filter(([, item]) => String(item?.signal || '').toUpperCase() === 'BUY').length;
+    const sellCount = entries.filter(([, item]) => String(item?.signal || '').toUpperCase() === 'SELL').length;
+    const transitionCount = entries.filter(([, item]) => String(item?.regime_router?.regime || item?.indicators?.regime || '').toLowerCase() === 'transition').length;
+    summary.textContent = `${buyCount} BUY · ${sellCount} SELL · ${routedCount} of ${entries.length} markets have a selected Demo strategy${transitionCount ? ` · ${transitionCount} waiting for regime confirmation` : ''}. Percentages on cards show rule checks passing, not trade success odds.`;
+  } else summary.textContent = isDonchian
     ? `${readyCount} of ${entries.length} entry setups currently meet both breakout and long-term trend rules.`
     : isPullback
     ? `${readyCount} of ${entries.length} markets currently show a confirmed pullback reclaim entry.`
