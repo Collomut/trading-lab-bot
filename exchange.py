@@ -662,6 +662,11 @@ class ExchangeConnector:
         with self._exchange_lock:
             try:
                 return self.exchange.fetch_order(None, symbol, {"origClientOrderId": client_order_id})
+            except ccxt.OrderNotFound:
+                # A confirmed absence is distinct from an exchange outage or
+                # permission error and lets the caller safely reconcile a
+                # journaled intent with no accepted order.
+                return None
             except ccxt.BaseError as exc:
                 logger.error("Client-order reconciliation failed for %s (%s)", symbol, type(exc).__name__)
                 raise RuntimeError("Client order status is unavailable") from exc

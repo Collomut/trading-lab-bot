@@ -785,6 +785,14 @@ class WebDashboard:
                 for key in ("symbol", "side", "amount", "state", "filled", "average")
                 if details.get(key) is not None
             }
+        if event_type == "order_reconciled_no_fill":
+            return {
+                "symbol": str(details.get("symbol", ""))[:32],
+                "side": str(details.get("side", ""))[:8],
+                "orders_checked": int(details.get("orders_checked", 0) or 0),
+                "orders_found": int(details.get("orders_found", 0) or 0),
+                "message": "Exchange confirmed the order attempts ended without a fill.",
+            }
         if event_type in {"analysis_error", "market_data_issue"}:
             safe = {
                 "symbol": str(details.get("symbol", ""))[:32],
