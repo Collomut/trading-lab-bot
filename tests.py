@@ -36,7 +36,7 @@ for _k in (
     "MAX_DAILY_LOSS_PCT", "POSITION_SIZE_PCT", "MAX_ROLLING_DRAWDOWN_PCT",
     "MAX_CONSECUTIVE_LOSSES", "START_PAUSED", "POST_ONLY_ENTRIES", "ENABLE_NOTIFICATIONS",
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SMTP_HOST", "SMTP_PORT", "SMTP_USER",
-    "SMTP_PASSWORD", "ALERT_EMAIL", "RESEND_API_KEY", "ALERT_EMAIL_FROM",
+    "SMTP_PASSWORD", "ALERT_EMAIL", "RESEND_API_KEY", "SENDGRID_API_KEY", "ALERT_EMAIL_FROM",
     "DISCORD_WEBHOOK_URL", "DASHBOARD_TOKEN", "DATA_DIR",
     "MAX_SPREAD_BPS", "MAX_SLIPPAGE_BPS", "MAX_PAIRWISE_CORRELATION",
     "MAX_TESTNET_PRICE_DIVERGENCE_PCT", "MAX_SIGNAL_FILL_DIVERGENCE_BPS",
@@ -4260,6 +4260,33 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         self.assertEqual(result["channels"]["email"], "failed")
         self.assertNotIn("re_test_secret", "\n".join(captured.output))
         self.assertNotIn("secret response", "\n".join(captured.output))
+
+    def test_sendgrid_email_notification_supports_verified_single_sender_over_https(self):
+        config = BotConfig(
+            sendgrid_api_key="SG.test_secret",
+            alert_email_from="myaddress@gmail.com",
+            alert_email="trader@example.com",
+            dashboard_token="test_token",
+        )
+        with patch.object(TradingBot, "_setup_logging"), \
+             patch.object(TradingBot, "_setup_trade_log"), \
+             patch("exchange.ExchangeConnector"), \
+             patch("bot_engine.urllib.request.urlopen") as mock_urlopen:
+            response = MagicMock()
+            response.status = 202
+            response.__enter__.return_value = response
+            mock_urlopen.return_value = response
+            bot = TradingBot(config)
+            result = bot.send_notification("Test email body", subject="Test Subject")
+        self.assertEqual(result["channels"]["email"], "accepted_by_provider")
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.sendgrid.com/v3/mail/send")
+        self.assertEqual(request.get_header("Authorization"), "Bearer SG.test_secret")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["from"]["email"], "myaddress@gmail.com")
+        self.assertEqual(payload["personalizations"][0]["to"][0]["email"], "trader@example.com")
+        self.assertEqual(payload["subject"], "Test Subject")
+        self.assertEqual(payload["content"][0]["value"], "Test email body")
 
     def test_safety_halt_alert_contains_reason_and_remains_off_order_thread(self):
         bot = object.__new__(TradingBot)

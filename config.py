@@ -122,6 +122,7 @@ class BotConfig:
     smtp_password: str = os.getenv("SMTP_PASSWORD", "")
     alert_email: str = os.getenv("ALERT_EMAIL", "")
     resend_api_key: str = os.getenv("RESEND_API_KEY", "")
+    sendgrid_api_key: str = os.getenv("SENDGRID_API_KEY", "")
     alert_email_from: str = os.getenv("ALERT_EMAIL_FROM", "")
     discord_webhook_url: str = os.getenv("DISCORD_WEBHOOK_URL", "")
     dashboard_token: str = os.getenv("DASHBOARD_TOKEN", "")

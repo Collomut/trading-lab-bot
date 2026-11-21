@@ -185,6 +185,8 @@ class TradingBot:
             return False
         if getattr(self.config, "resend_api_key", ""):
             return self._send_resend_email_notification(subject, message)
+        if getattr(self.config, "sendgrid_api_key", ""):
+            return self._send_sendgrid_email_notification(subject, message)
         if not self.config.smtp_host:
             return False
         try:
@@ -326,6 +328,64 @@ class TradingBot:
             logger.warning("Failed to send email notification via Resend (%s)", type(exc).__name__)
             return False
 
+    def _send_sendgrid_email_notification(self, subject: str, message: str):
+        """Send email via SendGrid's HTTPS API; supports verified single senders."""
+        api_key = getattr(self.config, "sendgrid_api_key", "")
+        sender = getattr(self.config, "alert_email_from", "")
+        if not api_key or not sender or not self.config.alert_email:
+            logger.warning("SendGrid email is configured incompletely (sender or recipient missing)")
+            return False
+        try:
+            clean_message = message.replace("*", "").replace("`", "")
+            lines = [line.strip() for line in clean_message.strip().split("\n") if line.strip()]
+            title = lines[0] if lines else "Trading Alert"
+            rows_html = "".join(
+                f"<tr><td style='padding:8px 12px;border-bottom:1px solid #eee;color:#555;'>{html.escape(line.split(':', 1)[0])}</td>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;color:#111;text-align:right;'>{html.escape(line.split(':', 1)[1].strip()) if ':' in line else ''}</td></tr>"
+                for line in lines[1:]
+            )
+            html_body = (
+                '<!DOCTYPE html><html><head><meta charset="utf-8"></head>'
+                '<body style="font-family:Arial,sans-serif;background:#f7f4ee;margin:0;padding:24px 12px;color:#222">'
+                '<div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #ddd;border-radius:10px;padding:24px">'
+                f'<strong>{html.escape(title)}</strong><table style="width:100%;border-collapse:collapse;margin:12px 0">{rows_html}</table>'
+                '<p style="border-top:1px solid #eee;padding-top:16px;font-size:12px;color:#777">Automated Trading Bot</p>'
+                '</div></body></html>'
+            )
+            recipients = [address.strip() for address in self.config.alert_email.split(",") if address.strip()]
+            if not recipients:
+                return False
+            payload = json.dumps({
+                "personalizations": [{"to": [{"email": address} for address in recipients]}],
+                "from": {"email": sender, "name": "Trading Lab"},
+                "subject": subject,
+                "content": [
+                    {"type": "text/plain", "value": clean_message},
+                    {"type": "text/html", "value": html_body},
+                ],
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                "https://api.sendgrid.com/v3/mail/send", data=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "TradingLab/1.0",
+                }, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if response.status != 202:
+                    logger.warning("SendGrid did not accept email (HTTP %s)", response.status)
+                    return False
+            logger.info("Email alert accepted by SendGrid for %s recipient(s)", len(recipients))
+            return True
+        except urllib.error.HTTPError as exc:
+            # Do not log provider response bodies; they may echo addresses or configuration.
+            logger.warning("SendGrid did not accept email (HTTP %s)", exc.code)
+            return False
+        except Exception as exc:
+            logger.warning("Failed to send email notification via SendGrid (%s)", type(exc).__name__)
+            return False
+
     def _send_discord_notification(self, message: str):
         """Send a notification to Discord webhook for instant push notifications."""
         if not self.config.discord_webhook_url:
@@ -356,6 +416,7 @@ class TradingBot:
             results["telegram"] = "accepted" if self._send_telegram_notification(message) else "failed"
         email_provider = (
             "resend" if getattr(self.config, "resend_api_key", "")
+            else "sendgrid" if getattr(self.config, "sendgrid_api_key", "")
             else "smtp" if self.config.smtp_host else None
         )
         email_configured = bool(email_provider and self.config.alert_email)

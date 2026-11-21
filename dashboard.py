@@ -691,7 +691,8 @@ class WebDashboard:
                 "enabled": self.config.enable_notifications,
                 "telegram": bool(self.config.telegram_bot_token and self.config.telegram_chat_id),
                 "email": bool(self.config.enable_notifications and self.config.alert_email and (
-                    self.config.smtp_host or getattr(self.config, "resend_api_key", "")
+                    self.config.smtp_host or getattr(self.config, "resend_api_key", "") or
+                    getattr(self.config, "sendgrid_api_key", "")
                 )),
                 "discord": bool(self.config.discord_webhook_url),
             },
@@ -1203,7 +1204,8 @@ class WebDashboard:
         if self.config.telegram_bot_token and self.config.telegram_chat_id:
             channels.append("Telegram")
         if self.config.alert_email and (
-            getattr(self.config, "resend_api_key", "") or self.config.smtp_host
+            getattr(self.config, "resend_api_key", "") or getattr(self.config, "sendgrid_api_key", "") or
+            self.config.smtp_host
         ):
             channels.append("Email/SMS")
         if self.config.discord_webhook_url:
@@ -1212,7 +1214,7 @@ class WebDashboard:
         if not channels:
             return web.json_response({
                 "success": False,
-                "message": "No notification channels configured. Add Resend HTTPS email, SMTP email, Telegram, or Discord settings in Railway variables."
+                "message": "No notification channels configured. Add Resend or SendGrid HTTPS email, SMTP email, Telegram, or Discord settings in Railway variables."
             }, status=400)
 
         loop = asyncio.get_event_loop()
