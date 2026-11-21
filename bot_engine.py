@@ -85,6 +85,7 @@ class TradingBot:
         self._last_reconciliation_ok = False
         self._last_account_balance = None
         self._last_account_error = ""
+        self._last_reconciliation_alert_signature = None
         self._setup_logging()
         self._setup_trade_log()
 
@@ -1540,6 +1541,7 @@ class TradingBot:
             self._last_account_balance = balance
             self._last_account_error = ""
             self._last_reconciliation_ok = True
+            self._last_reconciliation_alert_signature = None
             self.risk_manager.resume_after_reconciliation()
             return True
         except Exception as exc:
@@ -1579,19 +1581,42 @@ class TradingBot:
                 self._last_account_error = "Account reconciliation failed. Check exchange permissions and service logs."
                 reason = f"Exchange reconciliation failed: {safe_detail}"
             current_halt = self.risk_manager._halt_reason
+            halt_callback_will_alert = False
             if current_halt == "Account equity valuation failed; operator review required":
+                halt_callback_will_alert = not self.risk_manager._is_halted or current_halt != reason
                 self.risk_manager.halt(reason)
             elif self.risk_manager._is_halted and not current_halt.startswith("Exchange reconciliation failed:"):
                 # A transient API failure must not erase an earlier circuit
                 # breaker, emergency-stop latch, or manual-review halt.
                 self.risk_manager._save_daily_state()
             else:
+                halt_callback_will_alert = not self.risk_manager._is_halted or current_halt != reason
                 self.risk_manager.halt(reason)
             try:
                 self.risk_manager.store.append_event("reconciliation_failed", {"reason": reason})
             except Exception:
                 logger.critical("Could not append reconciliation failure to durable audit log")
             logger.error("Account state failed reconciliation; all new orders blocked: %s", safe_detail)
+            # A drawdown/emergency halt may already be latched, so halt() will
+            # correctly avoid repeating its callback. Still alert once when a
+            # new reconciliation failure appears; suppress identical retries
+            # from the periodic worker to avoid flooding the configured channel.
+            if halt_callback_will_alert:
+                self._last_reconciliation_alert_signature = reason
+            elif getattr(self, "_last_reconciliation_alert_signature", None) != reason:
+                self._last_reconciliation_alert_signature = reason
+                notify = getattr(self, "_notify_safety_halt", None)
+                if callable(notify):
+                    try:
+                        notify(
+                            "Exchange account reconciliation failed: "
+                            f"{safe_detail}. New entries remain blocked until the account is reviewed."
+                        )
+                    except Exception as notify_error:
+                        logger.warning(
+                            "Could not dispatch reconciliation safety alert (%s)",
+                            type(notify_error).__name__,
+                        )
             return False
 
     def _bot_managed_equity(self) -> Decimal:
@@ -3428,6 +3453,7 @@ class TradingBot:
                 logger.error("Trading halted during position monitoring: %s", self.risk_manager._halt_reason)
                 return False
 
+            analysis_failed = False
             for configured_symbol in self.config.strategy.trading_pairs:
                 if self.risk_manager._is_halted:
                     logger.error("Remaining symbols skipped because trading is halted: %s", self.risk_manager._halt_reason)
@@ -3438,6 +3464,7 @@ class TradingBot:
                 try:
                     self.analyze_market(symbol)
                 except Exception as exc:
+                    analysis_failed = True
                     error_type = type(exc).__name__
                     if self._analysis_error_states.get(symbol) != error_type:
                         try:
@@ -3451,7 +3478,11 @@ class TradingBot:
 
             if self.risk_manager.open_positions or self._cycle_count % 5 == 0:
                 self.print_status()
-            return True
+            # Keep evaluating other independent pairs after a symbol-specific
+            # failure, but never advertise the whole cycle as healthy. The
+            # dashboard readiness monitor uses this result to distinguish a
+            # live worker from a fully completed market pass.
+            return not analysis_failed
         finally:
             self._cycle_lock.release()
 

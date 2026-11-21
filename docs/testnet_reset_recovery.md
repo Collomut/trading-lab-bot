@@ -1,40 +1,61 @@
-# Binance Spot Testnet Periodic Reset Recovery Runbook (F-09)
+# Binance Paper Account Reset Recovery
 
-## Overview
-Binance Spot Testnet periodically resets account balances, orders, and trading history back to initial test defaults.
-When a reset occurs:
-1. The remote exchange orders and open positions disappear on Binance Spot Testnet.
-2. The bot's persistent SQLite database on Railway holds durable records of previous positions and protective stop order IDs.
-3. The fail-closed reconciliation engine (`_reconcile_exchange_state()`) immediately halts all trading cycles with `Exchange reconciliation failed` because the exchange stops and balances no longer match the local database.
+## Safety rule
 
-## Safe Recovery Procedure
+An exchange reset or manual account change can make Binance balances, open orders,
+and the bot's durable records disagree. The bot must remain paused until the
+exchange account is freshly read and all differences are understood. A successful
+web health check means the dashboard process is alive; it does not mean trading is
+safe or account reconciliation succeeded.
 
-**NEVER blindly delete the SQLite database `bot_state.sqlite3` on Railway.**
-Deleting the database erases unresolved order intent journals, risk circuit breaker history, and audit trails.
+**Do not delete the database, clear positions, mark intents canceled, change a
+balance baseline, or restart the service to try to clear a reconciliation halt.**
+An order request can time out after Binance accepted it, and an order can be
+partially filled. Binance documents that some server errors leave execution status
+unknown; the order must be queried before any retry. See the [Spot REST API
+guidance](https://developers.binance.com/en/docs/products/spot/rest-api).
 
-### Step 1: Verify the Testnet Reset
-Check the bot dashboard or API diagnostic:
-- Run `GET /api/account-diagnostic`.
-- Review the Railway deployment logs.
-- Log into Binance Spot Testnet web UI to verify that balances have been restored to default virtual funds (e.g. 10,000 USDT) and open orders are empty.
+## Binance Demo reset
 
-### Step 2: Perform Snapshot & Reset via StateStore
-The system provides `snapshot_and_reset_for_testnet_wipe()` in `state_store.py`:
-1. It creates an immutable, timestamped SQLite backup file (`state_backup_<timestamp>.db`).
-2. It exports all tracked pre-reset positions and unresolved orders to JSON with operator metadata.
-3. It appends an official audit event (`testnet_reset_recovery`) to the persistent audit log.
-4. It safely transitions open orders to `CANCELED` and clears stale open positions and old baseline markers.
+For the configured Binance Demo environment:
 
-You can execute this in a one-liner via Railway CLI or python script:
-```python
-from state_store import StateStore
-store = StateStore("/app/data/bot_state.sqlite3")  # or local persistence path
-summary = store.snapshot_and_reset_for_testnet_wipe("Binance Spot Testnet monthly reset confirmed")
-print(f"Backup created at: {summary['backup_file']}")
-```
+1. Confirm the account was deliberately reset in Binance Demo.
+2. Confirm Binance shows no open orders and inspect holdings for unexpected assets.
+3. Open Trading Lab Overview and choose **Review Demo reset**.
+4. The bot performs a fresh private account read, checks its own positions and
+   unresolved order intents, checks Binance open orders, and records a new asset
+   baseline and equity reference.
+5. The review leaves entries paused. Review the dashboard result before separately
+   choosing **Resume entries**.
 
-### Step 3: Re-baseline and Resume
-Once the snapshot and reset completes:
-1. Trigger `POST /api/resume` or restart the Railway service.
-2. The bot performs a fresh baseline balance snapshot of the new virtual Testnet funds.
-3. Reconciliation succeeds, and paper trading resumes safely.
+The review must fail closed if any order, position, account read, or persistence
+check is uncertain. It never submits or cancels an exchange order.
+
+## Binance Spot Testnet reset
+
+There is no automatic Testnet reset-and-resume workflow. Keep the bot paused and
+inspect Binance balances, order history, and open orders alongside the bot's
+positions and order-intent history. If any local position or order intent remains,
+do not run a database reset helper: the helper now creates a backup and audit
+record while preserving all trading state. Resume only after an engineer has
+reconciled each item against Binance and the dashboard shows a fresh successful
+account check.
+
+The legacy `snapshot_and_reset_for_testnet_wipe()` method now records evidence
+only. It deliberately does not clear positions, mark intents canceled, or remove
+baselines. Its name is retained so older scripts fail safe rather than silently
+losing their audit state.
+
+## Automatic change detection and limits
+
+The worker performs authenticated balance and open-order reconciliation on its
+periodic cycle. External changes are therefore detected on the next cycle rather
+than guaranteed to appear instantly. Binance also provides user data streams for
+account balance and order updates; these can improve event latency but do not
+replace periodic REST reconciliation or durable order-state checks. See the
+[Binance Spot User Data Stream documentation](https://developers.binance.com/en/docs/products/spot/user-data-stream).
+
+An external balance change is not automatically adopted as bot capital. The bot
+cannot reliably distinguish a deliberate funding reset from a manual trade,
+withdrawal, partial fill, or an order that is still active. It blocks new orders
+and asks for reconciliation instead of guessing.

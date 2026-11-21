@@ -65,7 +65,7 @@ from aiohttp.web import HTTPNotFound
 
 from bot_engine import TradingBot
 from config import BotConfig, ExchangeConfig, RiskConfig, StrategyConfig
-from dashboard import LOGIN_HTML, WebDashboard, verify_token
+from dashboard import LOGIN_HTML, WebDashboard, verify_token, _friendly_account_reconciliation_issue
 from exchange import (
     AccountAccessError,
     ExchangeConnector,
@@ -1858,9 +1858,11 @@ class TestStateStoreAndPersistence(unittest.TestCase):
             reset_data = store.snapshot_and_reset_for_testnet_wipe("Bi-weekly Spot Testnet reset")
             self.assertIn("backup_file", reset_data)
             self.assertEqual(reset_data["operator_reason"], "Bi-weekly Spot Testnet reset")
-            self.assertEqual(store.read_positions(), {})
-            self.assertEqual(store.unresolved_orders(), [])
-            self.assertIsNone(store.read_state("baseline_asset_balances"))
+            self.assertTrue(reset_data["state_preserved"])
+            self.assertIn("BTC/USDT", store.read_positions())
+            self.assertEqual(len(store.unresolved_orders()), 1)
+            self.assertEqual(store.read_state("baseline_asset_balances"), {"BTC": "0.1"})
+            self.assertEqual(len(store.list_events(event_type="testnet_reset_review_required")), 1)
 
     def test_postgres_trade_recovery_merges_sqlite_and_jsonl_without_duplicates(self):
         import postgres_state_store as postgres_store
@@ -1905,6 +1907,27 @@ class TestStateStoreAndPersistence(unittest.TestCase):
             second = postgres_store._backfill_trade_rows(connection, recovered)
             self.assertEqual(first, 2)
             self.assertEqual(second, 0)
+
+    def test_postgres_testnet_reset_snapshot_never_mutates_trade_state(self):
+        import postgres_state_store as postgres_store
+
+        store = object.__new__(postgres_store.PostgresStateStore)
+        conn = Mock()
+        conn.transaction.return_value = nullcontext()
+        store._pool = Mock()
+        store._pool.connection.return_value = nullcontext(conn)
+        store._now = Mock(return_value="2026-11-21T00:00:00Z")
+        store.create_backup = Mock(return_value=Path("state-backup.json"))
+        store.read_positions = Mock(return_value={"BTC/USDT": {"amount": 0.01}})
+        store.unresolved_orders = Mock(return_value=[{"client_order_id": "pending"}])
+
+        with patch.object(postgres_store, "Jsonb", side_effect=lambda value: value):
+            result = store.snapshot_and_reset_for_testnet_wipe("confirmed Testnet reset")
+
+        self.assertTrue(result["state_preserved"])
+        statements = [str(call.args[0]).strip().upper() for call in conn.execute.call_args_list]
+        self.assertEqual(len(statements), 1)
+        self.assertTrue(statements[0].startswith("INSERT INTO BOT_PRIVATE.AUDIT_EVENTS"))
 
     def test_postgres_trade_recovery_supports_legacy_sqlite_without_trade_table(self):
         import postgres_state_store as postgres_store
@@ -2629,6 +2652,71 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         bot.risk_manager.monitor_equity.assert_called_once_with(10000.0, account_reconciled=False)
         # Order activity (soft stop/target monitoring) stays blocked until reconciliation.
         bot.check_stop_loss_take_profit.assert_not_called()
+
+    def test_cycle_marks_worker_degraded_but_continues_other_symbols_after_analysis_error(self):
+        import threading
+
+        bot = object.__new__(TradingBot)
+        bot._cycle_lock = threading.Lock()
+        bot.config = SimpleNamespace(
+            validate=lambda: [],
+            strategy=SimpleNamespace(trading_pairs=["BTC/USDT", "ETH/USDT"]),
+        )
+        bot._cycle_count = 0
+        bot._analysis_error_states = {}
+        bot._reconcile_exchange_state = Mock(return_value=True)
+        bot._enforce_equity_circuit_breakers = Mock()
+        bot.check_stop_loss_take_profit = Mock()
+        bot.risk_manager = SimpleNamespace(
+            _is_halted=False,
+            open_positions={},
+            store=Mock(),
+        )
+        bot.analyze_market = Mock(side_effect=[RuntimeError("ticker unavailable"), None])
+        bot.print_status = Mock()
+
+        result = bot.run_cycle()
+
+        self.assertFalse(result)
+        self.assertEqual(bot.analyze_market.call_args_list[1].args, ("ETH/USDT",))
+        bot.risk_manager.store.append_event.assert_called_once_with("analysis_error", {
+            "symbol": "BTC/USDT", "error_type": "RuntimeError",
+        })
+
+    def test_reconciliation_failure_alerts_once_even_when_drawdown_halt_already_exists(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(
+            exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+        )
+        bot.exchange = Mock()
+        bot.exchange.fetch_account_snapshot.side_effect = ValueError("private detail must not be emailed")
+        bot.risk_manager = SimpleNamespace(
+            _is_halted=True,
+            _halt_reason="Daily equity drawdown limit reached: 8.70%",
+            _save_daily_state=Mock(),
+            store=Mock(),
+        )
+        bot._last_reconciliation_ok = False
+        bot._last_account_error = ""
+        bot._last_account_balance = None
+        bot._last_reconciliation_alert_signature = None
+        bot._notify_safety_halt = Mock()
+
+        self.assertFalse(bot._reconcile_exchange_state())
+        self.assertFalse(bot._reconcile_exchange_state())
+
+        bot._notify_safety_halt.assert_called_once()
+        alert = bot._notify_safety_halt.call_args.args[0]
+        self.assertIn("New entries remain blocked", alert)
+        self.assertNotIn("private detail must not be emailed", alert)
+
+    def test_dashboard_explains_exchange_balance_mismatch_in_plain_language(self):
+        message = _friendly_account_reconciliation_issue(
+            "Exchange reconciliation failed: balance mismatch for configured asset BTC",
+            "Account reconciliation failed. Check exchange permissions and service logs.",
+        )
+        self.assertIn("different BTC balance", message)
+        self.assertIn("New entries are paused", message)
 
     def test_candle_gap_is_saved_as_an_auditable_market_data_issue(self):
         bot = object.__new__(TradingBot)

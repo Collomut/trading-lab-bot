@@ -122,6 +122,35 @@ def _is_same_origin(request) -> bool:
     return False
 
 
+def _friendly_account_reconciliation_issue(halt_reason: str, fallback: str) -> str:
+    """Translate safe reconciliation reasons into clear, nontechnical guidance."""
+    prefix = "Exchange reconciliation failed: "
+    if not isinstance(halt_reason, str) or not halt_reason.startswith(prefix):
+        return fallback
+    detail = halt_reason[len(prefix):]
+    mismatch_prefix = "balance mismatch for configured asset "
+    if detail.startswith(mismatch_prefix):
+        asset = detail[len(mismatch_prefix):].strip()
+        if 1 <= len(asset) <= 16 and asset.isalnum():
+            return (
+                f"Binance reports a different {asset} balance from the bot's records. "
+                "New entries are paused until the account is reviewed."
+            )
+    if detail == "unresolved local order intent exists":
+        return (
+            "The bot has an order whose final Binance status is unconfirmed. "
+            "Check Binance order history before resuming."
+        )
+    if detail == "unreconciled open order exists on the account":
+        return (
+            "Binance has an order the bot cannot match to its records. "
+            "Review open orders before resuming."
+        )
+    if detail.startswith("Demo reset review requires"):
+        return f"{detail}. Trading remains paused."
+    return fallback
+
+
 @web.middleware
 async def dashboard_auth(request, handler):
     """Protect all dashboard data and controls with flexible token authentication."""
@@ -464,8 +493,11 @@ class WebDashboard:
                     f"{self.config.exchange.paper_environment.title()} keys were rejected by Binance. "
                     "The bot is using a simulated wallet with public Binance prices."
                 )
-        elif not self.bot._last_reconciliation_ok and self.bot._last_account_error:
-            account_issue = self.bot._last_account_error
+        elif not self.bot._last_reconciliation_ok:
+            account_issue = _friendly_account_reconciliation_issue(
+                risk._halt_reason,
+                self.bot._last_account_error or "Account reconciliation failed. Check exchange permissions and service logs.",
+            )
 
         # 2. Fetch live prices
         prices = {}

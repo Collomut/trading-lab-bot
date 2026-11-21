@@ -582,7 +582,12 @@ class PostgresStateStore:
         return backup_path
 
     def snapshot_and_reset_for_testnet_wipe(self, operator_reason: str, export_path=None) -> dict:
-        """Record a backup and atomically reset Testnet-specific positions/order state."""
+        """Record Testnet reset evidence without deleting authoritative state.
+
+        The legacy name is retained for compatibility. A caller-supplied text
+        reason cannot prove that remote orders and positions are absent; local
+        intents, positions and baselines therefore remain untouched.
+        """
         if not operator_reason or not operator_reason.strip():
             raise ValueError("Operator reason is required for Testnet reset recovery")
         backup_file = self.create_backup()
@@ -594,23 +599,15 @@ class PostgresStateStore:
             "backup_file": str(backup_file),
             "positions": positions,
             "unresolved_orders": unresolved,
+            "state_preserved": True,
+            "next_action": "Keep trading paused and reconcile each exchange order and position before changing local state.",
         }
         if export_path:
             Path(export_path).write_text(json.dumps(export_data, indent=2, default=str), encoding="utf-8")
         with self._pool.connection() as conn, conn.transaction():
-            conn.execute("DELETE FROM bot_private.positions")
-            conn.execute("""
-                UPDATE bot_private.order_intents SET state='CANCELED',applied=TRUE,updated_at=%s
-                WHERE state NOT IN ('FILLED','PARTIAL_CLOSED','CANCELED','REJECTED','EXPIRED')
-                   OR applied=FALSE
-            """, (self._now(),))
-            conn.execute("""
-                DELETE FROM bot_private.state
-                WHERE key IN ('baseline_asset_balances','testnet_smoke_trade')
-            """)
             conn.execute(
                 "INSERT INTO bot_private.audit_events(event_type,details_json,created_at) VALUES(%s,%s,%s)",
-                ("testnet_reset_recovery", Jsonb(export_data), self._now()),
+                ("testnet_reset_review_required", Jsonb(export_data), self._now()),
             )
         return export_data
 

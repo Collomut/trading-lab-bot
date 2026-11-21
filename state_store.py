@@ -95,7 +95,12 @@ class StateStore:
         return backup_path
 
     def snapshot_and_reset_for_testnet_wipe(self, operator_reason: str, export_path: str | Path | None = None) -> dict:
-        """Safely snapshot state and reset positions/orders after a Binance Spot Testnet reset (F-09)."""
+        """Snapshot evidence of a Testnet reset without rewriting trading state.
+
+        Kept under its legacy name for script compatibility. A text reason is
+        not proof that exchange orders/positions are gone, so this method must
+        never cancel local intents or erase tracked positions/baselines.
+        """
         if not operator_reason or not operator_reason.strip():
             raise ValueError("Operator reason is required for Testnet reset recovery")
 
@@ -109,6 +114,8 @@ class StateStore:
             "backup_file": str(backup_file),
             "positions": positions,
             "unresolved_orders": unresolved,
+            "state_preserved": True,
+            "next_action": "Keep trading paused and reconcile each exchange order and position before changing local state.",
         }
 
         if export_path:
@@ -119,23 +126,11 @@ class StateStore:
 
         with self._lock, closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            # Clear positions
-            conn.execute("DELETE FROM positions")
-            # Mark all non-terminal orders as canceled with testnet reset reason
-            conn.execute("""
-                UPDATE order_intents
-                SET state='CANCELED', applied=1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                WHERE state NOT IN ('FILLED','PARTIAL_CLOSED','CANCELED','REJECTED','EXPIRED') OR applied=0
-            """)
-            # Reset baseline balances and smoke trade marker
-            conn.execute("DELETE FROM state WHERE key IN ('baseline_asset_balances', 'testnet_smoke_trade')")
-            # Record audit event
             conn.execute(
                 "INSERT INTO audit_events(event_type, details_json) VALUES(?,?)",
-                ("testnet_reset_recovery", json.dumps(export_data, allow_nan=False))
+                ("testnet_reset_review_required", json.dumps(export_data, allow_nan=False))
             )
             conn.commit()
-
         return export_data
 
     def quick_check(self):
