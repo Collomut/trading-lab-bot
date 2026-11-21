@@ -301,3 +301,29 @@ class StateStore:
                 "SELECT payload FROM trades ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [json.loads(row["payload"]) for row in reversed(rows)]
+
+    def update_trade_by_order_id(self, order_id: str, symbol: str, trade: dict) -> bool:
+        """Atomically replace one uniquely matched durable trade record."""
+        payload = json.dumps(trade, allow_nan=False, separators=(",", ":"))
+        source_id = "runtime:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT id, payload FROM trades").fetchall()
+            matches = []
+            for row in rows:
+                try:
+                    saved = json.loads(row["payload"])
+                except (TypeError, ValueError):
+                    continue
+                if (saved.get("action") == "SELL" and saved.get("symbol") == symbol
+                        and str(saved.get("order_id") or "") == str(order_id)):
+                    matches.append(row["id"])
+            if len(matches) != 1:
+                conn.rollback()
+                return False
+            conn.execute(
+                "UPDATE trades SET source_id=?, payload=? WHERE id=?",
+                (source_id, payload, matches[0]),
+            )
+            conn.commit()
+        return True

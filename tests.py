@@ -4033,7 +4033,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         self.assertIsNone(net)
         self.assertFalse(fee_verified)
 
-    def test_external_demo_close_requires_matching_fills_and_records_incomplete_accounting(self):
+    def test_external_demo_close_reconciles_complete_accounting_from_verified_fills(self):
         with TemporaryDirectory() as persistence_dir:
             cfg = BotConfig(dashboard_token="test_token")
             cfg.exchange.paper_trading = True
@@ -4069,7 +4069,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             bot.exchange.fetch_order_by_client_id.return_value = None
             bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.00017982"})
             bot.risk_manager.open_position(
-                "BNB/USDT", 539.13, 0.922, order_id="9493199775", entry_fee_quote=0.3727
+                "BNB/USDT", 539.13, 0.9213085, order_id="9493199775", entry_fee_quote=0.3727
             )
             bot.risk_manager.halt("Native stop placement/persistence failed for BNB/USDT; reconcile before continuing")
             bot.risk_manager.store.create_order_intent(
@@ -4098,8 +4098,17 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
             self.assertEqual(bot.risk_manager.store.get_order("sell-intent")["state"], "REJECTED")
             self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances")["BNB"], "0.00030850")
-            self.assertFalse(bot.risk_manager.trade_history[-1].accounting_complete)
-            self.assertIsNone(bot.risk_manager.trade_history[-1].pnl)
+            self.assertTrue(bot.risk_manager.trade_history[-1].accounting_complete)
+            self.assertAlmostEqual(
+                bot.risk_manager.trade_history[-1].fee,
+                (0.0006915 * 539.13) * 0.921 / 0.9213085 + 0.48602091,
+                places=8,
+            )
+            self.assertAlmostEqual(
+                bot.risk_manager.trade_history[-1].pnl,
+                (527.71 - 539.13) * 0.921 - bot.risk_manager.trade_history[-1].fee,
+                places=8,
+            )
             self.assertTrue(bot.risk_manager._is_halted)
             self.assertEqual(bot.exchange.place_market_sell.call_count, 0)
 
@@ -4121,6 +4130,93 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertFalse(result["success"])
             self.assertIn("BNB/USDT", bot.risk_manager.open_positions)
             bot.exchange.fetch_order.assert_not_called()
+
+    def test_closed_demo_trade_review_reconciles_verified_bnb_fills_and_fees(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.exchange.paper_trading = True
+            cfg.exchange.paper_environment = "demo"
+            cfg.strategy.trading_pairs = ["BNB/USDT"]
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BNB": "0.00030850"}}, [])
+            bot.exchange.fetch_order.side_effect = [
+                {"id": "9493199775", "symbol": "BNB/USDT", "side": "buy", "status": "closed",
+                 "amount": "0.922", "filled": "0.922", "average": "539.13", "timestamp": 1795220012000},
+                {"id": "9504747443", "symbol": "BNB/USDT", "side": "sell", "status": "closed",
+                 "amount": "0.921", "filled": "0.921", "average": "527.71", "timestamp": 1795226741000},
+            ]
+            bot.exchange.fetch_order_trades.side_effect = [
+                [{"order": "9493199775", "symbol": "BNB/USDT", "amount": "0.922",
+                  "fees": [{"currency": "BNB", "cost": "0.0006915"}]}],
+                [{"order": "9504747443", "symbol": "BNB/USDT", "amount": "0.921",
+                  "fees": [{"currency": "USDT", "cost": "0.48602091"}]}],
+            ]
+            bot.risk_manager.store.append_trade({
+                "action": "SELL", "symbol": "BNB/USDT", "price": 527.71,
+                "amount": 0.921, "entry_price": 539.13,
+                "entry_time": "2026-11-20T22:00:13.665576+00:00",
+                "timestamp": "2026-11-21T08:42:25.860151+00:00", "pnl": None,
+                "pnl_pct": None, "fee": None, "accounting_complete": False,
+                "order_id": "9504747443", "reason": "Closed manually on Binance Demo; reconciliation reviewed",
+                "strategy": "downtrend_rsi_recovery_testnet", "route": "downtrend_rsi_recovery_testnet",
+            })
+            bot.risk_manager.store.append_event("external_close_reconciled", {
+                "symbol": "BNB/USDT", "buy_order_id": "9493199775", "sell_order_id": "9504747443",
+                "remaining_dust": "0.00030850", "accounting_complete": False,
+            })
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BNB": "0.00030850"})
+            bot.risk_manager._load_trade_history()
+            bot._cycle_lock = threading.Lock()
+
+            result = bot.reconcile_closed_external_trade()
+
+            self.assertTrue(result["success"], result["message"])
+            saved = bot.risk_manager.store.list_trades()[0]
+            self.assertTrue(saved["accounting_complete"])
+            self.assertAlmostEqual(saved["fee"], 0.48602091 + 0.0006915 * 539.13 * 0.921 / 0.9213085, places=8)
+            self.assertAlmostEqual(saved["pnl"], (527.71 - 539.13) * 0.921 - saved["fee"], places=8)
+            self.assertTrue(bot.risk_manager.trade_history[0].accounting_complete)
+            self.assertEqual(bot.exchange.place_market_sell.call_count, 0)
+
+    def test_closed_demo_trade_review_keeps_record_incomplete_when_fills_are_missing(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.exchange.paper_trading = True
+            cfg.exchange.paper_environment = "demo"
+            cfg.strategy.trading_pairs = ["BNB/USDT"]
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BNB": "0.00030850"}}, [])
+            bot.exchange.fetch_order.side_effect = [
+                {"id": "9493199775", "symbol": "BNB/USDT", "side": "buy", "status": "closed",
+                 "filled": "0.922", "average": "539.13", "timestamp": 1795220012000},
+                {"id": "9504747443", "symbol": "BNB/USDT", "side": "sell", "status": "closed",
+                 "filled": "0.921", "average": "527.71", "timestamp": 1795226741000},
+            ]
+            bot.exchange.fetch_order_trades.return_value = []
+            original = {"action": "SELL", "symbol": "BNB/USDT", "price": 527.71,
+                        "amount": 0.921, "entry_price": 539.13, "pnl": None, "fee": None,
+                        "accounting_complete": False, "order_id": "9504747443"}
+            bot.risk_manager.store.append_trade(original)
+            bot.risk_manager.store.append_event("external_close_reconciled", {
+                "symbol": "BNB/USDT", "buy_order_id": "9493199775", "sell_order_id": "9504747443",
+                "remaining_dust": "0.00030850", "accounting_complete": False,
+            })
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BNB": "0.00030850"})
+            bot._cycle_lock = threading.Lock()
+
+            result = bot.reconcile_closed_external_trade()
+
+            self.assertFalse(result["success"])
+            self.assertIsNone(bot.risk_manager.store.list_trades()[0]["pnl"])
+            self.assertFalse(bot.risk_manager.store.list_trades()[0]["accounting_complete"])
 
     def test_f04_exit_failure_restores_protective_stop(self):
         """F-04: If market sell fails after stop cancellation, protective stop must be restored."""
@@ -4820,6 +4916,8 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("paper_environment_changed:'Paper account changed'", logs_page)
         self.assertIn("Enter your private dashboard access token", LOGIN_HTML)
         self.assertNotIn("DASHBOARD_TOKEN", LOGIN_HTML)
+        self.assertIn("review-closed-trade", overview_page)
+        self.assertIn("/api/reconcile-closed-trade", overview_page)
 
     def test_wording_safety_no_misleading_profit_claims(self):
         banned_phrases = [

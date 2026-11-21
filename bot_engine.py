@@ -2909,12 +2909,242 @@ class TradingBot:
         finally:
             self._cycle_lock.release()
 
+    def _pending_external_close_accounting(self) -> list[tuple[str, str, str, dict]]:
+        """Find closed Demo trades whose prior external-close audit proves their order pair."""
+        list_events = getattr(self.risk_manager.store, "list_events", None)
+        list_trades = getattr(self.risk_manager.store, "list_trades", None)
+        if not callable(list_events) or not callable(list_trades):
+            return []
+        try:
+            events = list_events(500, event_type="external_close_reconciled")
+            trades = list_trades(1000)
+            completed_ids = set()
+            for event in list_events(500, event_type="external_close_accounting_completed"):
+                details = event.get("details", {}) if isinstance(event, dict) else {}
+                if isinstance(details, dict) and details.get("sell_order_id"):
+                    completed_ids.add(str(details["sell_order_id"]))
+        except Exception as exc:
+            logger.warning("Could not inspect closed-trade reconciliation records (%s)", type(exc).__name__)
+            return []
+        candidates = []
+        for event in events:
+            details = event.get("details", {}) if isinstance(event, dict) else {}
+            if not isinstance(details, dict) or details.get("accounting_complete") is not False:
+                continue
+            symbol = details.get("symbol")
+            buy_id = str(details.get("buy_order_id") or "")
+            sell_id = str(details.get("sell_order_id") or "")
+            if (not isinstance(symbol, str) or not buy_id.isdigit() or not sell_id.isdigit()
+                    or sell_id in completed_ids):
+                continue
+            matches = [row for row in trades if isinstance(row, dict)
+                       and row.get("action") == "SELL" and row.get("symbol") == symbol
+                       and str(row.get("order_id") or "") == sell_id
+                       and (row.get("accounting_complete") is False or row.get("pnl") is None)]
+            if len(matches) == 1:
+                candidates.append((symbol, buy_id, sell_id, matches[0]))
+        return candidates
+
+    def reconcile_closed_external_trade(self) -> dict:
+        """Promote a previously reconciled Demo close only after re-verifying private fills."""
+        if not (self.config.exchange.paper_trading and self.config.exchange.paper_environment == "demo"):
+            return {"success": False, "message": "Closed-trade review is only available for the configured Binance Demo account."}
+        if getattr(self.exchange, "is_fallback_simulated", False):
+            return {"success": False, "message": "Authenticated Binance Demo access is unavailable; no records were changed."}
+        if not self._cycle_lock.acquire(timeout=10):
+            return {"success": False, "message": "The bot is checking the account. Wait and try again."}
+        try:
+            candidates = self._pending_external_close_accounting()
+            if len(candidates) != 1:
+                return {"success": False, "message": "There must be exactly one auditable closed Demo trade awaiting fee review; no records were changed."}
+            symbol, buy_order_id, sell_order_id, saved = candidates[0]
+            if symbol not in {pair.strip() for pair in self.config.strategy.trading_pairs}:
+                return {"success": False, "message": "The saved market is no longer configured; no records were changed."}
+            if symbol in self.risk_manager.open_positions or self.risk_manager.store.unresolved_orders():
+                return {"success": False, "message": "Review is blocked while a bot position or unresolved order exists."}
+            balance, open_orders = self.exchange.fetch_account_snapshot()
+            if open_orders:
+                return {"success": False, "message": "Binance still reports an open order. No records were changed."}
+            base = symbol.split("/", 1)[0]
+            baseline = self.risk_manager.store.read_state("baseline_asset_balances") or {}
+            current_base = Decimal(str((balance.get("total") or {}).get(base) or 0))
+            if (base not in baseline or not current_base.is_finite()
+                    or abs(current_base - Decimal(str(baseline[base]))) > Decimal("0.00000002")):
+                return {"success": False, "message": "The current wallet balance no longer matches the recorded post-close dust. No records were changed."}
+            buy = self.exchange.fetch_order(buy_order_id, symbol)
+            sell = self.exchange.fetch_order(sell_order_id, symbol)
+            for order, order_id, side in ((buy, buy_order_id, "buy"), (sell, sell_order_id, "sell")):
+                if (not isinstance(order, dict) or str(order.get("id")) != order_id
+                        or str(order.get("symbol")) != symbol
+                        or str(order.get("side", "")).lower() != side
+                        or str(order.get("status", "")).lower() != "closed"):
+                    return {"success": False, "message": f"Binance could not confirm the exact filled {side} order. No records were changed."}
+
+            def verified_fills(order, order_id):
+                expected = Decimal(str(order.get("filled") or 0))
+                if not expected.is_finite() or expected <= 0:
+                    raise ValueError("invalid order fill")
+                fills = self.exchange.fetch_order_trades(order_id, symbol)
+                if not isinstance(fills, list) or not fills:
+                    raise ValueError("private fills unavailable")
+                total = Decimal("0")
+                fees: dict[str, Decimal] = {}
+                for fill in fills:
+                    if not isinstance(fill, dict):
+                        raise ValueError("invalid fill")
+                    if fill.get("order") is not None and str(fill.get("order")) != order_id:
+                        raise ValueError("fill belongs to another order")
+                    if fill.get("symbol") is not None and str(fill.get("symbol")) != symbol:
+                        raise ValueError("fill belongs to another market")
+                    amount = Decimal(str(fill.get("amount")))
+                    if not amount.is_finite() or amount <= 0:
+                        raise ValueError("invalid fill quantity")
+                    total += amount
+                    entries = fill.get("fees")
+                    if entries is None:
+                        fee = fill.get("fee")
+                        entries = [fee] if isinstance(fee, dict) else None
+                    if not isinstance(entries, list) or not entries:
+                        raise ValueError("fill commission unavailable")
+                    for entry in entries:
+                        if not isinstance(entry, dict) or entry.get("currency") is None or entry.get("cost") is None:
+                            raise ValueError("invalid fill commission")
+                        cost = Decimal(str(entry["cost"]))
+                        if not cost.is_finite() or cost < 0:
+                            raise ValueError("invalid fill commission")
+                        currency = str(entry["currency"])
+                        fees[currency] = fees.get(currency, Decimal("0")) + cost
+                tolerance = max(Decimal("0.0000000001"), expected * Decimal("0.00000001"))
+                if abs(total - expected) > tolerance or not fees:
+                    raise ValueError("fill sum does not match order")
+                return total, [{"currency": currency, "cost": str(cost)} for currency, cost in fees.items()]
+
+            try:
+                bought, buy_fees = verified_fills(buy, buy_order_id)
+                sold, sell_fees = verified_fills(sell, sell_order_id)
+                buy_avg = Decimal(str(buy.get("average") or 0))
+                sell_avg = Decimal(str(sell.get("average") or 0))
+                stored_amount = Decimal(str(saved.get("amount")))
+                stored_entry = Decimal(str(saved.get("entry_price")))
+                stored_exit = Decimal(str(saved.get("price")))
+                if (not all(x.is_finite() and x > 0 for x in
+                            (bought, sold, buy_avg, sell_avg, stored_amount, stored_entry, stored_exit))
+                        or sold > bought
+                        or abs(sold - stored_amount) > Decimal("0.00000002")
+                        or abs(buy_avg - stored_entry) > max(Decimal("0.00000001"), buy_avg * Decimal("0.00000001"))
+                        or abs(sell_avg - stored_exit) > max(Decimal("0.00000001"), sell_avg * Decimal("0.00000001"))):
+                    raise ValueError("saved trade does not match the verified exchange fills")
+                base_bought_fee = sum((Decimal(fee["cost"]) for fee in buy_fees if fee["currency"] == base), Decimal("0"))
+                base_sold_fee = sum((Decimal(fee["cost"]) for fee in sell_fees if fee["currency"] == base), Decimal("0"))
+                net_bought = bought - base_bought_fee
+                expected_dust = net_bought - sold - base_sold_fee
+                if expected_dust < 0:
+                    raise ValueError("verified fees imply a negative residual")
+                event_rows = self.risk_manager.store.list_events(2000, event_type="external_close_reconciled")
+                prior = [event.get("details", {}) for event in event_rows
+                         if isinstance(event, dict) and isinstance(event.get("details"), dict)
+                         and str(event["details"].get("sell_order_id")) == sell_order_id]
+                if len(prior) != 1:
+                    raise ValueError("the external-close audit pair is not unique")
+                recorded_dust = Decimal(str(prior[0].get("remaining_dust")))
+                if not recorded_dust.is_finite() or abs(expected_dust - recorded_dust) > Decimal("0.00000002"):
+                    raise ValueError("verified residual does not match the recorded account reconciliation")
+                buy_time = buy.get("timestamp") or (buy.get("info") or {}).get("transactTime") or (buy.get("info") or {}).get("updateTime")
+                sell_time = sell.get("timestamp") or (sell.get("info") or {}).get("transactTime") or (sell.get("info") or {}).get("updateTime")
+                if Decimal(str(sell_time)) <= Decimal(str(buy_time)):
+                    raise ValueError("sell timestamp does not follow the buy")
+                buy_fee_quote = self._fee_quote_cost(
+                    {"fees": buy_fees}, symbol, float(buy_avg), self._third_asset_fee_prices({"fees": buy_fees}, symbol)
+                )
+                sell_fee_quote = self._fee_quote_cost(
+                    {"fees": sell_fees}, symbol, float(sell_avg), self._third_asset_fee_prices({"fees": sell_fees}, symbol)
+                )
+                if buy_fee_quote is None or sell_fee_quote is None:
+                    raise ValueError("a verified commission cannot be valued in the quote currency")
+                # Allocate the entry commission to the sold quantity; the leftover verified
+                # dust remains in the wallet and is deliberately excluded from realized P&L.
+                entry_fee_allocated = Decimal(str(buy_fee_quote)) * sold / net_bought
+                total_fee = entry_fee_allocated + Decimal(str(sell_fee_quote))
+                net_pnl = (sell_avg - buy_avg) * sold - total_fee
+                pnl_pct = net_pnl / (buy_avg * sold) * Decimal("100")
+                updated = dict(saved)
+                updated.update({
+                    "entry_price": float(buy_avg), "price": float(sell_avg),
+                    "amount": float(sold), "fee": float(total_fee),
+                    "pnl": float(net_pnl), "pnl_pct": float(pnl_pct),
+                    "accounting_complete": True,
+                })
+            except Exception as exc:
+                logger.warning("Closed Demo trade review failed for %s (%s)", symbol, type(exc).__name__)
+                return {"success": False, "message": "The saved trade, private Binance fills, commissions, or dust did not reconcile exactly. No trade record was changed."}
+
+            memory_matches = [record for record in self.risk_manager.trade_history
+                              if record.symbol == symbol and str(record.order_id) == sell_order_id
+                              and not record.accounting_complete]
+            if len(memory_matches) != 1:
+                return {"success": False, "message": "Runtime trade history did not uniquely match the saved record. No record was changed."}
+            update_trade = getattr(self.risk_manager.store, "update_trade_by_order_id", None)
+            if not callable(update_trade) or not update_trade(sell_order_id, symbol, updated):
+                return {"success": False, "message": "The saved trade was not uniquely matched in durable storage. No record was changed."}
+            record = memory_matches[0]
+            record.entry_price = float(buy_avg)
+            record.exit_price = float(sell_avg)
+            record.amount = float(sold)
+            record.fee = float(total_fee)
+            record.pnl = float(net_pnl)
+            record.pnl_pct = float(pnl_pct)
+            record.accounting_complete = True
+            # Rebuild today's realized daily counter from the now-complete ledger.
+            # This is idempotent across retries/restarts and includes any other
+            # completed trades from the same UTC day.
+            today = datetime.now(timezone.utc).date()
+            self.risk_manager._reset_daily_if_needed()
+            daily_risk_saved = True
+            if self.risk_manager._daily_loss_reset_date == today:
+                daily_pnl = 0.0
+                for trade in self.risk_manager.trade_history:
+                    try:
+                        closed_at = datetime.fromisoformat(trade.exit_time.replace("Z", "+00:00"))
+                    except (TypeError, ValueError):
+                        continue
+                    if closed_at.tzinfo is None:
+                        closed_at = closed_at.replace(tzinfo=timezone.utc)
+                    if (trade.accounting_complete and trade.pnl is not None
+                            and closed_at.astimezone(timezone.utc).date() == today):
+                        daily_pnl += float(trade.pnl)
+                self.risk_manager._daily_loss = daily_pnl
+                try:
+                    self.risk_manager._save_daily_state()
+                except Exception:
+                    daily_risk_saved = False
+                    self.risk_manager.halt("Reconciled trade P&L is saved, but daily risk state needs review")
+            self.risk_manager.store.append_event("external_close_accounting_completed", {
+                "symbol": symbol, "buy_order_id": buy_order_id, "sell_order_id": sell_order_id,
+                "buy_fills": str(bought), "sell_fills": str(sold),
+                "entry_fee_quote_allocated": str(entry_fee_allocated),
+                "exit_fee_quote": str(sell_fee_quote), "fee_quote_total": str(total_fee),
+                "realized_pnl_net": str(net_pnl), "remaining_dust": str(expected_dust),
+                "source": "verified Binance Demo private fills",
+                "daily_risk_state_saved": daily_risk_saved,
+            })
+            return {"success": True, "accounting_complete": True, "pnl": round(float(net_pnl), 8),
+                    "fee": round(float(total_fee), 8), "message": (
+                        "Binance Demo fills and fees were re-verified. The closed trade’s net P&L is now reconciled."
+                        if daily_risk_saved else
+                        "The closed trade’s net P&L is reconciled, but the daily risk record needs review; trading remains halted."
+                    )}
+        except Exception as exc:
+            logger.exception("Closed Demo trade accounting review failed")
+            return {"success": False, "message": f"Closed-trade review failed safely ({type(exc).__name__}); no exchange orders were sent."}
+        finally:
+            self._cycle_lock.release()
+
     def reconcile_external_close(self, symbol: str, buy_order_id: str, sell_order_id: str) -> dict:
         """Reconcile a user-confirmed external paper sell without submitting orders.
 
         Both fills, the absence of open orders, and the remaining wallet balance
         must agree with the saved position. Accounting is deliberately marked
-        incomplete because this recovery cannot prove every historical fee.
+        incomplete only when private fills do not prove every historical fee.
         """
         if not self.config.exchange.paper_trading or self.config.exchange.paper_environment != "demo":
             return {"success": False, "message": "This recovery is only available for the configured Binance Demo account."}
@@ -2947,6 +3177,17 @@ class TradingBot:
                     or str(sell.get("side", "")).lower() != "sell"
                     or str(sell.get("status", "")).lower() != "closed"):
                 return {"success": False, "message": "The specified sell is not a confirmed filled order for this market."}
+            try:
+                order_amounts = [Decimal(str(order.get("amount"))) for order in (buy, sell)]
+                fill_amounts = [Decimal(str(order.get("filled"))) for order in (buy, sell)]
+                full_fills = all(value.is_finite() and value > 0 for value in (*order_amounts, *fill_amounts)) and all(
+                    abs(amount - filled) <= max(Decimal("0.0000000001"), amount * Decimal("0.00000001"))
+                    for amount, filled in zip(order_amounts, fill_amounts)
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                full_fills = False
+            if not full_fills:
+                return {"success": False, "message": "Both Binance orders must have complete fills before recovery."}
             # The exchange order history must establish that the sell followed
             # this buy. Do not let an unrelated older sell be used to clear the
             # bot's saved position.
@@ -2964,6 +3205,9 @@ class TradingBot:
             sell_fees = self._order_fee_entries(sell)
             sold = Decimal(str(sell.get("filled") or 0))
             gross_bought = Decimal(str(buy.get("filled") or 0))
+            buy_fee_quote = self._resolve_fee_quote_cost(
+                buy, symbol, float(buy.get("average") or 0)
+            )
             if net_bought is None:
                 # Order-detail responses often omit commissions. Recover the
                 # base-asset commission only from the complete private fill
@@ -3040,6 +3284,9 @@ class TradingBot:
                     raise ValueError("invalid commission")
             except (InvalidOperation, TypeError, ValueError, KeyError):
                 return {"success": False, "message": "Binance sell commission data is invalid; no records were changed."}
+            sell_fee_quote = self._resolve_fee_quote_cost(
+                {"fees": sell_fees}, symbol, float(exit_price)
+            )
             baseline = self.risk_manager.store.read_state("baseline_asset_balances") or {}
             base_fee = sum((Decimal(str(fee["cost"])) for fee in sell_fees
                             if fee.get("currency") == base), Decimal("0"))
@@ -3049,7 +3296,7 @@ class TradingBot:
             actual_residual = total_base - Decimal(str(baseline[base])) if baseline_known else total_base
             if (not all(x.is_finite() for x in (bought, gross_bought, sold, exit_price, expected_residual, actual_residual))
                     or bought <= 0 or sold <= 0 or exit_price <= 0 or sold > bought
-                    or abs(gross_bought - Decimal(str(position.amount))) > Decimal("0.00000002")
+                    or abs(bought - Decimal(str(position.amount))) > Decimal("0.00000002")
                     or expected_residual < 0 or actual_residual < 0
                     or abs(expected_residual - actual_residual) > Decimal("0.00000002")):
                 return {"success": False, "message": "The order fills do not match the remaining Binance balance. No records were changed."}
@@ -3094,12 +3341,19 @@ class TradingBot:
                     )
             elif str(sell_intent.get("exchange_order_id") or "") != sell_order_id:
                 return {"success": False, "message": "The unresolved sell record points to a different Binance order. No records were changed."}
-            # Persist a conservative close first; only then consume the buy
-            # intent so a crash cannot hide an open position.
-            self.risk_manager.mark_position_accounting_incomplete(symbol)
+            # Only restore complete accounting after the private order/fill
+            # evidence, net acquired quantity and residual wallet dust agree.
+            if buy_fee_quote is not None and sell_fee_quote is not None:
+                position.entry_fee_quote = buy_fee_quote
+                position.accounting_complete = True
+                if not self.risk_manager._save_positions():
+                    self.risk_manager.halt(f"Verified fee recovery could not be saved for {symbol}; operator review required")
+                    return {"success": False, "message": "Verified fees could not be saved safely. Trading remains halted."}
+            else:
+                self.risk_manager.mark_position_accounting_incomplete(symbol)
             record = self.risk_manager.close_position(
                 symbol, float(exit_price), "Closed manually on Binance Demo; reconciliation reviewed",
-                fee_cost=None, closed_amount=float(sold),
+                fee_cost=sell_fee_quote, closed_amount=float(sold),
             )
             if not record:
                 raise RuntimeError("Could not persist the externally closed position")
@@ -3113,13 +3367,15 @@ class TradingBot:
                 "symbol": symbol, "buy_order_id": buy_order_id, "sell_order_id": sell_order_id,
                 "buy_net_amount": str(bought), "sell_filled": str(sold),
                 "remaining_dust": str(expected_residual), "baseline_was_missing": not baseline_known,
-                "remaining_balance_after_rebaseline": str(total_base), "accounting_complete": False,
+                "remaining_balance_after_rebaseline": str(total_base),
+                "accounting_complete": bool(record.accounting_complete),
             })
             self._last_account_balance = balance
             self._last_account_error = ""
             clean = self._reconcile_exchange_state()
-            return {"success": clean, "accounting_complete": False,
-                    "message": "The Demo sell and remaining dust now match Binance. Trade accounting is marked incomplete; review the safety halt before resuming." if clean else
+            return {"success": clean, "accounting_complete": bool(record.accounting_complete),
+                    "message": ("The Demo sell, fills, fees and remaining dust now match Binance. Net P&L has been reconciled; review the safety halt before resuming." if record.accounting_complete else
+                                "The Demo sell and remaining dust now match Binance, but a fee could not be valued. Accounting remains pending review.") if clean else
                     f"External close was recorded, but account reconciliation still fails: {self._last_account_error or self.risk_manager._halt_reason}"}
         except Exception as exc:
             logger.exception("External close reconciliation failed for %s", symbol)

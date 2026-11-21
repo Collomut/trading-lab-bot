@@ -628,3 +628,24 @@ class PostgresStateStore:
                 "SELECT payload FROM bot_private.trades ORDER BY id DESC LIMIT %s", (limit,)
             ).fetchall()
         return [r["payload"] for r in reversed(rows)]
+
+    def update_trade_by_order_id(self, order_id: str, symbol: str, trade: dict) -> bool:
+        """Atomically replace one uniquely matched durable trade record."""
+        payload = json.dumps(trade, allow_nan=False, separators=(",", ":"))
+        source_id = "runtime:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        with self._pool.connection() as conn, conn.transaction():
+            rows = conn.execute("""
+                SELECT id, source_id FROM bot_private.trades
+                WHERE payload->>'action'='SELL'
+                  AND payload->>'symbol'=%s
+                  AND payload->>'order_id'=%s
+                FOR UPDATE
+            """, (symbol, str(order_id))).fetchall()
+            if len(rows) != 1:
+                return False
+            conn.execute("""
+                UPDATE bot_private.trades
+                SET source_id=%s, payload=%s::jsonb
+                WHERE id=%s
+            """, (source_id, payload, rows[0]["id"]))
+        return True

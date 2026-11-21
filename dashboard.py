@@ -245,6 +245,7 @@ class WebDashboard:
         self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
         self.app.router.add_post('/api/close-position', self.handle_close_position)
         self.app.router.add_post('/api/reconcile-external-close', self.handle_reconcile_external_close)
+        self.app.router.add_post('/api/reconcile-closed-trade', self.handle_reconcile_closed_trade)
         self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
         self.app.router.add_post('/api/test-notification', self.handle_test_notification)
         self.app.router.add_get('/api/account-diagnostic', self.handle_account_diagnostic)
@@ -673,6 +674,12 @@ class WebDashboard:
                 and self.config.exchange.paper_environment == "demo"
                 and risk._is_halted and not is_fallback_sim
                 and any(p.get("order_id") and not p.get("stop_order_id") for p in positions.values())
+            ),
+            "closed_trade_accounting_review_available": bool(
+                self.config.exchange.paper_trading
+                and self.config.exchange.paper_environment == "demo"
+                and not is_fallback_sim
+                and len(getattr(self.bot, "_pending_external_close_accounting", lambda: [])()) == 1
             ),
             "latest_signals": self.bot.last_signals,
             "max_positions": self.config.risk.max_open_positions,
@@ -1243,6 +1250,15 @@ class WebDashboard:
         self._status_cache = None
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, self.bot.reconcile_external_close, symbol, buy_id, sell_id)
+        self._status_cache = None
+        return web.json_response(result, status=200 if result.get("success") else 409)
+
+    async def handle_reconcile_closed_trade(self, request):
+        if not self._is_valid_origin(request):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        self._status_cache = None
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, self.bot.reconcile_closed_external_trade)
         self._status_cache = None
         return web.json_response(result, status=200 if result.get("success") else 409)
 
