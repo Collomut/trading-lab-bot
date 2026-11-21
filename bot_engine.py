@@ -2753,8 +2753,8 @@ class TradingBot:
             if str(position.order_id) != buy_order_id:
                 return {"success": False, "message": "The buy order number does not match the bot's saved position."}
             balance, open_orders = self.exchange.fetch_account_snapshot()
-            if any(isinstance(o, dict) and str(o.get("symbol", "")) == symbol for o in open_orders):
-                return {"success": False, "message": "An exchange order is still open for this market. No records were changed."}
+            if open_orders:
+                return {"success": False, "message": "An exchange order is still open. No records were changed."}
             buy = self.exchange.fetch_order(buy_order_id, symbol)
             sell = self.exchange.fetch_order(sell_order_id, symbol)
             if not isinstance(buy, dict) or not isinstance(sell, dict):
@@ -2781,20 +2781,64 @@ class TradingBot:
                 return {"success": False, "message": "The Binance sell does not clearly follow the recorded buy; no records were changed."}
             net_bought = self._net_base_filled(buy, symbol)
             sell_fees = self._order_fee_entries(sell)
-            if net_bought is None or sell_fees is None:
+            if net_bought is None:
                 return {"success": False, "message": "Binance fee details are incomplete; no records were changed."}
             bought = net_bought
             sold = Decimal(str(sell.get("filled") or 0))
             exit_price = Decimal(str(sell.get("average") or 0))
             gross_bought = Decimal(str(buy.get("filled") or 0))
+            if sell_fees is None:
+                # CCXT's fetch_order response may omit per-fill commissions.
+                # Reconstruct them only from authenticated fills whose summed
+                # quantity exactly agrees with the confirmed order quantity.
+                try:
+                    fills = self.exchange.fetch_order_trades(sell_order_id, symbol)
+                    if not isinstance(fills, list) or not fills:
+                        raise ValueError("fill fee details unavailable")
+                    fill_total = Decimal("0")
+                    aggregate_fees = {}
+                    for fill in fills:
+                        if not isinstance(fill, dict):
+                            raise ValueError("invalid fill response")
+                        fill_amount = Decimal(str(fill.get("amount")))
+                        if not fill_amount.is_finite() or fill_amount <= 0:
+                            raise ValueError("invalid fill amount")
+                        fill_total += fill_amount
+                        entries = fill.get("fees")
+                        if entries is None:
+                            fee = fill.get("fee")
+                            entries = [fee] if isinstance(fee, dict) else None
+                        if not isinstance(entries, list) or not entries:
+                            raise ValueError("fill fee details unavailable")
+                        for entry in entries:
+                            if not isinstance(entry, dict) or entry.get("currency") is None or entry.get("cost") is None:
+                                raise ValueError("invalid fill fee response")
+                            fee_cost = Decimal(str(entry["cost"]))
+                            if not fee_cost.is_finite() or fee_cost < 0:
+                                raise ValueError("invalid fill fee amount")
+                            currency = str(entry["currency"])
+                            aggregate_fees[currency] = aggregate_fees.get(currency, Decimal("0")) + fee_cost
+                    fee_tolerance = max(Decimal("0.0000000001"), sold * Decimal("0.00000001"))
+                    if abs(fill_total - sold) > fee_tolerance or not aggregate_fees:
+                        raise ValueError("fill quantities do not match the sell order")
+                    sell_fees = [{"currency": currency, "cost": str(cost)}
+                                 for currency, cost in aggregate_fees.items()]
+                except Exception:
+                    return {"success": False, "message": "Binance sell commissions could not be verified; no records were changed."}
+            try:
+                if any(not Decimal(str(fee["cost"])).is_finite() or Decimal(str(fee["cost"])) < 0
+                       for fee in sell_fees):
+                    raise ValueError("invalid commission")
+            except (InvalidOperation, TypeError, ValueError, KeyError):
+                return {"success": False, "message": "Binance sell commission data is invalid; no records were changed."}
             baseline = self.risk_manager.store.read_state("baseline_asset_balances") or {}
             base = symbol.split("/", 1)[0]
-            if base not in baseline:
-                return {"success": False, "message": "The starting balance for this asset is missing; operator review is required."}
             base_fee = sum((Decimal(str(fee["cost"])) for fee in sell_fees
                             if fee.get("currency") == base), Decimal("0"))
             expected_residual = bought - sold - base_fee
-            actual_residual = Decimal(str((balance.get("total") or {}).get(base) or 0)) - Decimal(str(baseline[base]))
+            total_base = Decimal(str((balance.get("total") or {}).get(base) or 0))
+            baseline_known = base in baseline
+            actual_residual = total_base - Decimal(str(baseline[base])) if baseline_known else total_base
             if (not all(x.is_finite() for x in (bought, gross_bought, sold, exit_price, expected_residual, actual_residual))
                     or bought <= 0 or sold <= 0 or exit_price <= 0 or sold > bought
                     or abs(gross_bought - Decimal(str(position.amount))) > Decimal("0.00000002")
@@ -2803,14 +2847,45 @@ class TradingBot:
                 return {"success": False, "message": "The order fills do not match the remaining Binance balance. No records were changed."}
             if expected_residual and not self._below_minimum_notional(symbol, expected_residual):
                 return {"success": False, "message": "A tradable amount remains in Binance; protect or close it before recovery."}
-            unresolved = [x for x in self.risk_manager.store.unresolved_orders() if x.get("symbol") == symbol]
-            matching = [x for x in unresolved if str(x.get("exchange_order_id") or "") == buy_order_id]
-            if len(unresolved) != 1 or len(matching) != 1 or str(matching[0].get("side", "")).lower() != "buy":
-                return {"success": False, "message": "The unresolved order record does not uniquely match this buy. No records were changed."}
-            intent = matching[0]
-            if intent["state"] not in self.risk_manager.store.TERMINAL:
-                self.risk_manager.store.update_order(intent["client_order_id"], "FILLED", exchange_order_id=buy_order_id,
+            unresolved = self.risk_manager.store.unresolved_orders()
+            buy_intents = [x for x in unresolved if x.get("symbol") == symbol
+                           and str(x.get("side", "")).lower() == "buy"
+                           and str(x.get("exchange_order_id") or "") == buy_order_id]
+            sell_intents = [x for x in unresolved if x.get("symbol") == symbol
+                            and str(x.get("side", "")).lower() == "sell"]
+            if (len(unresolved) != 2 or any(x.get("symbol") != symbol for x in unresolved)
+                    or len(buy_intents) != 1 or len(sell_intents) != 1):
+                return {"success": False, "message": "The unresolved exchange records do not uniquely match this buy and sell. No records were changed."}
+            buy_intent, sell_intent = buy_intents[0], sell_intents[0]
+            if buy_intent["state"] not in self.risk_manager.store.TERMINAL:
+                self.risk_manager.store.update_order(buy_intent["client_order_id"], "FILLED", exchange_order_id=buy_order_id,
                                                      filled=str(buy.get("filled")), average=str(buy.get("average")), response=buy)
+            if sell_intent["state"] in {"UNKNOWN", "SUBMITTED"}:
+                # Resolve the bot's ambiguous sell by its unique client ID. A
+                # confirmed absence means the supplied Binance sell was manual;
+                # an API error is not treated as absence and keeps the halt.
+                submitted_sell = self.exchange.fetch_order_by_client_id(sell_intent["client_order_id"], symbol)
+                if submitted_sell is None:
+                    self.risk_manager.store.update_order(
+                        sell_intent["client_order_id"], "REJECTED",
+                        response={"result": "confirmed_absent_during_external_close_reconciliation"},
+                    )
+                elif (not isinstance(submitted_sell, dict)
+                      or str(submitted_sell.get("id")) != sell_order_id
+                      or str(submitted_sell.get("side", "")).lower() != "sell"
+                      or str(submitted_sell.get("status", "")).lower() != "closed"):
+                    return {"success": False, "message": "The bot's ambiguous sell does not match the Binance sell shown. No records were changed."}
+                else:
+                    exchange_client_id = str(submitted_sell.get("clientOrderId") or "")
+                    if exchange_client_id and exchange_client_id != sell_intent["client_order_id"]:
+                        return {"success": False, "message": "Binance returned a different client order number; no records were changed."}
+                    self.risk_manager.store.update_order(
+                        sell_intent["client_order_id"], "FILLED", exchange_order_id=sell_order_id,
+                        filled=str(submitted_sell.get("filled")), average=str(submitted_sell.get("average")),
+                        response=submitted_sell,
+                    )
+            elif str(sell_intent.get("exchange_order_id") or "") != sell_order_id:
+                return {"success": False, "message": "The unresolved sell record points to a different Binance order. No records were changed."}
             # Persist a conservative close first; only then consume the buy
             # intent so a crash cannot hide an open position.
             self.risk_manager.mark_position_accounting_incomplete(symbol)
@@ -2822,13 +2897,15 @@ class TradingBot:
                 raise RuntimeError("Could not persist the externally closed position")
             self._log_closed_trade(record, record.reason, float(exit_price), sell_order_id)
             updated = dict(baseline)
-            updated[base] = str((balance.get("total") or {}).get(base) or 0)
+            updated[base] = str(total_base)
             self.risk_manager.store.write_state("baseline_asset_balances", updated)
-            self.risk_manager.store.mark_order_applied(intent["client_order_id"])
+            self.risk_manager.store.mark_order_applied(buy_intent["client_order_id"])
+            self.risk_manager.store.mark_order_applied(sell_intent["client_order_id"])
             self.risk_manager.store.append_event("external_close_reconciled", {
                 "symbol": symbol, "buy_order_id": buy_order_id, "sell_order_id": sell_order_id,
                 "buy_net_amount": str(bought), "sell_filled": str(sold),
-                "remaining_dust": str(expected_residual), "accounting_complete": False,
+                "remaining_dust": str(expected_residual), "baseline_was_missing": not baseline_known,
+                "remaining_balance_after_rebaseline": str(total_base), "accounting_complete": False,
             })
             self._last_account_balance = balance
             self._last_account_error = ""

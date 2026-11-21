@@ -3852,7 +3852,8 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 "timestamp": 1795226741000,
             }
             bot.exchange.fetch_order.side_effect = [buy, sell]
-            bot.risk_manager.store.write_state("baseline_asset_balances", {"BNB": "0"})
+            bot.exchange.fetch_order_by_client_id.return_value = None
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.00017982"})
             bot.risk_manager.open_position(
                 "BNB/USDT", 539.13, 0.922, order_id="9493199775", entry_fee_quote=0.3727
             )
@@ -3865,6 +3866,11 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 "buy-intent", "FILLED", exchange_order_id="9493199775",
                 filled="0.922", average="539.13",
             )
+            bot.risk_manager.store.create_order_intent(
+                "sell-intent", "BNB/USDT", "sell", "0.922", {"test": True}
+            )
+            bot.risk_manager.store.update_order("sell-intent", "SUBMITTED")
+            bot.risk_manager.store.update_order("sell-intent", "UNKNOWN")
             bot._cycle_lock = threading.Lock()
             bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
             bot._log_trade = Mock()
@@ -3876,6 +3882,8 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertTrue(result["success"], result["message"])
             self.assertNotIn("BNB/USDT", bot.risk_manager.open_positions)
             self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
+            self.assertEqual(bot.risk_manager.store.get_order("sell-intent")["state"], "REJECTED")
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances")["BNB"], "0.00030850")
             self.assertFalse(bot.risk_manager.trade_history[-1].accounting_complete)
             self.assertIsNone(bot.risk_manager.trade_history[-1].pnl)
             self.assertTrue(bot.risk_manager._is_halted)
