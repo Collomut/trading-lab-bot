@@ -3822,6 +3822,84 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
         self.assertIsNone(net)
         self.assertFalse(fee_verified)
 
+    def test_external_demo_close_requires_matching_fills_and_records_incomplete_accounting(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.exchange.paper_trading = True
+            cfg.exchange.paper_environment = "demo"
+            cfg.exchange.demo_api_key = "demo-key"
+            cfg.exchange.demo_api_secret = "demo-secret"
+            cfg.strategy.trading_pairs = ["BNB/USDT"]
+            cfg.data_dir = persistence_dir
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"BNB": "0.00030850", "USDT": "4966.61"}}, []
+            )
+            buy = {
+                "id": "9493199775", "symbol": "BNB/USDT", "side": "buy",
+                "status": "closed", "amount": "0.922", "filled": "0.922",
+                "average": "539.13", "fees": [{"currency": "BNB", "cost": "0.0006915"}],
+                "timestamp": 1795220012000,
+            }
+            sell = {
+                "id": "9504747443", "symbol": "BNB/USDT", "side": "sell",
+                "status": "closed", "amount": "0.921", "filled": "0.921",
+                "average": "527.71", "fees": [{"currency": "USDT", "cost": "0.48602091"}],
+                "timestamp": 1795226741000,
+            }
+            bot.exchange.fetch_order.side_effect = [buy, sell]
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BNB": "0"})
+            bot.risk_manager.open_position(
+                "BNB/USDT", 539.13, 0.922, order_id="9493199775", entry_fee_quote=0.3727
+            )
+            bot.risk_manager.halt("Native stop placement/persistence failed for BNB/USDT; reconcile before continuing")
+            bot.risk_manager.store.create_order_intent(
+                "buy-intent", "BNB/USDT", "buy", "0.922", {"test": True}
+            )
+            bot.risk_manager.store.update_order("buy-intent", "SUBMITTED")
+            bot.risk_manager.store.update_order(
+                "buy-intent", "FILLED", exchange_order_id="9493199775",
+                filled="0.922", average="539.13",
+            )
+            bot._cycle_lock = threading.Lock()
+            bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
+            bot._log_trade = Mock()
+            bot._below_minimum_notional = Mock(return_value=True)
+            bot._reconcile_exchange_state = Mock(return_value=True)
+
+            result = bot.reconcile_external_close("BNB/USDT", "9493199775", "9504747443")
+
+            self.assertTrue(result["success"], result["message"])
+            self.assertNotIn("BNB/USDT", bot.risk_manager.open_positions)
+            self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
+            self.assertFalse(bot.risk_manager.trade_history[-1].accounting_complete)
+            self.assertIsNone(bot.risk_manager.trade_history[-1].pnl)
+            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertEqual(bot.exchange.place_market_sell.call_count, 0)
+
+    def test_external_demo_close_rejects_balance_mismatch_without_mutation(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.exchange.paper_trading = True
+            cfg.exchange.paper_environment = "demo"
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BNB": "1"}}, [])
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BNB": "0"})
+            bot.risk_manager.open_position("BNB/USDT", 100.0, 1.0, order_id="100")
+            bot._cycle_lock = threading.Lock()
+            result = bot.reconcile_external_close("BNB/USDT", "100", "200")
+            self.assertFalse(result["success"])
+            self.assertIn("BNB/USDT", bot.risk_manager.open_positions)
+            bot.exchange.fetch_order.assert_not_called()
+
     def test_f04_exit_failure_restores_protective_stop(self):
         """F-04: If market sell fails after stop cancellation, protective stop must be restored."""
         with TemporaryDirectory() as persistence_dir:

@@ -1154,6 +1154,11 @@ class TradingBot:
         """Block all order activity until authenticated account state matches local state."""
         try:
             balance, open_orders = self.exchange.fetch_account_snapshot()
+            # Cache the authenticated balance as soon as it is obtained. The
+            # later order/position checks can fail while this snapshot is
+            # still valid for display and equity risk monitoring.
+            if isinstance(balance, dict) and isinstance(balance.get("total"), dict):
+                self._last_account_balance = balance
             self.exchange.exchange.load_markets()
             totals = balance.get("total", {}) or {}
             configured = {pair.strip(): pair.strip().split("/")[0] for pair in self.config.strategy.trading_pairs}
@@ -1419,7 +1424,9 @@ class TradingBot:
                 self._last_account_error = "Account reconciliation failed. Check exchange permissions and service logs."
                 reason = f"Exchange reconciliation failed: {safe_detail}"
             current_halt = self.risk_manager._halt_reason
-            if self.risk_manager._is_halted and not current_halt.startswith("Exchange reconciliation failed:"):
+            if current_halt == "Account equity valuation failed; operator review required":
+                self.risk_manager.halt(reason)
+            elif self.risk_manager._is_halted and not current_halt.startswith("Exchange reconciliation failed:"):
                 # A transient API failure must not erase an earlier circuit
                 # breaker, emergency-stop latch, or manual-review halt.
                 self.risk_manager._save_daily_state()
@@ -2722,6 +2729,120 @@ class TradingBot:
         finally:
             self._cycle_lock.release()
 
+    def reconcile_external_close(self, symbol: str, buy_order_id: str, sell_order_id: str) -> dict:
+        """Reconcile a user-confirmed external paper sell without submitting orders.
+
+        Both fills, the absence of open orders, and the remaining wallet balance
+        must agree with the saved position. Accounting is deliberately marked
+        incomplete because this recovery cannot prove every historical fee.
+        """
+        if not self.config.exchange.paper_trading or self.config.exchange.paper_environment != "demo":
+            return {"success": False, "message": "This recovery is only available for the configured Binance Demo account."}
+        if getattr(self.exchange, "is_fallback_simulated", False):
+            return {"success": False, "message": "Authenticated Binance Demo access is unavailable; no records were changed."}
+        if symbol not in {pair.strip() for pair in self.config.strategy.trading_pairs}:
+            return {"success": False, "message": "That market is not configured for this bot."}
+        if not all(isinstance(x, str) and x.isdigit() and len(x) <= 32 for x in (buy_order_id, sell_order_id)):
+            return {"success": False, "message": "Enter the numeric Binance buy and sell order numbers."}
+        if not self._cycle_lock.acquire(timeout=10):
+            return {"success": False, "message": "The bot is checking the account. Wait and try again."}
+        try:
+            position = self.risk_manager.open_positions.get(symbol)
+            if not position or position.stop_order_id:
+                return {"success": False, "message": "Recovery requires the tracked position with no saved exchange stop."}
+            if str(position.order_id) != buy_order_id:
+                return {"success": False, "message": "The buy order number does not match the bot's saved position."}
+            balance, open_orders = self.exchange.fetch_account_snapshot()
+            if any(isinstance(o, dict) and str(o.get("symbol", "")) == symbol for o in open_orders):
+                return {"success": False, "message": "An exchange order is still open for this market. No records were changed."}
+            buy = self.exchange.fetch_order(buy_order_id, symbol)
+            sell = self.exchange.fetch_order(sell_order_id, symbol)
+            if not isinstance(buy, dict) or not isinstance(sell, dict):
+                return {"success": False, "message": "Binance did not return both orders. No records were changed."}
+            if (str(buy.get("id")) != buy_order_id or str(buy.get("symbol")) != symbol
+                    or str(buy.get("side", "")).lower() != "buy"
+                    or str(buy.get("status", "")).lower() != "closed"):
+                return {"success": False, "message": "The specified buy is not a confirmed filled order for this market."}
+            if (str(sell.get("id")) != sell_order_id or str(sell.get("symbol")) != symbol
+                    or str(sell.get("side", "")).lower() != "sell"
+                    or str(sell.get("status", "")).lower() != "closed"):
+                return {"success": False, "message": "The specified sell is not a confirmed filled order for this market."}
+            # The exchange order history must establish that the sell followed
+            # this buy. Do not let an unrelated older sell be used to clear the
+            # bot's saved position.
+            buy_time = buy.get("timestamp") or (buy.get("info") or {}).get("transactTime") or (buy.get("info") or {}).get("updateTime")
+            sell_time = sell.get("timestamp") or (sell.get("info") or {}).get("transactTime") or (sell.get("info") or {}).get("updateTime")
+            try:
+                buy_time_d, sell_time_d = Decimal(str(buy_time)), Decimal(str(sell_time))
+            except (InvalidOperation, TypeError, ValueError):
+                return {"success": False, "message": "Binance did not provide usable timestamps for both fills; operator review is required."}
+            if (not buy_time_d.is_finite() or not sell_time_d.is_finite()
+                    or buy_time_d <= 0 or sell_time_d <= buy_time_d):
+                return {"success": False, "message": "The Binance sell does not clearly follow the recorded buy; no records were changed."}
+            net_bought = self._net_base_filled(buy, symbol)
+            sell_fees = self._order_fee_entries(sell)
+            if net_bought is None or sell_fees is None:
+                return {"success": False, "message": "Binance fee details are incomplete; no records were changed."}
+            bought = net_bought
+            sold = Decimal(str(sell.get("filled") or 0))
+            exit_price = Decimal(str(sell.get("average") or 0))
+            gross_bought = Decimal(str(buy.get("filled") or 0))
+            baseline = self.risk_manager.store.read_state("baseline_asset_balances") or {}
+            base = symbol.split("/", 1)[0]
+            if base not in baseline:
+                return {"success": False, "message": "The starting balance for this asset is missing; operator review is required."}
+            base_fee = sum((Decimal(str(fee["cost"])) for fee in sell_fees
+                            if fee.get("currency") == base), Decimal("0"))
+            expected_residual = bought - sold - base_fee
+            actual_residual = Decimal(str((balance.get("total") or {}).get(base) or 0)) - Decimal(str(baseline[base]))
+            if (not all(x.is_finite() for x in (bought, gross_bought, sold, exit_price, expected_residual, actual_residual))
+                    or bought <= 0 or sold <= 0 or exit_price <= 0 or sold > bought
+                    or abs(gross_bought - Decimal(str(position.amount))) > Decimal("0.00000002")
+                    or expected_residual < 0 or actual_residual < 0
+                    or abs(expected_residual - actual_residual) > Decimal("0.00000002")):
+                return {"success": False, "message": "The order fills do not match the remaining Binance balance. No records were changed."}
+            if expected_residual and not self._below_minimum_notional(symbol, expected_residual):
+                return {"success": False, "message": "A tradable amount remains in Binance; protect or close it before recovery."}
+            unresolved = [x for x in self.risk_manager.store.unresolved_orders() if x.get("symbol") == symbol]
+            matching = [x for x in unresolved if str(x.get("exchange_order_id") or "") == buy_order_id]
+            if len(unresolved) != 1 or len(matching) != 1 or str(matching[0].get("side", "")).lower() != "buy":
+                return {"success": False, "message": "The unresolved order record does not uniquely match this buy. No records were changed."}
+            intent = matching[0]
+            if intent["state"] not in self.risk_manager.store.TERMINAL:
+                self.risk_manager.store.update_order(intent["client_order_id"], "FILLED", exchange_order_id=buy_order_id,
+                                                     filled=str(buy.get("filled")), average=str(buy.get("average")), response=buy)
+            # Persist a conservative close first; only then consume the buy
+            # intent so a crash cannot hide an open position.
+            self.risk_manager.mark_position_accounting_incomplete(symbol)
+            record = self.risk_manager.close_position(
+                symbol, float(exit_price), "Closed manually on Binance Demo; reconciliation reviewed",
+                fee_cost=None, closed_amount=float(sold),
+            )
+            if not record:
+                raise RuntimeError("Could not persist the externally closed position")
+            self._log_closed_trade(record, record.reason, float(exit_price), sell_order_id)
+            updated = dict(baseline)
+            updated[base] = str((balance.get("total") or {}).get(base) or 0)
+            self.risk_manager.store.write_state("baseline_asset_balances", updated)
+            self.risk_manager.store.mark_order_applied(intent["client_order_id"])
+            self.risk_manager.store.append_event("external_close_reconciled", {
+                "symbol": symbol, "buy_order_id": buy_order_id, "sell_order_id": sell_order_id,
+                "buy_net_amount": str(bought), "sell_filled": str(sold),
+                "remaining_dust": str(expected_residual), "accounting_complete": False,
+            })
+            self._last_account_balance = balance
+            self._last_account_error = ""
+            clean = self._reconcile_exchange_state()
+            return {"success": clean, "accounting_complete": False,
+                    "message": "The Demo sell and remaining dust now match Binance. Trade accounting is marked incomplete; review the safety halt before resuming." if clean else
+                    f"External close was recorded, but account reconciliation still fails: {self._last_account_error or self.risk_manager._halt_reason}"}
+        except Exception as exc:
+            logger.exception("External close reconciliation failed for %s", symbol)
+            self.risk_manager.halt(f"External Demo close recovery failed for {symbol}; operator review required")
+            return {"success": False, "message": f"Recovery could not be completed safely ({type(exc).__name__}). Trading remains halted."}
+        finally:
+            self._cycle_lock.release()
+
     def pause_entries(self) -> tuple[bool, str]:
         """Serialize the entry pause against order cycles and durably record it."""
         if not self._cycle_lock.acquire(timeout=30):
@@ -2976,7 +3097,11 @@ class TradingBot:
             ):
                 logger.error("Equity risk circuit breaker is active: %s", self.risk_manager._halt_reason)
         except Exception:
-            self.risk_manager.halt("Account equity valuation failed; operator review required")
+            # If exchange reconciliation already stopped trading, preserve that
+            # actionable root cause instead of replacing it with this secondary
+            # failure. The safety latch remains active in either case.
+            if self._last_reconciliation_ok or not self.risk_manager._is_halted:
+                self.risk_manager.halt("Account equity valuation failed; operator review required")
             logger.exception("Equity valuation failed; new orders blocked")
 
     def run_cycle(self) -> bool:
