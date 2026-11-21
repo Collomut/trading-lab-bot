@@ -2779,14 +2779,43 @@ class TradingBot:
             if (not buy_time_d.is_finite() or not sell_time_d.is_finite()
                     or buy_time_d <= 0 or sell_time_d <= buy_time_d):
                 return {"success": False, "message": "The Binance sell does not clearly follow the recorded buy; no records were changed."}
+            base = symbol.split("/", 1)[0]
             net_bought = self._net_base_filled(buy, symbol)
             sell_fees = self._order_fee_entries(sell)
-            if net_bought is None:
-                return {"success": False, "message": "Binance fee details are incomplete; no records were changed."}
-            bought = net_bought
             sold = Decimal(str(sell.get("filled") or 0))
-            exit_price = Decimal(str(sell.get("average") or 0))
             gross_bought = Decimal(str(buy.get("filled") or 0))
+            if net_bought is None:
+                # Order-detail responses often omit commissions. Recover the
+                # base-asset commission only from the complete private fill
+                # ledger, and require the fill quantities to match the order.
+                try:
+                    fills = self.exchange.fetch_order_trades(buy_order_id, symbol)
+                    if not isinstance(fills, list) or not fills:
+                        raise ValueError("buy fill fees unavailable")
+                    fill_total = Decimal("0")
+                    base_fee = Decimal("0")
+                    for fill in fills:
+                        if not isinstance(fill, dict):
+                            raise ValueError("invalid buy fill response")
+                        fill_amount = Decimal(str(fill.get("amount")))
+                        fees = self._order_fee_entries(fill)
+                        if not fill_amount.is_finite() or fill_amount <= 0 or fees is None:
+                            raise ValueError("buy fill fee details unavailable")
+                        fill_total += fill_amount
+                        for fee in fees:
+                            fee_cost = Decimal(str(fee["cost"]))
+                            if not fee_cost.is_finite() or fee_cost < 0:
+                                raise ValueError("invalid buy fill fee")
+                            if str(fee["currency"]) == base:
+                                base_fee += fee_cost
+                    fee_tolerance = max(Decimal("0.0000000001"), gross_bought * Decimal("0.00000001"))
+                    net_bought = gross_bought - base_fee
+                    if abs(fill_total - gross_bought) > fee_tolerance or not net_bought.is_finite() or net_bought <= 0:
+                        raise ValueError("buy fill quantity mismatch")
+                except Exception:
+                    return {"success": False, "message": "Binance buy commissions could not be verified from fills; no records were changed."}
+            bought = net_bought
+            exit_price = Decimal(str(sell.get("average") or 0))
             if sell_fees is None:
                 # CCXT's fetch_order response may omit per-fill commissions.
                 # Reconstruct them only from authenticated fills whose summed
@@ -2832,7 +2861,6 @@ class TradingBot:
             except (InvalidOperation, TypeError, ValueError, KeyError):
                 return {"success": False, "message": "Binance sell commission data is invalid; no records were changed."}
             baseline = self.risk_manager.store.read_state("baseline_asset_balances") or {}
-            base = symbol.split("/", 1)[0]
             base_fee = sum((Decimal(str(fee["cost"])) for fee in sell_fees
                             if fee.get("currency") == base), Decimal("0"))
             expected_residual = bought - sold - base_fee

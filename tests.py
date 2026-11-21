@@ -3842,7 +3842,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             buy = {
                 "id": "9493199775", "symbol": "BNB/USDT", "side": "buy",
                 "status": "closed", "amount": "0.922", "filled": "0.922",
-                "average": "539.13", "fees": [{"currency": "BNB", "cost": "0.0006915"}],
+                "average": "539.13", "fees": [],
                 "timestamp": 1795220012000,
             }
             sell = {
@@ -3852,6 +3852,9 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 "timestamp": 1795226741000,
             }
             bot.exchange.fetch_order.side_effect = [buy, sell]
+            bot.exchange.fetch_order_trades.return_value = [
+                {"amount": "0.922", "fees": [{"currency": "BNB", "cost": "0.0006915"}]}
+            ]
             bot.exchange.fetch_order_by_client_id.return_value = None
             bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.00017982"})
             bot.risk_manager.open_position(
