@@ -876,6 +876,27 @@ class TradingBot:
             })
             return True
         except Exception as exc:
+            # A timeout can happen after Binance accepted the stop. Resolve
+            # that ambiguous outcome by our stable client ID before treating
+            # the position as unprotected or allowing any replacement order.
+            try:
+                recovered = self.exchange.fetch_order_by_client_id(client_id, symbol)
+                if (isinstance(recovered, dict) and recovered.get("id") and
+                        str(recovered.get("status", "")).lower() == "open"):
+                    if position and not self.risk_manager.attach_exchange_stop(
+                            symbol, recovered["id"], client_id):
+                        raise RuntimeError("Recovered stop reference could not be persisted")
+                    self.risk_manager.store.append_event("protective_stop_recovered_after_ambiguous_response", {
+                        "symbol": symbol,
+                        "order_id": str(recovered["id"]),
+                        "client_order_id": client_id,
+                        "amount": str(amount),
+                        "stop_price": str(sl_price),
+                    })
+                    logger.warning("Recovered confirmed protective stop for %s after an ambiguous response", symbol)
+                    return True
+            except Exception as recovery_exc:
+                logger.critical("Initial protective stop state could not be reconciled for %s (%s)", symbol, type(recovery_exc).__name__)
             self.risk_manager.halt(f"Native stop placement/persistence failed for {symbol}; reconcile before continuing")
             logger.critical("Exchange-native stop was not confirmed for %s (%s)", symbol, type(exc).__name__)
             return False
@@ -1525,6 +1546,10 @@ class TradingBot:
             fee = order.get("fee")
             fees = [fee] if isinstance(fee, dict) else None
         if not fees:
+            info = order.get("info") or {}
+            if info.get("commissionAsset") is not None and info.get("commission") is not None:
+                fees = [{"currency": info.get("commissionAsset"), "cost": info.get("commission")}]
+        if not fees:
             fills = (order.get("info") or {}).get("fills")
             if isinstance(fills, list) and fills:
                 fees = [{"currency": fill.get("commissionAsset"), "cost": fill.get("commission")} for fill in fills]
@@ -1532,6 +1557,9 @@ class TradingBot:
             return None
         if not isinstance(fees, list) or any(not isinstance(fee, dict) for fee in fees):
             return None
+        for fee in fees:
+            if fee.get("currency") is None or fee.get("cost") is None:
+                return None
         return fees
 
     @staticmethod
@@ -1547,11 +1575,111 @@ class TradingBot:
             return None
         try:
             filled = Decimal(str(order.get("filled")))
-            base_fee = sum((Decimal(str(fee.get("cost") or 0)) for fee in fees if fee.get("currency") == base), Decimal("0"))
+            if not filled.is_finite() or filled <= 0:
+                return None
+            base_fee = Decimal("0")
+            for fee in fees:
+                cost = Decimal(str(fee["cost"]))
+                if not cost.is_finite() or cost < 0:
+                    return None
+                if str(fee["currency"]) == base:
+                    base_fee += cost
             net = filled - base_fee
-            return net if net.is_finite() and net > 0 else None
+            return net if net.is_finite() and net > 0 and net <= filled else None
         except (InvalidOperation, TypeError, ValueError, AttributeError):
             return None
+
+    def _resolve_net_base_filled(self, order: dict, symbol: str) -> tuple[Decimal | None, bool]:
+        """Resolve the sellable base quantity and whether fees were verified.
+
+        Binance order responses can omit commissions even when the fill charged
+        its fee in the received asset.  Use the private fill ledger first, then
+        the bot's account baseline as a quantity cross-check.  Never use the
+        gross executed quantity for a protective stop when the exchange wallet
+        holds less than that quantity.
+        """
+        net = self._net_base_filled(order, symbol)
+        if net is not None:
+            return net, True
+
+        base = symbol.split("/", 1)[0]
+        order_id = order.get("id") or (order.get("info") or {}).get("orderId")
+        try:
+            expected = Decimal(str(order.get("filled")))
+        except (InvalidOperation, TypeError, ValueError):
+            return None, False
+        if not expected.is_finite() or expected <= 0:
+            return None, False
+
+        # Reconcile the complete fill set before attributing any commission.
+        try:
+            fills = self.exchange.fetch_order_trades(str(order_id), symbol) if order_id else []
+        except Exception as exc:
+            logger.warning("Could not retrieve fills for quantity reconciliation on %s (%s)", symbol, type(exc).__name__)
+            fills = []
+        if isinstance(fills, list) and fills:
+            total_filled = Decimal("0")
+            base_fee = Decimal("0")
+            complete = True
+            try:
+                for fill in fills:
+                    if not isinstance(fill, dict):
+                        complete = False
+                        break
+                    amount = Decimal(str(fill.get("amount")))
+                    fees = self._order_fee_entries(fill)
+                    if not amount.is_finite() or amount <= 0 or not fees:
+                        complete = False
+                        break
+                    total_filled += amount
+                    for fee in fees:
+                        if fee.get("currency") is None or fee.get("cost") is None:
+                            complete = False
+                            break
+                        cost = Decimal(str(fee["cost"]))
+                        if not cost.is_finite() or cost < 0:
+                            complete = False
+                            break
+                        if str(fee["currency"]) == base:
+                            base_fee += cost
+                    if not complete:
+                        break
+                tolerance = max(Decimal("0.0000000001"), expected * Decimal("0.00000001"))
+                if complete and abs(total_filled - expected) <= tolerance:
+                    net = expected - base_fee
+                    if net.is_finite() and net > 0:
+                        return net, True
+            except (InvalidOperation, TypeError, ValueError, AttributeError):
+                pass
+
+        # A verified account delta is the fallback authority if the exchange
+        # fill endpoint omits fee data.  It is also what prevents another
+        # insufficient-balance stop rejection when commission was charged in
+        # the base asset.  Refuse ambiguous attribution (missing baseline,
+        # unrelated open orders, or a wallet increase larger than this fill).
+        try:
+            balance, open_orders = self.exchange.fetch_account_snapshot()
+            baseline = self.risk_manager.store.read_state("baseline_asset_balances") or {}
+            if base not in baseline or any(
+                isinstance(item, dict) and str(item.get("symbol", "")) == symbol
+                for item in open_orders
+            ):
+                return None, False
+            starting = Decimal(str(baseline[base]))
+            tracked_elsewhere = sum((
+                Decimal(str(position.amount))
+                for other_symbol, position in self.risk_manager.open_positions.items()
+                if other_symbol != symbol and other_symbol.split("/", 1)[0] == base
+            ), Decimal("0"))
+            total = Decimal(str((balance.get("total") or {}).get(base) or 0))
+            observed = total - starting - tracked_elsewhere
+            if (not all(value.is_finite() for value in (starting, tracked_elsewhere, total, observed))
+                    or observed <= 0 or observed > expected):
+                return None, False
+            return observed, False
+        except Exception as exc:
+            logger.warning("Could not reconcile net filled quantity for %s (%s)", symbol, type(exc).__name__)
+            return None, False
 
     @staticmethod
     def _fee_quote_cost(order: dict, symbol: str, fill_price: float, third_asset_prices: dict[str, float] | None = None) -> float | None:
@@ -1922,21 +2050,37 @@ class TradingBot:
                 logger.error("Buy order for %s was not confirmed fully filled; new orders halted", symbol)
                 return
             fill_price = float(order.get("average") or order.get("price") or 0)
-            net_filled = self._net_base_filled(order, symbol)
-            fee_ambiguous = False
+            net_filled, base_fee_verified = self._resolve_net_base_filled(order, symbol)
             if net_filled is None and order.get("id"):
                 try:
                     refetched = self.exchange.exchange.fetch_order(order.get("id"), symbol)
                     if isinstance(refetched, dict):
                         order = refetched
-                        net_filled = self._net_base_filled(order, symbol)
+                        net_filled, base_fee_verified = self._resolve_net_base_filled(order, symbol)
                 except Exception:
                     pass
             if net_filled is None:
-                fee_ambiguous = True
-                net_filled = filled_quantity
+                # Do not assume that gross execution quantity is sellable:
+                # Binance can deduct commission from the received base asset,
+                # making a stop for the gross amount fail with insufficient
+                # balance and leaving the position unprotected.
+                self.risk_manager.halt(
+                    f"Buy fill quantity could not be reconciled for {symbol}; operator action required"
+                )
+                self.risk_manager.store.append_event("unreconciled_buy_fill", {
+                    "symbol": symbol,
+                    "order_id": str(order.get("id", "")),
+                    "filled": str(filled_quantity),
+                    "reason": "net_base_quantity_unavailable",
+                })
+                logger.critical("Could not verify sellable base quantity after buy for %s; position requires operator reconciliation", symbol)
+                return
+            fee_ambiguous = not base_fee_verified
+            if fee_ambiguous:
                 self.risk_manager.store.append_event("buy_fee_missing_reconciled", {
-                    "symbol": symbol, "order_id": str(order.get("id", "")), "filled": str(filled_quantity)
+                    "symbol": symbol, "order_id": str(order.get("id", "")),
+                    "filled": str(filled_quantity), "tracked_net_amount": str(net_filled),
+                    "quantity_source": "account_balance_delta",
                 })
 
             fill_amount = float(net_filled)

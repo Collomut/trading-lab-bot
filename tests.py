@@ -3601,6 +3601,29 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(call_args[0], "BTC/USDT")
             self.assertEqual(call_args[1], 0.01)
 
+    def test_initial_stop_recovers_if_exchange_accepted_before_timeout(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.risk_manager.open_position(
+                "BTC/USDT", entry_price=100.0, amount=0.1, order_id="buy-1"
+            )
+            bot.exchange.place_native_stop_loss.side_effect = TimeoutError("response timed out")
+            bot.exchange.fetch_order_by_client_id.return_value = {
+                "id": "stop-accepted", "status": "open",
+            }
+
+            result = bot._place_and_persist_native_stop("BTC/USDT", "buy-1")
+
+            self.assertTrue(result)
+            bot.exchange.fetch_order_by_client_id.assert_called_once_with(
+                TradingBot._client_order_id("BTC/USDT", "stop", "buy-1"), "BTC/USDT"
+            )
+            position = bot.risk_manager.open_positions["BTC/USDT"]
+            self.assertEqual(position.stop_order_id, "stop-accepted")
+            self.assertFalse(bot.risk_manager._is_halted)
+
     def test_ema72_testnet_buy_uses_swing_stop_and_strategy_exit_target(self):
         with TemporaryDirectory() as persistence_dir:
             cfg = BotConfig(dashboard_token="test_token")
@@ -3712,8 +3735,8 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertFalse(bot.risk_manager._is_halted)
             self.assertEqual(bot._place_and_persist_native_stop.call_args.kwargs["fallback_sl"], 96.0)
 
-    def test_f03_missing_fee_data_still_protects_and_records_position(self):
-        """F-03: Missing fee/fill array must not abandon acquired coins unprotected."""
+    def test_missing_order_fee_uses_verified_fill_fee_for_stop_quantity(self):
+        """A missing order fee must be recovered from fills before stop sizing."""
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
             bot.config = BotConfig(dashboard_token="test_token")
@@ -3733,17 +3756,71 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
                 "filled": "0.01",
                 "average": "50000.0",
             }
+            bot.exchange.fetch_order_trades.return_value = [{
+                "amount": "0.01",
+                "fee": {"currency": "BTC", "cost": "0.00001"},
+            }]
+            bot.exchange.place_native_stop_loss.return_value = {
+                "id": "stop_f03_456", "status": "open",
+            }
             bot._submit_market_order = Mock(return_value=(buy_order, "cb_buy_client_2"))
             bot.exchange.exchange.fetch_order = Mock(return_value=buy_order)
             bot.send_notification = Mock()
             bot._log_trade = Mock()
+            bot.risk_manager.store.create_order_intent(
+                "cb_buy_client_2", "BTC/USDT", "buy", "0.01", {"test": True}
+            )
+            bot.risk_manager.store.update_order("cb_buy_client_2", "SUBMITTED")
+            bot.risk_manager.store.update_order(
+                "cb_buy_client_2", "FILLED", exchange_order_id="buy_f03_456",
+                filled="0.01", average="50000.0",
+            )
 
             signal = TradeSignal(Signal.BUY, "BTC/USDT", 0.8, "Test fee-less buy", indicators={"atr": 500.0})
             bot._handle_buy_signal(signal)
 
             self.assertIn("BTC/USDT", bot.risk_manager.open_positions)
             self.assertTrue(bot.exchange.place_native_stop_loss.called)
-            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertAlmostEqual(
+                bot.exchange.place_native_stop_loss.call_args.args[1], 0.00999
+            )
+            self.assertFalse(bot.risk_manager._is_halted)
+
+    def test_net_fill_quantity_uses_account_delta_when_fill_fees_are_missing(self):
+        bot = object.__new__(TradingBot)
+        bot.exchange = Mock()
+        bot.exchange.fetch_order_trades.return_value = []
+        bot.exchange.fetch_account_snapshot.return_value = (
+            {"total": {"BNB": "0.921078"}}, []
+        )
+        bot.risk_manager = SimpleNamespace(
+            open_positions={}, store=Mock()
+        )
+        bot.risk_manager.store.read_state.return_value = {"BNB": "0"}
+
+        net, fee_verified = bot._resolve_net_base_filled(
+            {"id": "buy_bnb", "filled": "0.922"}, "BNB/USDT"
+        )
+
+        self.assertEqual(net, Decimal("0.921078"))
+        self.assertFalse(fee_verified)
+
+    def test_net_fill_quantity_rejects_ambiguous_account_delta(self):
+        bot = object.__new__(TradingBot)
+        bot.exchange = Mock()
+        bot.exchange.fetch_order_trades.return_value = []
+        bot.exchange.fetch_account_snapshot.return_value = (
+            {"total": {"BNB": "1.0"}}, []
+        )
+        bot.risk_manager = SimpleNamespace(open_positions={}, store=Mock())
+        bot.risk_manager.store.read_state.return_value = {"BNB": "0"}
+
+        net, fee_verified = bot._resolve_net_base_filled(
+            {"id": "buy_bnb", "filled": "0.922"}, "BNB/USDT"
+        )
+
+        self.assertIsNone(net)
+        self.assertFalse(fee_verified)
 
     def test_f04_exit_failure_restores_protective_stop(self):
         """F-04: If market sell fails after stop cancellation, protective stop must be restored."""
