@@ -210,6 +210,7 @@ class WebDashboard:
         self.app.router.add_get('/api/candles', self.handle_candles)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
         self.app.router.add_post('/api/exit-only', self.handle_exit_only)
+        self.app.router.add_post('/api/review-demo-reset', self.handle_demo_reset_review)
         self.app.router.add_post('/api/resume', self.handle_resume_entries)
         self.app.router.add_post('/api/clear-route-halts', self.handle_clear_route_halts)
         self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
@@ -673,6 +674,16 @@ class WebDashboard:
                 exchange_reconciled=self.bot._last_reconciliation_ok,
                 unresolved_orders=risk.store.unresolved_orders(),
             ),
+            "demo_reset_review_available": bool(
+                self.config.exchange.paper_trading
+                and self.config.exchange.paper_environment == "demo"
+                and not is_fallback_sim
+                and risk._is_halted
+                and (risk._halt_reason.startswith("Daily equity drawdown limit reached:")
+                     or RiskManager.is_rolling_drawdown_halt(risk._halt_reason))
+                and not positions
+                and not risk.store.unresolved_orders()
+            ),
             "testnet_smoke_attempted": risk.store.read_state("testnet_smoke_trade") is not None,
             "prices": prices,
             "market_summary": market_summary,
@@ -817,6 +828,14 @@ class WebDashboard:
             return safe
         if event_type == "risk_halt":
             return {"reason": str(details.get("reason", "Trading halted"))[:500]}
+        if event_type in {"demo_account_reset_balance_baselined", "demo_account_reset_reviewed"}:
+            return {
+                "message": (
+                    "Binance Demo balances and drawdown baseline were refreshed after operator review. Trade history was preserved; entries remain paused."
+                    if event_type == "demo_account_reset_reviewed" else
+                    "Current Binance Demo asset balances were recorded as starting inventory after a fresh flat-account check."
+                )
+            }
         if event_type == "notification_delivery":
             channel = details.get("channel")
             status = details.get("status")
@@ -1107,6 +1126,24 @@ class WebDashboard:
         success, message = await loop.run_in_executor(
             None, self.bot.resume_entries, manual_review_confirmed
         )
+        return web.json_response({
+            "success": success,
+            "entry_mode": self.bot.risk_manager.entry_mode(),
+            "message": message,
+        }, status=200 if success else 409)
+
+    async def handle_demo_reset_review(self, request):
+        if not self._is_valid_origin(request):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        self._status_cache = None
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict) or payload.get("demo_reset_confirmed") is not True:
+            return web.json_response({"success": False, "message": "Confirm that Binance Demo was reset before reviewing it."}, status=400)
+        loop = asyncio.get_event_loop()
+        success, message = await loop.run_in_executor(None, self.bot.review_demo_account_reset)
         return web.json_response({
             "success": success,
             "entry_mode": self.bot.risk_manager.entry_mode(),

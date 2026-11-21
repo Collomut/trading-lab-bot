@@ -1023,6 +1023,128 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertTrue(rm._is_halted)
             self.assertEqual(rm._halt_reason, "Manual halt review required")
 
+    def test_reviewed_demo_reset_rebases_equity_but_preserves_loss_streak(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm._consecutive_losses = 2
+            rm._daily_loss = -12.0
+            rm._daily_starting_equity = 5476.74
+            rm._rolling_peak_equity = 5478.08
+            rm.halt("Daily equity drawdown limit reached: 8.70%")
+
+            self.assertTrue(rm.acknowledge_demo_account_reset(5000.0))
+            self.assertFalse(rm._is_halted)
+            self.assertEqual(rm._daily_starting_equity, 5000.0)
+            self.assertEqual(rm._rolling_peak_equity, 5000.0)
+            self.assertEqual(rm._daily_loss, 0.0)
+            self.assertEqual(rm._consecutive_losses, 2)
+            events = rm.store.list_events(event_type="demo_account_reset_reviewed")
+            self.assertEqual(len(events), 1)
+
+    def test_demo_reset_review_does_not_clear_non_drawdown_halts(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.halt("Emergency stop requires operator review")
+            self.assertFalse(rm.acknowledge_demo_account_reset(5000.0))
+            self.assertTrue(rm._is_halted)
+            self.assertEqual(rm._halt_reason, "Emergency stop requires operator review")
+            self.assertFalse(rm.acknowledge_demo_account_reset(float("nan")))
+
+    def test_demo_reset_review_reconciles_and_leaves_entries_paused(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.store.write_state("paper_environment", "demo")
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.00017982"})
+            bot.risk_manager._daily_starting_equity = 5476.74
+            bot.risk_manager._rolling_peak_equity = 5478.08
+            bot.risk_manager._consecutive_losses = 2
+            bot.risk_manager.halt("Daily equity drawdown limit reached: 8.70%")
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"BTC": "0", "USDT": "5000"}}, []
+            )
+            bot.exchange.exchange.load_markets.return_value = None
+            bot.exchange.exchange.market.return_value = {"precision": {"amount": 8}}
+            bot.exchange.exchange.precisionMode = 2
+            bot.exchange.amount_to_precision.return_value = "1.00000000"
+            bot._cycle_lock = threading.Lock()
+            bot._last_account_error = ""
+            bot._last_reconciliation_ok = False
+            bot._last_account_balance = None
+            bot.initial_balance = 0.0
+            bot.persistence_path = Path(persistence_dir) / "open_positions.json"
+            bot.risk_manager.store.write_state("entry_mode", "ACTIVE")
+
+            success, message = bot.review_demo_account_reset()
+
+            self.assertTrue(success, message)
+            self.assertFalse(bot.risk_manager._is_halted)
+            self.assertTrue(bot._last_reconciliation_ok)
+            self.assertEqual(bot.risk_manager.entry_mode(), "EXIT_ONLY")
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"BTC": "0"})
+            self.assertEqual(bot.risk_manager._daily_starting_equity, 5000.0)
+            self.assertEqual(bot.risk_manager._consecutive_losses, 2)
+            self.assertTrue(any(
+                event["event_type"] == "demo_account_reset_balance_baselined"
+                for event in bot.risk_manager.store.list_events(20)
+            ))
+
+    def test_demo_reset_review_refuses_unresolved_orders_without_rebasing(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.store.write_state("paper_environment", "demo")
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.00017982"})
+            bot.risk_manager.store.create_order_intent("pending-demo-reset", "BTC/USDT", "BUY", "0.01", {"type": "market"})
+            bot.risk_manager.halt("Daily equity drawdown limit reached: 8.70%")
+            bot._cycle_lock = threading.Lock()
+            bot._reconcile_exchange_state = Mock(return_value=True)
+
+            success, message = bot.review_demo_account_reset()
+
+            self.assertFalse(success)
+            self.assertIn("unresolved orders", message)
+            bot._reconcile_exchange_state.assert_not_called()
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"BTC": "0.00017982"})
+            self.assertTrue(bot.risk_manager._is_halted)
+
+    def test_demo_reset_review_refuses_exchange_open_orders_without_rebasing(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.store.write_state("paper_environment", "demo")
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.00017982"})
+            bot.risk_manager.halt("Daily equity drawdown limit reached: 8.70%")
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = (
+                {"total": {"BTC": "0", "USDT": "5000"}}, [{"id": "unrecognized-order"}]
+            )
+            bot.exchange.exchange.load_markets.return_value = None
+            bot._cycle_lock = threading.Lock()
+            bot._last_account_error = ""
+            bot._last_reconciliation_ok = False
+
+            success, message = bot.review_demo_account_reset()
+
+            self.assertFalse(success)
+            self.assertIn("remains paused", message)
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances"), {"BTC": "0.00017982"})
+            self.assertTrue(bot.risk_manager._is_halted)
+
     def test_position_sizing_calculation_and_hard_risk_cap(self):
         with TemporaryDirectory() as tmpdir:
             config = RiskConfig(

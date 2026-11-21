@@ -562,6 +562,65 @@ class RiskManager:
         # Existing halt and consecutive-loss state are deliberately preserved.
         self._save_daily_state()
 
+    def acknowledge_demo_account_reset(self, equity: float) -> bool:
+        """Start a reviewed Binance Demo risk cycle after an exchange reset.
+
+        This clears only daily/rolling equity drawdown halts. It preserves trade
+        history, the consecutive-loss streak, and all configured risk limits.
+        The caller must first prove the Demo account is flat and reconciled.
+        """
+        if not isinstance(equity, (int, float)) or not math.isfinite(equity) or equity <= 0:
+            return False
+        if not self._is_halted or not (
+            self._halt_reason.startswith("Daily equity drawdown limit reached:")
+            or self.is_rolling_drawdown_halt(self._halt_reason)
+        ):
+            return False
+        today = datetime.now(timezone.utc).date()
+        previous = {
+            "daily_loss": self._daily_loss,
+            "daily_loss_reset_date": self._daily_loss_reset_date,
+            "daily_starting_equity": self._daily_starting_equity,
+            "rolling_peak_equity": self._rolling_peak_equity,
+            "equity_basis": self._equity_basis,
+            "equity_basis_migration_pending": self._equity_basis_migration_pending,
+            "is_halted": self._is_halted,
+            "halt_reason": self._halt_reason,
+        }
+        self._daily_loss = 0.0
+        self._daily_loss_reset_date = today
+        self._daily_starting_equity = float(equity)
+        self._rolling_peak_equity = float(equity)
+        self._equity_basis = self.EQUITY_BASIS
+        self._equity_basis_migration_pending = False
+        self._is_halted = False
+        self._halt_reason = ""
+        try:
+            self._save_daily_state()
+            self.store.append_event("demo_account_reset_reviewed", {
+                "managed_equity": round(float(equity), 8),
+                "previous_halt": previous["halt_reason"],
+                "daily_loss_reset": True,
+                "rolling_peak_rebased": True,
+                "consecutive_losses_preserved": self._consecutive_losses,
+                "entries_paused": True,
+            })
+            return True
+        except Exception:
+            self._daily_loss = previous["daily_loss"]
+            self._daily_loss_reset_date = previous["daily_loss_reset_date"]
+            self._daily_starting_equity = previous["daily_starting_equity"]
+            self._rolling_peak_equity = previous["rolling_peak_equity"]
+            self._equity_basis = previous["equity_basis"]
+            self._equity_basis_migration_pending = previous["equity_basis_migration_pending"]
+            self._is_halted = True
+            self._halt_reason = "Demo reset review could not be saved; operator review required"
+            try:
+                self._save_daily_state()
+            except Exception:
+                pass
+            return False
+
     def _has_persisted_trade_history(self) -> bool:
         """Check durable strategy history before clearing a legacy equity halt."""
         if self.trade_history:

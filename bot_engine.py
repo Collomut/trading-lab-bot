@@ -1273,7 +1273,10 @@ class TradingBot:
                 "orders_found": len(found_orders),
             })
 
-    def _reconcile_exchange_state(self, *, allow_manual_review_rebaseline: bool = False) -> bool:
+    def _reconcile_exchange_state(
+        self, *, allow_manual_review_rebaseline: bool = False,
+        allow_demo_reset_rebaseline: bool = False,
+    ) -> bool:
         """Block all order activity until authenticated account state matches local state."""
         try:
             balance, open_orders = self.exchange.fetch_account_snapshot()
@@ -1291,6 +1294,30 @@ class TradingBot:
                 if self.config.exchange.paper_trading else "live"
             )
             persisted_environment = self.risk_manager.store.read_state("paper_environment")
+            if allow_demo_reset_rebaseline:
+                if not (self.config.exchange.paper_trading and current_environment == "demo"):
+                    raise ValueError("Demo reset review is available only for Binance Demo paper trading")
+                if getattr(self.exchange, "is_fallback_simulated", False):
+                    raise ValueError("Demo reset review requires a verified Binance Demo account, not the simulated fallback")
+                if persisted_environment != current_environment:
+                    raise ValueError("Demo account environment changed; use the environment review flow")
+                if self.risk_manager.open_positions or self.risk_manager.store.unresolved_orders() or open_orders:
+                    raise ValueError("Demo reset review requires no bot positions, unresolved orders, or exchange open orders")
+                demo_cash = Decimal(str(totals.get("USDT") or 0))
+                if not demo_cash.is_finite() or demo_cash <= 0:
+                    raise ValueError("Demo reset review requires a valid positive USDT balance")
+                previous_baseline = baseline if isinstance(baseline, dict) else {}
+                reset_baseline = {base: str(totals.get(base) or 0) for base in set(configured.values())}
+                self.risk_manager.store.write_state("baseline_asset_balances", reset_baseline)
+                self.risk_manager.store.append_event("demo_account_reset_balance_baselined", {
+                    "environment": current_environment,
+                    "previous_baseline": previous_baseline,
+                    "new_baseline": reset_baseline,
+                    "open_positions": 0,
+                    "unresolved_orders": 0,
+                    "exchange_open_orders": 0,
+                })
+                baseline = reset_baseline
             if persisted_environment is None:
                 # Establish an origin marker on the current paper profile before any switch.
                 self.risk_manager.store.write_state("paper_environment", current_environment)
@@ -1518,6 +1545,11 @@ class TradingBot:
         except Exception as exc:
             self._last_reconciliation_ok = False
             safe_value_error_prefixes = (
+                "Demo reset review is available only for Binance Demo paper trading",
+                "Demo reset review requires a verified Binance Demo account",
+                "Demo account environment changed; use the environment review flow",
+                "Demo reset review requires no bot positions, unresolved orders, or exchange open orders",
+                "Demo reset review requires a valid positive USDT balance",
                 "Paper environment changed while positions or orders exist",
                 "New paper account has no valid USDT equity",
                 "baseline asset balances are missing while local positions exist",
@@ -1559,7 +1591,7 @@ class TradingBot:
                 self.risk_manager.store.append_event("reconciliation_failed", {"reason": reason})
             except Exception:
                 logger.critical("Could not append reconciliation failure to durable audit log")
-            logger.error("Account state failed reconciliation; all new orders blocked (%s)", type(exc).__name__)
+            logger.error("Account state failed reconciliation; all new orders blocked: %s", safe_detail)
             return False
 
     def _bot_managed_equity(self) -> Decimal:
@@ -3082,6 +3114,41 @@ class TradingBot:
             self.risk_manager.halt("Entry pause could not be saved; operator review required")
             logger.exception("Could not persist entry pause")
             return False, "Pause could not be saved. Trading is halted; inspect service logs."
+        finally:
+            self._cycle_lock.release()
+
+    def review_demo_account_reset(self) -> tuple[bool, str]:
+        """Rebase a deliberately reset Demo account, but leave entries paused."""
+        if not self._cycle_lock.acquire(timeout=10):
+            return False, "The trading worker is busy. Wait for the current account check and try again."
+        try:
+            risk = self.risk_manager
+            reason = risk._halt_reason
+            is_equity_halt = (
+                reason.startswith("Daily equity drawdown limit reached:")
+                or risk.is_rolling_drawdown_halt(reason)
+            )
+            if not (self.config.exchange.paper_trading and self.config.exchange.paper_environment == "demo"):
+                return False, "This recovery is only available for the configured Binance Demo account."
+            if not risk._is_halted or not is_equity_halt:
+                return False, "No daily or rolling equity drawdown halt is available for Demo reset review."
+            if risk.open_positions or risk.store.unresolved_orders():
+                return False, "Review is blocked while bot positions or unresolved orders remain."
+
+            # Keep entries paused even if a later private-account check fails.
+            risk.set_exit_only()
+            if not self._reconcile_exchange_state(allow_demo_reset_rebaseline=True):
+                detail = self._last_account_error or risk._halt_reason
+                return False, f"Demo reset review failed; trading remains paused. {detail}"
+            equity = self._bot_managed_equity()
+            if not risk.acknowledge_demo_account_reset(float(equity)):
+                risk.halt("Demo reset review could not be saved; operator review required")
+                return False, "The Demo reset was checked, but risk state could not be saved. Trading remains halted."
+            return True, "Demo reset reviewed and account baselines refreshed. New entries remain paused; use Resume entries after reviewing the account."
+        except Exception as exc:
+            self.risk_manager.halt("Demo reset review failed; operator review required")
+            logger.exception("Could not review reset Binance Demo account (%s)", type(exc).__name__)
+            return False, "Demo reset review failed. Trading remains halted; inspect the account check and service logs."
         finally:
             self._cycle_lock.release()
 
