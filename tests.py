@@ -36,7 +36,8 @@ for _k in (
     "MAX_DAILY_LOSS_PCT", "POSITION_SIZE_PCT", "MAX_ROLLING_DRAWDOWN_PCT",
     "MAX_CONSECUTIVE_LOSSES", "START_PAUSED", "POST_ONLY_ENTRIES", "ENABLE_NOTIFICATIONS",
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SMTP_HOST", "SMTP_PORT", "SMTP_USER",
-    "SMTP_PASSWORD", "ALERT_EMAIL", "DISCORD_WEBHOOK_URL", "DASHBOARD_TOKEN", "DATA_DIR",
+    "SMTP_PASSWORD", "ALERT_EMAIL", "RESEND_API_KEY", "ALERT_EMAIL_FROM",
+    "DISCORD_WEBHOOK_URL", "DASHBOARD_TOKEN", "DATA_DIR",
     "MAX_SPREAD_BPS", "MAX_SLIPPAGE_BPS", "MAX_PAIRWISE_CORRELATION",
     "MAX_TESTNET_PRICE_DIVERGENCE_PCT", "MAX_SIGNAL_FILL_DIVERGENCE_BPS",
     "EXCHANGE", "API_KEY", "API_SECRET", "DEMO_API_KEY", "DEMO_API_SECRET",
@@ -93,13 +94,13 @@ from regime_router import REGIME_ROUTE_POLICY, evaluate_regime_router
 
 
 class TestShadowLogSafety(unittest.TestCase):
-    def test_email_delivery_log_is_allowlisted_and_explains_smtp_status(self):
+    def test_email_delivery_log_is_allowlisted_and_explains_provider_status(self):
         safe = WebDashboard._safe_log_details("notification_delivery", {
-            "channel": "email", "status": "accepted_by_smtp", "category": "safety_halt",
+            "channel": "email", "status": "accepted_by_provider", "category": "safety_halt",
             "recipient": "private@example.com", "password": "must not pass",
         })
         self.assertEqual(safe["channel"], "email")
-        self.assertEqual(safe["status"], "accepted_by_smtp")
+        self.assertEqual(safe["status"], "accepted_by_provider")
         self.assertIn("does not confirm inbox placement", safe["message"])
         self.assertNotIn("recipient", safe)
         self.assertNotIn("password", safe)
@@ -4201,7 +4202,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
 
             bot = TradingBot(config)
             result = bot.send_notification("Test email body", subject="Test Subject")
-            self.assertEqual(result["channels"]["email"], "accepted_by_smtp")
+            self.assertEqual(result["channels"]["email"], "accepted_by_provider")
 
             mock_smtp.assert_called_with("smtp.example.com", 587, timeout=10)
             server_instance.starttls.assert_called_once()
@@ -4211,6 +4212,54 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(args[0], "alerts@example.com")
             self.assertEqual(args[1], ["trader@example.com"])
             self.assertIn("Test Subject", args[2])
+
+    def test_resend_email_notification_uses_https_provider_without_logging_key(self):
+        config = BotConfig(
+            resend_api_key="re_test_secret",
+            alert_email_from="Trading Lab <alerts@example.com>",
+            alert_email="trader@example.com",
+            dashboard_token="test_token",
+        )
+        with patch.object(TradingBot, "_setup_logging"), \
+             patch.object(TradingBot, "_setup_trade_log"), \
+             patch("exchange.ExchangeConnector"), \
+             patch("bot_engine.urllib.request.urlopen") as mock_urlopen:
+            response = MagicMock()
+            response.status = 200
+            response.__enter__.return_value = response
+            mock_urlopen.return_value = response
+            bot = TradingBot(config)
+            result = bot.send_notification("Test email body", subject="Test Subject")
+            self.assertEqual(result["channels"]["email"], "accepted_by_provider")
+            request = mock_urlopen.call_args.args[0]
+            self.assertEqual(request.full_url, "https://api.resend.com/emails")
+            self.assertEqual(request.get_header("Authorization"), "Bearer re_test_secret")
+            payload = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(payload["to"], ["trader@example.com"])
+            self.assertEqual(payload["from"], "Trading Lab <alerts@example.com>")
+            self.assertEqual(payload["subject"], "Test Subject")
+            self.assertIn("Test email body", payload["text"])
+            self.assertFalse(mock_urlopen.call_args.kwargs.get("headers"))
+
+    def test_resend_email_notification_rejects_http_error_without_leaking_key(self):
+        config = BotConfig(
+            resend_api_key="re_test_secret",
+            alert_email_from="alerts@example.com",
+            alert_email="trader@example.com",
+            dashboard_token="test_token",
+        )
+        with patch.object(TradingBot, "_setup_logging"), \
+             patch.object(TradingBot, "_setup_trade_log"), \
+             patch("exchange.ExchangeConnector"), \
+             patch("bot_engine.urllib.request.urlopen", side_effect=urllib.error.HTTPError(
+                 "https://api.resend.com/emails", 401, "Unauthorized", {}, io.BytesIO(b"secret response")
+             )), \
+             self.assertLogs("bot.engine", level="WARNING") as captured:
+            bot = TradingBot(config)
+            result = bot.send_notification("Test email body")
+        self.assertEqual(result["channels"]["email"], "failed")
+        self.assertNotIn("re_test_secret", "\n".join(captured.output))
+        self.assertNotIn("secret response", "\n".join(captured.output))
 
     def test_safety_halt_alert_contains_reason_and_remains_off_order_thread(self):
         bot = object.__new__(TradingBot)

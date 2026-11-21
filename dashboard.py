@@ -690,9 +690,9 @@ class WebDashboard:
             "notifications": {
                 "enabled": self.config.enable_notifications,
                 "telegram": bool(self.config.telegram_bot_token and self.config.telegram_chat_id),
-                "email": bool(
-                    self.config.enable_notifications and self.config.smtp_host and self.config.alert_email
-                ),
+                "email": bool(self.config.enable_notifications and self.config.alert_email and (
+                    self.config.smtp_host or getattr(self.config, "resend_api_key", "")
+                )),
                 "discord": bool(self.config.discord_webhook_url),
             },
         }
@@ -820,16 +820,16 @@ class WebDashboard:
             channel = details.get("channel")
             status = details.get("status")
             category = details.get("category")
-            if channel != "email" or status not in {"accepted_by_smtp", "failed"}:
+            if channel != "email" or status not in {"accepted_by_provider", "accepted_by_smtp", "failed"}:
                 return {}
             return {
                 "channel": "email",
                 "status": status,
                 "category": str(category or "trade_update")[:32],
                 "message": (
-                    "SMTP accepted the email for delivery; this does not confirm inbox placement."
-                    if status == "accepted_by_smtp" else
-                    "Email could not be accepted by SMTP. Check the service logs and mail settings."
+                    "The email provider accepted the message; this does not confirm inbox placement."
+                    if status in {"accepted_by_provider", "accepted_by_smtp"} else
+                    "The email provider did not accept the message. Check the service logs and mail settings."
                 ),
             }
         if event_type == "risk_equity_basis_migrated":
@@ -1202,7 +1202,9 @@ class WebDashboard:
         channels = []
         if self.config.telegram_bot_token and self.config.telegram_chat_id:
             channels.append("Telegram")
-        if self.config.smtp_host and self.config.alert_email:
+        if self.config.alert_email and (
+            getattr(self.config, "resend_api_key", "") or self.config.smtp_host
+        ):
             channels.append("Email/SMS")
         if self.config.discord_webhook_url:
             channels.append("Discord")
@@ -1210,7 +1212,7 @@ class WebDashboard:
         if not channels:
             return web.json_response({
                 "success": False,
-                "message": "No notification channels configured. Add Telegram, SMTP/Email, or Discord settings in Railway variables."
+                "message": "No notification channels configured. Add Resend HTTPS email, SMTP email, Telegram, or Discord settings in Railway variables."
             }, status=400)
 
         loop = asyncio.get_event_loop()
@@ -1233,8 +1235,8 @@ class WebDashboard:
                     "channels": channel_results,
                 }, status=502)
             descriptions = [
-                "Email accepted by SMTP (inbox delivery is not guaranteed)"
-                if name == "email" and status == "accepted_by_smtp"
+                "Email accepted by its provider (inbox delivery is not guaranteed)"
+                if name == "email" and status in {"accepted_by_provider", "accepted_by_smtp"}
                 else f"{name.title()} accepted"
                 for name, status in channel_results.items()
             ]
