@@ -356,6 +356,21 @@ class WebDashboard:
             self.bot.risk_manager.store.append_event("worker_started", {})
         except Exception as exc:
             logger.warning("Could not record worker start event: %s", type(exc).__name__)
+        if (self.config.exchange.paper_trading
+                and self.config.exchange.paper_environment == "demo"
+                and not getattr(self.bot.exchange, "is_fallback_simulated", False)):
+            try:
+                pending_reviews = self.bot._pending_external_close_accounting()
+            except Exception as exc:
+                pending_reviews = []
+                logger.warning("Could not inspect pending Demo trade accounting (%s)", type(exc).__name__)
+            if len(pending_reviews) == 1:
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, self.bot.reconcile_closed_external_trade)
+                if result.get("success"):
+                    logger.info("Completed verified historical Demo trade accounting review")
+                else:
+                    logger.warning("Historical Demo trade review remains pending: %s", result.get("message", "verification incomplete"))
         self.bg_task = asyncio.create_task(self.background_trading_loop(app))
         self._worker_state = "starting"
         logger.info("🚀 24/7 background trading worker activated.")
