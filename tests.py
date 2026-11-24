@@ -5085,6 +5085,7 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("handle_manual_demo_buy", dashboard)
         self.assertIn("Manual buys are available only on Binance Demo", engine)
         self.assertIn("operator-managed Demo position", engine)
+        self.assertIn("The exchange protective stop and configured target remain active", positions)
 
     def test_mobile_overflow_protection_in_css(self):
         """Verify CSS contains mobile overflow prevention rules and responsive layouts."""
