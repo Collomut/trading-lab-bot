@@ -1404,6 +1404,15 @@ footer {
   }
 }
 
+.manual-demo-card { margin: 14px 0 20px; }
+.manual-demo-card > summary { cursor: pointer; font-weight: 700; }
+.manual-demo-card[open] > summary { margin-bottom: 10px; }
+.manual-demo-card .notice { margin: 10px 0; }
+.manual-demo-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0 8px; }
+.manual-demo-actions label { color: var(--muted); font-size: 13px; }
+.manual-demo-actions select { min-width: 130px; }
+#manual-demo-status:empty { display: none; }
+
 /* Market pulse: compact, strategy-linked signal cards for the overview. */
 .market-pulse { margin: 16px 0; overflow: hidden; }
 .pulse-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }

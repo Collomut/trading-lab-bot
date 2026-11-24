@@ -244,6 +244,7 @@ class WebDashboard:
         self.app.router.add_post('/api/clear-route-halts', self.handle_clear_route_halts)
         self.app.router.add_post('/api/emergency-stop', self.handle_emergency_stop)
         self.app.router.add_post('/api/close-position', self.handle_close_position)
+        self.app.router.add_post('/api/manual-demo-buy', self.handle_manual_demo_buy)
         self.app.router.add_post('/api/reconcile-external-close', self.handle_reconcile_external_close)
         self.app.router.add_post('/api/reconcile-closed-trade', self.handle_reconcile_closed_trade)
         self.app.router.add_post('/api/testnet-smoke-trade', self.handle_testnet_smoke_trade)
@@ -684,6 +685,18 @@ class WebDashboard:
             "incomplete_trade_accounting": len(incomplete_sell_events),
             "positions": positions,
             "positions_count": len(positions),
+            "manual_demo_available": bool(
+                self.config.exchange.paper_trading
+                and self.config.exchange.paper_environment == "demo"
+                and not is_fallback_sim
+                and not risk._is_halted
+                and risk.entry_mode() == "ACTIVE"
+                and account_available
+                and self.bot._last_reconciliation_ok
+                and not risk.route_halts()
+                and not risk.store.unresolved_orders()
+            ),
+            "configured_symbols": [pair.strip() for pair in self.config.strategy.trading_pairs if pair.strip()],
             "external_close_recovery_available": bool(
                 self.config.exchange.paper_trading
                 and self.config.exchange.paper_environment == "demo"
@@ -1243,6 +1256,30 @@ class WebDashboard:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None, self.bot.close_position_manually, symbol.strip(), allow_loss_close
+        )
+        self._status_cache = None
+        status = 200 if result.get("success") else 409
+        return web.json_response(result, status=status)
+
+    async def handle_manual_demo_buy(self, request):
+        if not self._is_valid_origin(request):
+            return web.json_response({"success": False, "message": "Same-origin request required."}, status=403)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict):
+            return web.json_response({"success": False, "message": "Choose a configured market and confirm the Demo order."}, status=400)
+        symbol = payload.get("symbol")
+        request_id = payload.get("request_id")
+        if not isinstance(symbol, str) or not symbol.strip() or len(symbol) > 32:
+            return web.json_response({"success": False, "message": "Choose a valid configured market."}, status=400)
+        if payload.get("confirmed") is not True:
+            return web.json_response({"success": False, "message": "Confirm the Demo order before sending it."}, status=400)
+        self._status_cache = None
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, self.bot.manual_demo_buy, symbol.strip(), request_id
         )
         self._status_cache = None
         status = 200 if result.get("success") else 409

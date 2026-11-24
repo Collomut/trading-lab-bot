@@ -19,6 +19,7 @@ import os
 import math
 import threading
 import hashlib
+import re
 from decimal import Decimal, InvalidOperation
 import numpy as np
 import urllib.request
@@ -2436,11 +2437,12 @@ class TradingBot:
             msg = (
                 f"🟢 *BOT BUY EXECUTED*\n"
                 f"Pair: `{symbol}`\n"
-                f"Amount: `{fill_amount:.6f}`\n"
-                f"Entry Price: `${fill_price:,.2f}`\n"
-                f"Stop Loss: `{sl_text}`\n"
-                f"Take Profit: `{tp_text}`\n"
-                f"Reason: {signal.reason}"
+                + ("Entry Type: Manual Demo\n" if indicators.get("manual_operator") is True else "")
+                + f"Amount: `{fill_amount:.6f}`\n"
+                + f"Entry Price: `${fill_price:,.2f}`\n"
+                + f"Stop Loss: `{sl_text}`\n"
+                + f"Take Profit: `{tp_text}`\n"
+                + f"Reason: {signal.reason}"
             )
             self.send_notification(msg, subject=f"🟢 Bot BUY: {symbol} @ ${fill_price:,.2f}")
 
@@ -2468,6 +2470,13 @@ class TradingBot:
             return
 
         position = self.risk_manager.open_positions[symbol]
+        is_manual_operator_exit = bool(
+            isinstance(getattr(signal, "indicators", None), dict)
+            and signal.indicators.get("manual_operator") is True
+        )
+        if getattr(position, "route", "") == "manual_operator" and not is_manual_operator_exit:
+            logger.info("Strategy SELL for %s ignored: operator-managed Demo position; protective exits remain active", symbol)
+            return
         old_stop_price = position.stop_loss_price
         position_amount = position.amount
 
@@ -2533,7 +2542,8 @@ class TradingBot:
             record = self.risk_manager.close_position(
                 symbol=symbol,
                 exit_price=fill_price,
-                reason=f"Strategy signal: {signal.reason}",
+                reason=(f"Manual Demo exit: {signal.reason}" if is_manual_operator_exit
+                        else f"Strategy signal: {signal.reason}"),
                 fee_cost=fee_cost
             )
 
@@ -2546,13 +2556,107 @@ class TradingBot:
                 msg = (
                     f"🔴 *BOT SELL EXECUTED*\n"
                     f"Pair: `{symbol}`\n"
-                    f"Exit Price: `${fill_price:,.2f}`\n"
-                    f"P&L: {pnl_text}\n"
-                    f"Reason: {record.reason}"
+                    + ("Entry Type: Manual Demo exit\n" if is_manual_operator_exit else "")
+                    + f"Exit Price: `${fill_price:,.2f}`\n"
+                    + f"P&L: {pnl_text}\n"
+                    + f"Reason: {record.reason}"
                 )
                 subject_pnl = f"${record.pnl:+,.2f}" if record.accounting_complete else "pending reconciliation"
                 self.send_notification(msg, subject=f"🔴 Bot SELL: {symbol} (P&L: {subject_pnl})")
                 self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
+
+    def manual_demo_buy(self, symbol: str, request_id: str) -> dict:
+        """Open one operator-requested Demo position through normal risk and fill handling."""
+        allowed_symbols = {pair.strip() for pair in self.config.strategy.trading_pairs}
+        if not (self.config.exchange.paper_trading
+                and self.config.exchange.paper_environment == "demo"):
+            return {"success": False, "message": "Manual buys are available only on Binance Demo. No order was sent."}
+        if getattr(self.exchange, "is_fallback_simulated", False):
+            return {"success": False, "message": "Authenticated Binance Demo is unavailable. No order was sent."}
+        if symbol not in allowed_symbols:
+            return {"success": False, "message": "Choose a market configured for this bot."}
+        if not isinstance(request_id, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", request_id):
+            return {"success": False, "message": "The trade request could not be validated. Refresh and try again."}
+        if not self._cycle_lock.acquire(timeout=10):
+            return {"success": False, "message": "The bot is checking the account. Wait briefly and try again."}
+        try:
+            risk = self.risk_manager
+            if risk.entry_mode() != "ACTIVE" or risk._is_halted:
+                return {"success": False, "message": f"New Demo buys are paused by a safety control: {risk._halt_reason or 'entries are paused'}. No order was sent."}
+            if risk.route_halts():
+                return {"success": False, "message": "A strategy risk pause is active after losses. Manual buys cannot bypass it."}
+            position_limit = int(risk.config.max_open_positions)
+            if len(risk.open_positions) >= position_limit:
+                return {"success": False, "message": f"Position limit reached ({position_limit}). Close or wait for an open position before adding another."}
+            if symbol in risk.open_positions:
+                return {"success": False, "message": f"A {symbol} position is already open. Use Positions to review or close it."}
+            if not self._reconcile_exchange_state():
+                return {"success": False, "message": "The Demo account did not pass reconciliation. No order was sent; review the account warning first."}
+            if not self._last_reconciliation_ok or risk.store.unresolved_orders():
+                return {"success": False, "message": "Account reconciliation or an earlier order is still unresolved. No order was sent."}
+            decision_key = f"dashboard-manual-buy:{request_id.lower()}"
+            client_id = self._client_order_id(symbol, "buy", decision_key)
+            if risk.store.get_order(client_id):
+                return {"success": False, "message": "This request was already recorded. Check Positions and Logs before trying again."}
+
+            signal = TradeSignal(
+                Signal.BUY, symbol, 1.0,
+                "Manual Demo entry requested by operator",
+                {"manual_operator": True, "strategy": "manual_demo", "route": "manual_operator"},
+            )
+            self._handle_buy_signal(signal, decision_key=decision_key)
+            position = risk.open_positions.get(symbol)
+            if not position:
+                return {
+                    "success": False,
+                    "message": risk._halt_reason or "No buy was completed. A risk, market-quality, or exchange check blocked it; see Logs for the reason.",
+                }
+            details = {
+                "symbol": symbol,
+                "entry_price": position.entry_price,
+                "amount": position.amount,
+                "stop_loss_price": position.stop_loss_price,
+                "take_profit_price": position.take_profit_price,
+                "stop_protected": bool(position.stop_order_id),
+                "accounting_complete": bool(position.accounting_complete),
+                "manual_operator": True,
+            }
+            try:
+                risk.store.append_event("manual_demo_buy_completed", details)
+            except Exception:
+                logger.exception("Manual Demo buy completed but its audit event could not be saved for %s", symbol)
+            if not position.stop_order_id:
+                message = (
+                    f"Demo buy filled for {symbol}, but its exchange stop is not confirmed. "
+                    "New orders are halted. Do not retry; review the open position and Binance Demo order history now."
+                )
+            elif risk._is_halted:
+                message = (
+                    f"Demo buy opened and protected for {symbol}, but a safety pause is active: "
+                    f"{risk._halt_reason}. Do not place more orders until this is reviewed."
+                )
+            elif not position.accounting_complete:
+                message = (
+                    f"Demo buy opened and protected for {symbol}, but fee accounting is incomplete. "
+                    "The bot has halted new entries until the fill is reconciled."
+                )
+            else:
+                message = (
+                    f"Demo buy opened for {symbol} at about {position.entry_price:.8g}. "
+                    "The exchange stop is confirmed. The bot's strategy will not sell this operator-managed position; "
+                    "its configured protective stop and target still apply."
+                )
+            return {
+                "success": True,
+                **details,
+                "safety_halt": bool(risk._is_halted),
+                "message": message,
+            }
+        except Exception as exc:
+            logger.exception("Manual Demo buy failed for %s", symbol)
+            return {"success": False, "message": f"Manual Demo buy was not confirmed ({type(exc).__name__}). Check Positions and exchange order history before retrying."}
+        finally:
+            self._cycle_lock.release()
 
     def check_stop_loss_take_profit(self):
         """Check all open positions for Trailing SL, Breakeven, and TP triggers."""
@@ -2857,7 +2961,7 @@ class TradingBot:
             decision_key = f"dashboard-manual-close:{int(time.time() * 1000)}"
             signal = TradeSignal(
                 Signal.SELL, symbol, 1.0,
-                "Manually closed from dashboard", {},
+                "Manually closed from dashboard", {"manual_operator": True},
             )
             self._handle_sell_signal(signal, decision_key=decision_key)
 

@@ -114,7 +114,7 @@
           const body = table.createTBody();
           for (const [symbol, position] of entries) {
             const row = body.insertRow();
-            cell(row, symbol);
+            cell(row, position.route === 'manual_operator' ? `${symbol} · Manual Demo` : symbol);
             cell(row, Number(position.amount).toPrecision(7));
             cell(row, priceText(position.entry_price));
             cell(row, priceText(position.current_price));

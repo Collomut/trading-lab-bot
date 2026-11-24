@@ -1,7 +1,14 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m10"><script src="/assets/app.js?v=m10" defer></script></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Overview · Trading Lab</title><link rel="stylesheet" href="/assets/app.css?v=m11"><script src="/assets/app.js?v=m11" defer></script></head><body>
 <nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link active" href="/">Overview</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link" href="/strategy">Strategy</a><a class="nav-link" href="/experiments">Experiments</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav>
 <main class="container"><header class="page-head"><div><div class="eyebrow">Paper-trading dashboard</div><h1>Overview</h1></div><div class="status"><span id="dot" class="dot"></span><span id="connection" data-skeleton aria-busy="true">Connecting…</span></div></header>
 <div class="notice compact"><strong>Practice mode</strong><span id="mode" data-skeleton aria-busy="true">Loading…</span><span class="muted-inline">· App-monitored exits can fail during outages.</span></div>
+<details id="manual-demo-trade" class="card manual-demo-card" hidden>
+  <summary>Manual Demo trade</summary>
+  <p class="help">Practice an entry by eye. The bot uses its normal position size, position limit, and exchange stop. Strategy sell signals will not close this position; its stop and bot-monitored target still apply.</p>
+  <div class="notice compact"><strong>Demo order</strong><span>Price can move before fill. Fees and slippage can turn a gain into a loss. Available only with a healthy Binance Demo account.</span></div>
+  <div class="manual-demo-actions"><label for="manual-demo-symbol">Market</label><select id="manual-demo-symbol" class="button secondary" aria-label="Choose market"></select><button id="manual-demo-buy" type="button" class="button">Buy with bot sizing</button><a class="button secondary" href="/positions">Sell / manage positions</a></div>
+  <span id="manual-demo-status" class="help" role="status" aria-live="polite"></span>
+</details>
 <section class="card trading-controls-card"><div class="trading-controls-header"><strong>Trading controls</strong><div class="help">Resume requires a fresh successful account check. Safety-halt recovery also requires your review and no open bot positions or unresolved orders. Daily and drawdown limits stay in force.</div></div><div class="trading-controls-actions"><button id="entry-control" type="button" class="button">Pause entries</button><button id="review-demo-reset" type="button" class="button secondary" hidden style="display:none">Review Demo reset</button><button id="emergency-stop" type="button" class="button secondary">Emergency stop</button><button id="run-cycle" type="button" class="button secondary">Run check now</button><button id="test-alert" type="button" class="button secondary">Test alerts</button><button id="reconcile-external-close" type="button" class="button secondary" hidden style="display:none">Reconcile Demo sell</button><button id="review-closed-trade" type="button" class="button secondary" hidden style="display:none">Verify closed trade P&amp;L</button><button id="testnet-smoke" type="button" class="button secondary" hidden style="display:none">One-time Testnet smoke trade · up to $10</button></div><span id="control-status" class="help" aria-live="polite"></span></section>
 <div id="account-alert" class="notice compact" role="status" hidden style="display:none"><strong>Account check</strong><span id="account-message"></span></div>
 <div class="overview-metrics"><section class="card metric-card"><div class="metric-label">Available USDT</div><div class="metric" id="cash-balance" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Tracked account value</div><div class="metric" id="net-worth" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Estimated P&amp;L (Net)</div><div class="metric" id="pnl" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Open positions</div><div class="metric" id="open-count" data-skeleton aria-busy="true">—</div></section></div>
@@ -1184,6 +1191,32 @@ async function refreshStatus() {
                       (d.paper_environment || 'paper environment');
     $('mode').textContent = d.paper_trading ? `Paper trading · ${paperName} · no real orders` : 'Live mode reported';
 
+    const manualCard = $('manual-demo-trade');
+    const manualBuy = $('manual-demo-buy');
+    const manualSymbol = $('manual-demo-symbol');
+    const showManualDemo = Boolean(d.paper_trading && d.paper_environment === 'demo' && !d.fallback_simulated);
+    manualCard.hidden = !showManualDemo;
+    const manualPairs = d.configured_symbols || [];
+    const selectedManualPair = manualSymbol.value;
+    if (manualPairs.join('|') !== [...manualSymbol.options].map(option => option.value).join('|')) {
+      manualSymbol.replaceChildren();
+      for (const pair of manualPairs) {
+        const option = document.createElement('option');
+        option.value = pair;
+        option.textContent = pair;
+        manualSymbol.append(option);
+      }
+      if (manualPairs.includes(selectedManualPair)) manualSymbol.value = selectedManualPair;
+    }
+    const atPositionLimit = d.positions_count >= d.max_positions;
+    const manualStatus = $('manual-demo-status');
+    manualBuy.disabled = !d.manual_demo_available || atPositionLimit || manualPairs.length === 0 || manualStatus.dataset.result === 'uncertain';
+    if (!manualStatus.dataset.result) manualStatus.textContent = atPositionLimit
+      ? `Position limit reached (${d.positions_count} of ${d.max_positions}). Close or wait for a position before adding another.`
+      : !d.manual_demo_available && showManualDemo
+      ? (d.halted ? `Safety pause: ${d.halt_reason}` : d.entry_mode !== 'ACTIVE' ? 'Entries are paused. Resume after the account and risk checks pass.' : !d.account_available || !d.exchange_reconciled ? 'Account check is not healthy; manual orders are disabled.' : d.route_halts && Object.keys(d.route_halts).length ? 'A strategy risk pause is active. Manual orders cannot bypass it.' : 'A previous order is still being reconciled; try again after it clears.')
+      : '';
+
     const paused = d.entry_mode === 'EXIT_ONLY';
     const manualResume = Boolean(d.manual_resume_available || d.review_required);
     const haltLocked = Boolean(d.halted && !manualResume);
@@ -1408,6 +1441,38 @@ $('test-alert').addEventListener('click', async () => {
     $('control-status').textContent = e.message;
   } finally {
     btn.disabled = false;
+  }
+});
+
+$('manual-demo-buy').addEventListener('click', async () => {
+  const symbol = $('manual-demo-symbol').value;
+  if (!symbol) return;
+  const confirmed = confirm(`Buy ${symbol} on Binance Demo using the bot's normal risk-based size?\n\nAn exchange stop will be set and the bot will monitor its target. This counts toward the ${$('open-count').textContent.split('/').pop().trim()}-position limit. Strategy sell signals will leave this operator-managed position open. Market prices, fees, and slippage can cause losses; bot-monitored exits can be disrupted by an outage.\n\nNo real funds will be used.`);
+  if (!confirmed) return;
+  const button = $('manual-demo-buy');
+  const status = $('manual-demo-status');
+  delete status.dataset.result;
+  button.disabled = true;
+  status.textContent = `Checking account and submitting Demo buy for ${symbol}…`;
+  try {
+    const response = await fetch('/api/manual-demo-buy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, confirmed: true, request_id: crypto.randomUUID().replaceAll('-', '') }),
+    });
+    const result = await response.json();
+    status.textContent = result.message || (response.ok ? 'Demo buy completed.' : 'No buy was completed.');
+    status.className = `help ${result.success && result.stop_protected && !result.safety_halt ? 'positive' : 'negative'}`;
+    status.dataset.result = '1';
+    await refreshStatus();
+  } catch (_) {
+    status.textContent = 'The result could not be confirmed. Check Positions and Binance Demo order history before trying again.';
+    status.className = 'help negative';
+    status.dataset.result = 'uncertain';
+    button.disabled = true;
+    button.title = 'Result uncertain. Check the position and Demo order history, then reload before retrying.';
+  } finally {
+    await refreshStatus();
   }
 });
 

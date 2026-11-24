@@ -2488,6 +2488,93 @@ class FakeExchange:
 class TestBotEngineOrderLifecycle(unittest.TestCase):
     """Verifies complete order execution, fee deduction, stop loss synchronization, recovery, and alerts."""
 
+    def test_manual_demo_buy_reuses_risk_checks_and_marks_operator_managed_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.exchange = SimpleNamespace(is_fallback_simulated=False)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot._cycle_lock = threading.Lock()
+            bot._last_reconciliation_ok = False
+            bot._reconcile_exchange_state = Mock(side_effect=lambda: setattr(bot, "_last_reconciliation_ok", True) or True)
+
+            def simulate_entry(signal, decision_key):
+                self.assertEqual(signal.signal, Signal.BUY)
+                self.assertTrue(signal.indicators["manual_operator"])
+                self.assertEqual(signal.indicators["route"], "manual_operator")
+                self.assertIn("dashboard-manual-buy:", decision_key)
+                position = bot.risk_manager.open_position(
+                    signal.symbol, 100.0, 1.0, order_id="demo-buy-1", route="manual_operator"
+                )
+                position.stop_order_id = "demo-stop-1"
+
+            bot._handle_buy_signal = Mock(side_effect=simulate_entry)
+            result = bot.manual_demo_buy("BTC/USDT", "0123456789abcdef0123456789abcdef")
+
+            self.assertTrue(result["success"])
+            self.assertTrue(result["stop_protected"])
+            self.assertEqual(bot.risk_manager.open_positions["BTC/USDT"].route, "manual_operator")
+            bot._reconcile_exchange_state.assert_called_once_with()
+            bot._handle_buy_signal.assert_called_once()
+
+    def test_manual_demo_buy_fails_closed_outside_demo_or_with_safety_halt(self):
+        bot = object.__new__(TradingBot)
+        bot.config = SimpleNamespace(
+            exchange=SimpleNamespace(paper_trading=True, paper_environment="testnet"),
+            strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+        )
+        bot.exchange = SimpleNamespace(is_fallback_simulated=False)
+        self.assertFalse(bot.manual_demo_buy("BTC/USDT", "0123456789abcdef0123456789abcdef")["success"])
+
+        with TemporaryDirectory() as persistence_dir:
+            bot.config.exchange.paper_environment = "demo"
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.halt("Test safety halt")
+            bot._cycle_lock = threading.Lock()
+            bot._reconcile_exchange_state = Mock()
+            result = bot.manual_demo_buy("BTC/USDT", "0123456789abcdef0123456789abcdef")
+            self.assertFalse(result["success"])
+            self.assertIn("safety control", result["message"])
+            bot._reconcile_exchange_state.assert_not_called()
+
+    def test_manual_demo_buy_obeys_open_position_limit_without_reconciling_or_ordering(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT", "ETH/USDT"]),
+            )
+            bot.exchange = SimpleNamespace(is_fallback_simulated=False)
+            bot.risk_manager = RiskManager(RiskConfig(max_open_positions=1), persistence_dir=persistence_dir)
+            bot.risk_manager.open_position("ETH/USDT", 100.0, 1.0)
+            bot._cycle_lock = threading.Lock()
+            bot._reconcile_exchange_state = Mock()
+
+            result = bot.manual_demo_buy("BTC/USDT", "0123456789abcdef0123456789abcdef")
+
+            self.assertFalse(result["success"])
+            self.assertIn("Position limit reached", result["message"])
+            bot._reconcile_exchange_state.assert_not_called()
+
+    def test_strategy_sell_does_not_override_operator_managed_demo_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.open_position("BTC/USDT", 100.0, 1.0, route="manual_operator")
+            bot.exchange = Mock()
+            bot.exchange.get_current_price.return_value = 100.0
+            bot._submit_market_order = Mock()
+            bot._cancel_exchange_stop = Mock()
+
+            bot._handle_sell_signal(TradeSignal(Signal.SELL, "BTC/USDT", 1.0, "strategy exit", {}))
+
+            self.assertIn("BTC/USDT", bot.risk_manager.open_positions)
+            bot._submit_market_order.assert_not_called()
+            bot._cancel_exchange_stop.assert_not_called()
+
     def test_status_log_reports_selected_environment_and_neutral_atr_target(self):
         bot = object.__new__(TradingBot)
         bot.config = SimpleNamespace(
@@ -4262,6 +4349,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
 
             def close_from_signal(signal, decision_key):
                 self.assertEqual(signal.signal, Signal.SELL)
+                self.assertTrue(signal.indicators["manual_operator"])
                 self.assertIn("dashboard-manual-close:", decision_key)
                 bot.risk_manager.close_position(
                     signal.symbol, 110.0, signal.reason, fee_cost=0.5
@@ -4983,6 +5071,20 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("No order has been sent yet", positions)
         self.assertIn("prices[sym] = float(p)", dashboard)
         self.assertIn("const priceText", positions)
+
+    def test_manual_demo_controls_explain_risk_and_reuse_positions_sell_flow(self):
+        overview = (Path("templates") / "overview.html").read_text(encoding="utf-8")
+        positions = (Path("templates") / "positions.html").read_text(encoding="utf-8")
+        dashboard = (Path("dashboard.py")).read_text(encoding="utf-8")
+        engine = (Path("bot_engine.py")).read_text(encoding="utf-8")
+        self.assertIn("Manual Demo trade", overview)
+        self.assertIn("Fees and slippage can turn a gain into a loss", overview)
+        self.assertIn("/api/manual-demo-buy", overview)
+        self.assertIn("/api/close-position", positions)
+        self.assertIn("Manual Demo", positions)
+        self.assertIn("handle_manual_demo_buy", dashboard)
+        self.assertIn("Manual buys are available only on Binance Demo", engine)
+        self.assertIn("operator-managed Demo position", engine)
 
     def test_mobile_overflow_protection_in_css(self):
         """Verify CSS contains mobile overflow prevention rules and responsive layouts."""
