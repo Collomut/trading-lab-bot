@@ -94,6 +94,21 @@ from regime_router import REGIME_ROUTE_POLICY, evaluate_regime_router
 
 
 class TestShadowLogSafety(unittest.TestCase):
+    def test_order_activity_log_exposes_origin_without_sensitive_fields(self):
+        safe = WebDashboard._safe_log_details("order_status", {
+            "symbol": "BTC/USDT", "side": "buy", "state": "FILLED",
+            "source": "manual", "api_key": "must not pass",
+        })
+        self.assertEqual(safe["source"], "manual")
+        self.assertNotIn("api_key", safe)
+
+        safe_manual_entry = WebDashboard._safe_log_details("manual_demo_buy_completed", {
+            "symbol": "BTC/USDT", "entry_price": 100, "amount": 1,
+            "stop_protected": True, "secret": "must not pass",
+        })
+        self.assertTrue(safe_manual_entry["stop_protected"])
+        self.assertNotIn("secret", safe_manual_entry)
+
     def test_email_delivery_log_is_allowlisted_and_explains_provider_status(self):
         safe = WebDashboard._safe_log_details("notification_delivery", {
             "channel": "email", "status": "accepted_by_provider", "category": "safety_halt",
@@ -1803,6 +1818,16 @@ class TestStateStoreAndPersistence(unittest.TestCase):
             
             with self.assertRaises(ValueError):
                 store.update_order("client_1", "SUBMITTED")
+
+    def test_order_activity_records_manual_and_bot_origin(self):
+        with TemporaryDirectory() as tmpdir:
+            store = StateStore(Path(tmpdir) / "state.db")
+            store.create_order_intent("manual_1", "BTC/USDT", "BUY", "0.1", {"source": "manual"})
+            store.update_order("manual_1", "SUBMITTED")
+            store.create_order_intent("bot_1", "ETH/USDT", "BUY", "0.2", {"source": "bot"})
+            events = store.list_events(10, event_type="order_status")
+            sources = {event["details"]["source"] for event in events}
+            self.assertEqual(sources, {"manual", "bot"})
 
     def test_positions_read_write_roundtrip(self):
         with TemporaryDirectory() as tmpdir:
@@ -5120,12 +5145,21 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
 
     def test_manual_demo_controls_explain_risk_and_reuse_positions_sell_flow(self):
         overview = (Path("templates") / "overview.html").read_text(encoding="utf-8")
+        trade_desk = (Path("templates") / "trade_desk.html").read_text(encoding="utf-8")
         positions = (Path("templates") / "positions.html").read_text(encoding="utf-8")
         dashboard = (Path("dashboard.py")).read_text(encoding="utf-8")
         engine = (Path("bot_engine.py")).read_text(encoding="utf-8")
-        self.assertIn("Manual Demo trade", overview)
-        self.assertIn("Fees and slippage can turn a gain into a loss", overview)
-        self.assertIn("/api/manual-demo-buy", overview)
+        self.assertIn('href="/trade-desk">Trade desk', overview)
+        self.assertNotIn('id="manual-demo-trade"', overview)
+        self.assertIn("Manual order", trade_desk)
+        self.assertIn("Fees, slippage, and outages can cause losses", trade_desk)
+        self.assertIn("/api/manual-demo-buy", trade_desk)
+        self.assertIn("/api/close-position", trade_desk)
+        self.assertIn("manual_close_available", trade_desk)
+        self.assertIn("allow_loss_close:true", trade_desk)
+        self.assertIn("/api/candles", trade_desk)
+        self.assertIn('order_status:', (Path("templates") / "logs.html").read_text(encoding="utf-8"))
+        self.assertIn("Origin not recorded", (Path("templates") / "trade_desk.html").read_text(encoding="utf-8"))
         self.assertIn("/api/close-position", positions)
         self.assertIn("Manual Demo", positions)
         self.assertIn("handle_manual_demo_buy", dashboard)

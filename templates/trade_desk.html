@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>Trade desk · Trading Lab</title>
+  <link rel="stylesheet" href="/assets/app.css?v=m13">
+  <script src="/assets/app.js?v=m13" defer></script>
+</head>
+<body>
+<nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link" href="/">Overview</a><a class="nav-link active" href="/trade-desk">Trade desk</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link" href="/strategy">Strategy</a><a class="nav-link" href="/experiments">Experiments</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch theme"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav>
+<main class="container trade-desk">
+  <header class="page-head"><div><div class="eyebrow">Market &amp; orders</div><h1>Trade desk</h1><p class="intro">Watch configured markets and place a guarded manual order on Binance Demo.</p></div><div class="status"><span id="desk-dot" class="dot"></span><span id="desk-updated">Connecting…</span></div></header>
+  <div class="notice compact trade-mode-notice"><strong id="desk-mode">Checking account…</strong><span>Demo orders use practice funds. This page cannot place live orders.</span></div>
+
+  <section class="trade-layout" aria-label="Market chart and order controls">
+    <section class="card trade-chart-card">
+      <div class="trade-chart-head"><div><div class="eyebrow">Market chart <span class="trade-live-indicator"><i></i> Live · 15 sec</span></div><div class="trade-quote"><strong id="chart-price">—</strong><span id="chart-change" class="tag" title="Change across the candles currently loaded">—</span></div></div><div class="trade-chart-controls"><label class="sr-only" for="desk-symbol">Market</label><select id="desk-symbol" class="button secondary" aria-label="Choose market"></select><label class="sr-only" for="desk-timeframe">Chart interval</label><select id="desk-timeframe" class="button secondary" aria-label="Choose chart interval"><option value="15m">15 minutes</option><option value="1h" selected>1 hour</option><option value="4h">4 hours</option><option value="1d">1 day</option></select></div></div>
+      <div class="trade-chart-wrap"><canvas id="desk-chart" aria-label="Live candlestick chart"></canvas><div id="chart-empty" class="trade-chart-empty" hidden>Market candles are temporarily unavailable.</div></div>
+      <div class="trade-chart-foot"><span><i class="chart-legend-up"></i> Rising</span><span><i class="chart-legend-down"></i> Falling</span><span id="chart-time">Waiting for market data</span></div>
+    </section>
+
+    <aside class="card trade-order-card">
+      <div class="eyebrow">Manual order</div><h2 id="desk-action-title">Buy or close</h2>
+      <p class="help">A buy uses the bot’s normal sizing, protective stop, position limit, and account checks. A close uses the existing guarded exit flow. Both are recorded as manual actions in Logs.</p>
+      <div class="trade-facts"><div><span>Available funds</span><strong id="desk-cash">—</strong></div><div><span>Open positions</span><strong id="desk-positions">—</strong></div><div><span>Account check</span><strong id="desk-account-state">Checking…</strong></div></div>
+      <div id="desk-safety" class="notice compact" role="status" aria-live="polite">Checking account safeguards…</div>
+      <a id="desk-review-link" class="button secondary trade-manage" href="/#trading-controls" hidden>Review account status</a>
+      <button id="desk-buy" class="button trade-buy" type="button" disabled>Buy with bot sizing</button>
+      <button id="desk-close" class="button trade-close" type="button" hidden disabled>Close position</button>
+      <a class="button secondary trade-manage" href="/positions">Manage or close a position</a>
+      <div id="desk-order-status" class="help" role="status" aria-live="polite"></div>
+      <p class="trade-caution">Orders may fill at a different price than shown. Fees, slippage, gaps, and outages can cause losses. A safety pause cannot be bypassed here.</p>
+    </aside>
+  </section>
+
+  <section class="card trade-activity-card"><div class="trade-activity-heading"><div class="eyebrow">Recent activity</div><h2>Order activity</h2><p class="help">See whether an order came from you or the automatic strategy.</p></div><div id="desk-activity" class="trade-activity-list" aria-live="polite">Loading recent orders…</div><a class="button secondary" href="/logs">Open Logs</a></section>
+  <footer>Market candles and prices refresh periodically; updates are not a trading forecast. <a href="/terms">Read the glossary</a></footer>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const canvas = $('desk-chart'), ctx = canvas.getContext('2d');
+  let status = null, candles = [], refreshTimer;
+  const money = n => Number.isFinite(Number(n)) ? '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) : 'Unavailable';
+  const number = n => Number.isFinite(Number(n)) ? Number(n).toLocaleString(undefined,{maximumFractionDigits:8}) : '—';
+  function draw() {
+    const rect = canvas.getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
+    if (!rect.width || !rect.height) return;
+    canvas.width = Math.round(rect.width * ratio); canvas.height = Math.round(rect.height * ratio);
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    const w = rect.width, h = rect.height, pad = {l:10,r:66,t:18,b:28};
+    ctx.clearRect(0,0,w,h);
+    if (!candles.length) return;
+    const shown = candles.slice(-70), lows = shown.map(c=>c.low), highs = shown.map(c=>c.high);
+    const lo=Math.min(...lows), hi=Math.max(...highs), span=Math.max(hi-lo,Math.abs(hi)*0.001,1e-8);
+    const y=v=>pad.t+(hi-v)/span*(h-pad.t-pad.b), slot=(w-pad.l-pad.r)/shown.length, body=Math.max(2,slot*.58);
+    ctx.font='11px system-ui, sans-serif'; ctx.textAlign='right'; ctx.textBaseline='middle';
+    for(let i=0;i<5;i++){const val=hi-span*i/4, yy=y(val);ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--line').trim()||'#303030';ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#888';ctx.fillText(number(val),w-6,yy);}
+    shown.forEach((c,i)=>{const x=pad.l+i*slot+slot/2, up=c.close>=c.open, color=up?'#27bd8a':'#f04e63';ctx.strokeStyle=color;ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(x,y(c.high));ctx.lineTo(x,y(c.low));ctx.stroke();const top=y(Math.max(c.open,c.close)), bottom=y(Math.min(c.open,c.close));ctx.fillRect(x-body/2,top,body,Math.max(1,bottom-top));});
+    const last=shown[shown.length-1], yy=y(last.close);ctx.setLineDash([4,3]);ctx.strokeStyle='#d7b252';ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#d7b252';ctx.fillRect(w-pad.r+3,yy-10,pad.r-5,20);ctx.fillStyle='#111';ctx.textAlign='center';ctx.fillText(number(last.close),w-pad.r/2,yy);
+  }
+  async function loadCandles() {
+    const symbol=$('desk-symbol').value;if(!symbol)return;
+    try{const q=new URLSearchParams({symbol,timeframe:$('desk-timeframe').value});const r=await fetch('/api/candles?'+q,{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'Market data unavailable');candles=d.candles||[];$('chart-empty').hidden=!!candles.length;draw();if(candles.length>1){const first=Number(candles[0].close),last=Number(candles[candles.length-1].close),change=first?((last-first)/first*100):0;$('chart-change').textContent=`${change>=0?'+':''}${change.toFixed(2)}%`;$('chart-change').className='tag '+(change>=0?'positive':'negative');}$('chart-time').textContent='Updated '+new Date().toLocaleTimeString();}
+    catch(_){$('chart-empty').hidden=false;$('chart-time').textContent='Waiting for market data';}
+  }
+  async function refreshStatus() {
+    try{
+      const r=await fetch('/api/status',{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.error||'Account status unavailable');status=d;
+      const pairs=d.configured_symbols||[], select=$('desk-symbol'), old=select.value;
+      if(pairs.join('|')!==[...select.options].map(o=>o.value).join('|')){select.replaceChildren(...pairs.map(pair=>{const o=document.createElement('option');o.value=pair;o.textContent=pair;return o;}));if(pairs.includes(old))select.value=old;}
+      const quote=Number((d.prices||{})[select.value]);$('chart-price').textContent=money(quote);$('desk-cash').textContent=d.account_available?money(d.cash_balance):'Unavailable';$('desk-positions').textContent=`${d.positions_count||0} / ${d.max_positions||0}`;
+      const clean=Boolean(d.account_available&&d.exchange_reconciled&&!d.halted&&(!d.route_halts||Object.keys(d.route_halts).length===0)&&d.entry_mode==='ACTIVE');
+      $('desk-dot').className='dot '+(clean?'ok':'bad');$('desk-mode').textContent=d.paper_trading&&d.paper_environment==='demo'&&!d.fallback_simulated?'Binance Demo · Practice funds':d.fallback_simulated?'Simulated fallback · orders disabled':d.paper_trading?`Practice mode · ${d.paper_environment||'paper'} · manual orders disabled`:'Live mode · manual controls disabled';
+      $('desk-account-state').textContent=d.halted?'Safety pause active':d.account_available&&d.exchange_reconciled?'Checked':'Needs review';
+      $('desk-review-link').hidden=!Boolean(d.manual_resume_available||d.review_required);
+      $('desk-safety').textContent=d.halted?`Safety pause: ${d.halt_reason||'operator review required'}. Run an account check on Overview; resume only after the check passes.`:!d.manual_demo_available?(!d.account_available||!d.exchange_reconciled?'Account check is not ready. No order can be sent.':d.entry_mode!=='ACTIVE'?'Entries are paused. Resume after account and risk checks pass.':'A risk or position limit blocks new entries. Manual orders cannot bypass it.'):'Account and risk checks passed. A confirmed Demo order can be submitted.';
+      const selectedPosition=(d.positions||{})[select.value],atPos=Boolean(selectedPosition);
+      $('desk-action-title').textContent=atPos?'Close '+select.value:'Buy '+select.value;
+      $('desk-buy').hidden=atPos;
+      $('desk-close').hidden=!atPos;
+      $('desk-buy').disabled=!d.manual_demo_available||!pairs.includes(select.value);
+      $('desk-close').disabled=!d.manual_close_available;
+      $('desk-close').textContent=d.manual_close_available?'Close full position at market':'Close paused · account review needed';
+      $('desk-updated').textContent='Status updated '+new Date().toLocaleTimeString();
+    }catch(_){$('desk-dot').className='dot bad';$('desk-updated').textContent='Status unavailable';$('desk-buy').disabled=true;$('desk-safety').textContent='Account status could not be verified. Orders are disabled.';}
+  }
+  async function refreshActivity() {
+    try {
+      const r=await fetch('/api/logs?limit=60',{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error('Activity unavailable');
+      const events=(d.events||[]).filter(e=>['order_status','manual_demo_buy_completed'].includes(e.type)).slice(0,4), list=$('desk-activity');list.replaceChildren();
+      if(!events.length){list.textContent='No recent orders recorded.';return;}
+      for(const e of events){const details=e.details||{},row=document.createElement('div');row.className='trade-activity-row';const title=document.createElement('strong');const origin=e.type==='manual_demo_buy_completed'?'Manual':details.source==='manual'?'Manual':details.source==='bot'?'Bot':'Origin not recorded';title.textContent=`${origin} · ${String(details.side||'BUY').toUpperCase()} ${details.symbol||'market'}`;const state=document.createElement('span');state.textContent=e.type==='manual_demo_buy_completed'?'Opened':details.state||'Order update';const time=document.createElement('time');const date=new Date(e.created_at);time.textContent=Number.isNaN(date.getTime())?'':date.toLocaleString();row.append(title,state,time);list.append(row);}
+    } catch (_) {$('desk-activity').textContent='Recent order activity is temporarily unavailable.';}
+  }
+  $('desk-symbol').addEventListener('change',()=>{loadCandles();refreshStatus();});
+  $('desk-timeframe').addEventListener('change',loadCandles);
+  $('desk-buy').addEventListener('click',async()=>{
+    const symbol=$('desk-symbol').value;if(!status?.manual_demo_available||!symbol)return;
+    const confirmed=confirm(`Buy ${symbol} on Binance Demo using the bot's normal risk-based size? This counts toward the position limit and will use the configured protective stop. Strategy sell signals will not close this manual position. Fees, slippage, and outages can cause losses. No real funds will be used.`);
+    if(!confirmed)return;
+    const btn=$('desk-buy'),out=$('desk-order-status');btn.disabled=true;out.textContent=`Checking account and submitting Demo buy for ${symbol}…`;
+    try{const r=await fetch('/api/manual-demo-buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,confirmed:true,request_id:crypto.randomUUID().replaceAll('-','')})});const d=await r.json();out.textContent=d.message||(r.ok?'Demo order completed.':'No order was completed.');out.className='help '+(d.success?'positive':'negative');await refreshStatus();await loadCandles();}
+    catch(_){out.textContent='Order result could not be confirmed. Do not retry yet; check Positions, Logs, and Binance Demo order history.';out.className='help negative';}
+    finally{await refreshStatus();}
+  });
+  $('desk-close').addEventListener('click',async()=>{
+    const symbol=$('desk-symbol').value,position=(status?.positions||{})[symbol];
+    if(!symbol||!position||!status?.manual_close_available)return;
+    const estimated=position.estimated_net_pnl==null?'Unavailable':money(position.estimated_net_pnl);
+    const estimatePct=position.estimated_net_pnl_pct==null?'':` (${Number(position.estimated_net_pnl_pct).toFixed(2)}%)`;
+    if(!confirm(`Close the full ${symbol} position at market now?\n\nEstimated net result: ${estimated}${estimatePct}. Actual proceeds can differ due to price movement, slippage, and final fees. This sends a manual Demo sell and is recorded in Logs.`))return;
+    const btn=$('desk-close'),out=$('desk-order-status');btn.disabled=true;out.textContent=`Checking the account and submitting a market close for ${symbol}…`;
+    try{
+      let r=await fetch('/api/close-position',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,allow_loss_close:false})});let d=await r.json();
+      if(d.requires_confirmation){
+        const protection=position.route==='manual_operator'?'The exchange protective stop remains active.':'The bot will continue monitoring its stop and strategy exits.';
+        if(confirm(`${d.message}\n\nNo order has been sent yet. Do you explicitly want to close anyway? ${protection}`)){
+          r=await fetch('/api/close-position',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,allow_loss_close:true})});d=await r.json();
+        }else{out.textContent='No sell order was sent. The position remains open.';out.className='help';return;}
+      }
+      out.textContent=d.message||'Close request completed.';out.className='help '+(d.success?'positive':'negative');
+      await refreshStatus();await refreshActivity();
+    }catch(_){out.textContent='Close result could not be confirmed. Check Positions, Logs, and Binance Demo order history before retrying.';out.className='help negative';}
+    finally{await refreshStatus();}
+  });
+  new ResizeObserver(draw).observe(canvas);
+  refreshStatus().then(loadCandles);refreshActivity();
+  refreshTimer=setInterval(()=>{refreshStatus();loadCandles();refreshActivity();},15000);
+})();
+</script>
+</body>
+</html>

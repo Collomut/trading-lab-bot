@@ -451,7 +451,8 @@ class PostgresStateStore:
                   Jsonb(request), self._now(), self._now()))
         try:
             self.append_event("order_status", {"symbol": symbol, "side": side.lower(),
-                                               "amount": str(amount), "state": "PENDING"})
+                                                "amount": str(amount), "state": "PENDING",
+                                                "source": request.get("source", "unknown") if isinstance(request, dict) else "unknown"})
         except Exception:
             pass
 
@@ -475,6 +476,8 @@ class PostgresStateStore:
                   self._now(), client_order_id))
         details = {"symbol": row["symbol"], "side": row["side"].lower(),
                    "amount": row["amount"], "state": state}
+        request = row.get("request_json") or {}
+        details["source"] = request.get("source", "unknown") if isinstance(request, dict) else "unknown"
         if filled is not None:
             details["filled"] = str(filled)
         if average is not None:

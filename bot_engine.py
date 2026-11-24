@@ -745,7 +745,8 @@ class TradingBot:
         client_id = self._client_order_id(symbol, side, str(decision_key))
         self.risk_manager.store.create_order_intent(
             client_id, symbol, side, format(amount_decimal, "f"),
-            {"symbol": symbol, "side": side, "amount": format(amount_decimal, "f")},
+            {"symbol": symbol, "side": side, "amount": format(amount_decimal, "f"),
+             "source": "manual" if str(decision_key).startswith("dashboard-manual-") else "bot"},
         )
         self.risk_manager.store.update_order(client_id, "SUBMITTED")
         try:
@@ -824,7 +825,8 @@ class TradingBot:
         client_id = self._client_order_id(symbol, "buy", str(decision_key))
         self.risk_manager.store.create_order_intent(
             client_id, symbol, "buy", format(amount_decimal, "f"),
-            {"symbol": symbol, "side": "buy", "amount": format(amount_decimal, "f"), "post_only": True},
+            {"symbol": symbol, "side": "buy", "amount": format(amount_decimal, "f"), "post_only": True,
+             "source": "manual" if str(decision_key).startswith("dashboard-manual-") else "bot"},
         )
         self.risk_manager.store.update_order(client_id, "SUBMITTED")
         last_attempt_client_id = client_id

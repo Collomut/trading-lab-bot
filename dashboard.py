@@ -227,6 +227,7 @@ class WebDashboard:
         self.app.router.add_get('/history', self.handle_history)
         self.app.router.add_get('/logs', self.handle_logs)
         self.app.router.add_get('/strategy', self.handle_strategy)
+        self.app.router.add_get('/trade-desk', self.handle_trade_desk)
         self.app.router.add_get('/experiments', self.handle_experiments)
         self.app.router.add_get('/terms', self.handle_terms)
         self.app.router.add_get('/assets/{name}', self.handle_asset)
@@ -277,9 +278,17 @@ class WebDashboard:
     async def handle_experiments(self, request):
         return await self._serve_page("experiments.html")
 
+    async def handle_trade_desk(self, request):
+        return await self._serve_page("trade_desk.html")
+
     async def _serve_page(self, filename):
         html_path = Path(__file__).parent / "templates" / filename
-        resp = web.FileResponse(html_path)
+        try:
+            page = html_path.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("Dashboard page could not be read: %s", filename)
+            raise web.HTTPServiceUnavailable(text="Dashboard page is temporarily unavailable.")
+        resp = web.Response(text=page, content_type="text/html")
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
@@ -287,11 +296,18 @@ class WebDashboard:
 
     async def handle_asset(self, request):
         # Only serve explicitly supported shared assets; never accept arbitrary paths.
-        assets = {"app.css": "app.css", "app.js": "app.js"}
+        assets = {"app.css": ("app.css", "text/css"), "app.js": ("app.js", "application/javascript")}
         asset_path = assets.get(request.match_info.get("name"))
         if asset_path is None:
             raise web.HTTPNotFound()
-        resp = web.FileResponse(Path(__file__).parent / "templates" / asset_path)
+        asset_name, content_type = asset_path
+        asset_file = Path(__file__).parent / "templates" / asset_name
+        try:
+            content = asset_file.read_bytes()
+        except OSError:
+            logger.exception("Dashboard asset could not be read: %s", asset_name)
+            raise web.HTTPServiceUnavailable(text="Dashboard assets are temporarily unavailable.")
+        resp = web.Response(body=content, content_type=content_type)
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
@@ -698,6 +714,13 @@ class WebDashboard:
                 and not risk.route_halts()
                 and not risk.store.unresolved_orders()
             ),
+            "manual_close_available": bool(
+                self.config.exchange.paper_trading
+                and not is_fallback_sim
+                and account_available
+                and self.bot._last_reconciliation_ok
+                and not risk.store.unresolved_orders()
+            ),
             "configured_symbols": [pair.strip() for pair in self.config.strategy.trading_pairs if pair.strip()],
             "external_close_recovery_available": bool(
                 self.config.exchange.paper_trading
@@ -873,8 +896,16 @@ class WebDashboard:
         if event_type == "order_status":
             return {
                 key: str(details[key])[:80]
-                for key in ("symbol", "side", "amount", "state", "filled", "average")
+                for key in ("symbol", "side", "amount", "state", "filled", "average", "source")
                 if details.get(key) is not None
+            }
+        if event_type == "manual_demo_buy_completed":
+            return {
+                "symbol": str(details.get("symbol", ""))[:32],
+                "entry_price": str(details.get("entry_price", ""))[:80],
+                "amount": str(details.get("amount", ""))[:80],
+                "stop_protected": bool(details.get("stop_protected", False)),
+                "message": "Operator-requested Binance Demo buy; processed through the bot's normal sizing and risk checks.",
             }
         if event_type == "order_reconciled_no_fill":
             return {

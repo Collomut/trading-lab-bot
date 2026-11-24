@@ -175,6 +175,7 @@ class StateStore:
         try:
             self.append_event("order_status", {
                 "symbol": symbol, "side": side_value.lower(), "amount": amount_value, "state": "PENDING",
+                "source": request.get("source", "unknown") if isinstance(request, dict) else "unknown",
             })
         except Exception:
             # Audit visibility is best-effort; it must not block a safety-managed order flow.
@@ -199,6 +200,13 @@ class StateStore:
             "amount": row["amount"],
             "state": state,
         }
+        try:
+            request = row.get("request_json") or "{}"
+            if isinstance(request, str):
+                request = json.loads(request)
+            details["source"] = request.get("source", "unknown") if isinstance(request, dict) else "unknown"
+        except (TypeError, ValueError, json.JSONDecodeError):
+            details["source"] = "unknown"
         if filled_value is not None:
             details["filled"] = filled_value
         if average_value is not None:
