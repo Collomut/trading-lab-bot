@@ -26,6 +26,50 @@ from postgres_state_store import PostgresStateStore
 logger = logging.getLogger("bot.risk")
 
 
+def normalize_trade_records(trades: list[dict]) -> list[dict]:
+    """Hide stale incomplete rows superseded by one reconciled copy of the same sell.
+
+    Exchange order ID, symbol, action, and exact close timestamp must all match.
+    Stored rows are left untouched for audit purposes; ambiguous or conflicting
+    records remain visible and continue to require review.
+    """
+    rows = [dict(row) for row in trades if isinstance(row, dict)]
+    completed_by_key: dict[tuple[str, str, str, str], int] = {}
+
+    def reconciled(row: dict) -> bool:
+        if row.get("accounting_complete") is False:
+            return False
+        try:
+            pnl = float(row.get("pnl"))
+            fee = float(row.get("fee"))
+            return math.isfinite(pnl) and math.isfinite(fee) and fee >= 0
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    def identity(row: dict) -> tuple[str, str, str, str] | None:
+        action = str(row.get("action") or "").upper()
+        symbol = str(row.get("symbol") or "").strip()
+        order_id = str(row.get("order_id") or "").strip()
+        timestamp = str(row.get("timestamp") or "").strip()
+        if action != "SELL" or not symbol or not order_id or not timestamp:
+            return None
+        return action, symbol, order_id, timestamp
+
+    for row in rows:
+        key = identity(row)
+        if key is not None and reconciled(row):
+            completed_by_key[key] = completed_by_key.get(key, 0) + 1
+
+    return [
+        row for row in rows
+        if not (
+            (key := identity(row)) is not None
+            and not reconciled(row)
+            and completed_by_key.get(key) == 1
+        )
+    ]
+
+
 def calculate_parkinson_volatility(highs, lows, period: int = 14) -> float:
     """Annualized Parkinson high-low realized volatility.
 
@@ -489,6 +533,7 @@ class RiskManager:
                                 rows.append(json.loads(line))
                             except (ValueError, TypeError):
                                 continue
+            rows = normalize_trade_records(rows)
             for trade in rows:
                 if not isinstance(trade, dict) or trade.get("action") != "SELL":
                     continue

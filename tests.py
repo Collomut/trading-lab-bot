@@ -75,7 +75,7 @@ from exchange import (
     validate_candle_sequence,
 )
 from main import run_backtest
-from risk_manager import Position, RiskManager, calculate_parkinson_volatility
+from risk_manager import Position, RiskManager, calculate_parkinson_volatility, normalize_trade_records
 from state_store import StateStore
 from shadow_ledger import ShadowLedger
 from strategies import (
@@ -1746,6 +1746,52 @@ class TestStateStoreAndPersistence(unittest.TestCase):
             trades = store.list_trades(10)
             self.assertEqual(len(trades), 1)
             self.assertEqual(trades[0]["symbol"], "BTC/USDT")
+
+    def test_reconciled_trade_suppresses_matching_stale_pending_copy_without_deleting_audit_row(self):
+        with TemporaryDirectory() as tmpdir:
+            store = StateStore(Path(tmpdir) / "bot_state.sqlite3")
+            common = {
+                "action": "SELL", "symbol": "BNB/USDT", "price": 527.71,
+                "amount": 0.921, "timestamp": "2026-11-21T08:42:25.860151+00:00",
+                "order_id": "9504747443", "reason": "Closed manually on Binance Demo; reconciliation reviewed",
+                "entry_price": 539.13, "entry_time": "2026-11-21T00:00:12+00:00",
+            }
+            pending = {**common, "pnl": None, "fee": None, "accounting_complete": False}
+            reconciled = {**common, "pnl": -11.376524470170128, "fee": 0.8587044701701276, "accounting_complete": True}
+            store.append_trade(pending)
+            store.append_trade(reconciled)
+
+            risk = RiskManager(RiskConfig(), persistence_dir=tmpdir)
+
+            self.assertEqual(len(risk.trade_history), 1)
+            self.assertTrue(risk.trade_history[0].accounting_complete)
+            self.assertAlmostEqual(risk.trade_history[0].pnl, -11.376524470170128)
+            summary = risk.get_performance_summary()
+            self.assertEqual(summary["total_trades"], 1)
+            self.assertEqual(summary["incomplete_trades"], 0)
+            self.assertEqual(len(risk.trade_ledger()), 1)
+            # Keep the original incomplete row in the durable ledger for auditability.
+            self.assertEqual(len(store.list_trades()), 2)
+            visible = normalize_trade_records(store.list_trades())
+            self.assertEqual(visible, [reconciled])
+
+    def test_trade_normalization_keeps_ambiguous_or_unidentified_rows(self):
+        complete = {
+            "action": "SELL", "symbol": "BNB/USDT", "order_id": "1",
+            "timestamp": "2026-11-21T08:42:25Z", "pnl": 1.0, "fee": 0.1,
+            "accounting_complete": True,
+        }
+        incomplete_same_order = {**complete, "pnl": None, "fee": None, "accounting_complete": False}
+        conflicting_complete = {**complete, "pnl": 2.0}
+        no_exchange_id = {**incomplete_same_order, "order_id": ""}
+        separate_timestamp = {**incomplete_same_order, "timestamp": "2026-11-21T08:43:25Z"}
+
+        # Multiple reconciled versions make the grouping ambiguous: do not hide any.
+        ambiguous = normalize_trade_records([complete, conflicting_complete, incomplete_same_order])
+        self.assertEqual(len(ambiguous), 3)
+        # Without a proven exact identity, preserve the incomplete record for review.
+        preserved = normalize_trade_records([complete, no_exchange_id, separate_timestamp])
+        self.assertEqual(len(preserved), 3)
 
     def test_order_transitions_enforcement(self):
         with TemporaryDirectory() as tmpdir:

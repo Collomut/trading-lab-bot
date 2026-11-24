@@ -23,7 +23,7 @@ from aiohttp import web
 from config import BotConfig
 from exchange import AccountAccessError, ExchangeConnector
 from strategies import get_strategy
-from risk_manager import RiskManager
+from risk_manager import RiskManager, normalize_trade_records
 from bot_engine import ESTIMATED_TAKER_FEE_RATE, TradingBot
 
 logger = logging.getLogger("bot.dashboard")
@@ -614,6 +614,8 @@ class WebDashboard:
                     line = line.strip()
                     if line:
                         trades.append(json.loads(line))
+        raw_trade_count = len(trades)
+        trades = normalize_trade_records(trades)
 
         # 6. Calculate reconciled performance statistics. Never turn an
         # unvalued-fee or partial-fill close into a zero-fee result.
@@ -765,6 +767,7 @@ class WebDashboard:
                 self.config.strategy.enable_downtrend_recovery_testnet
             ),
             "trades": trades,
+            "duplicate_trade_records_suppressed": raw_trade_count - len(trades),
             "notifications": {
                 "enabled": self.config.enable_notifications,
                 "telegram": bool(self.config.telegram_bot_token and self.config.telegram_chat_id),
