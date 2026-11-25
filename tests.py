@@ -3733,7 +3733,10 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             bot = object.__new__(TradingBot)
             bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
             bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.1"})
-            bot.risk_manager.store.create_order_intent("sell-client", "BTC/USDT", "sell", "0.2", {})
+            bot.risk_manager.store.create_order_intent(
+                "sell-client", "BTC/USDT", "sell", "0.2",
+                {"symbol": "BTC/USDT", "side": "sell", "amount": "0.2"},
+            )
             bot.risk_manager.store.update_order("sell-client", "SUBMITTED")
             bot.risk_manager.store.update_order("sell-client", "PARTIAL_CLOSED", filled="0.05")
             position = bot.risk_manager.open_position("BTC/USDT", 100.0, 0.2, order_id="buy-1")
@@ -3781,7 +3784,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances")["BTC"], "0.100002")
             self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
             self.assertAlmostEqual(bot.risk_manager.trade_history[-1].amount, 0.199998)
-            self.assertTrue(bot.risk_manager.trade_history[-1].accounting_complete)
+            self.assertFalse(bot.risk_manager.trade_history[-1].accounting_complete)
             bot.exchange.place_native_stop_loss.assert_not_called()
 
     def test_saved_demo_sell_can_be_reconciled_without_sending_an_order(self):
@@ -3793,25 +3796,33 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             )
             bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
             bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
-            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.1"})
-            bot.risk_manager.open_position("BTC/USDT", 100.0, 0.2, order_id="buy-1")
-            bot.risk_manager.store.create_order_intent("sell-client", "BTC/USDT", "sell", "0.2", {})
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.00000158"})
+            position = bot.risk_manager.open_position(
+                "BTC/USDT", 59223.84, 0.00000158, order_id="buy-1",
+                entry_fee_quote=0.4986647328,
+            )
+            position.accounting_complete = False
+            bot.risk_manager._save_positions()
+            bot.risk_manager.store.create_order_intent(
+                "sell-client", "BTC/USDT", "sell", "0.00841158",
+                {"symbol": "BTC/USDT", "side": "sell", "amount": "0.00841158", "source": "manual"},
+            )
             bot.risk_manager.store.update_order("sell-client", "SUBMITTED")
             bot.risk_manager.store.update_order(
-                "sell-client", "PARTIAL_CLOSED", exchange_order_id="sell-1", filled="0.199998",
-                average="101", response={"status": "closed"},
+                "sell-client", "PARTIAL_CLOSED", exchange_order_id="sell-1", filled="0.00841",
+                average="59744.32", response={"status": "closed"},
             )
             bot.risk_manager.halt("Unresolved terminal sell order")
             bot.exchange = Mock()
             bot.exchange.is_fallback_simulated = False
             bot.exchange.fetch_order.return_value = {
                 "id": "sell-1", "symbol": "BTC/USDT", "side": "sell", "status": "closed",
-                "amount": "0.199998", "filled": "0.199998", "average": "101",
-                "fees": [{"currency": "USDT", "cost": "0.1"}],
+                "amount": "0.00841158", "filled": "0.00841", "average": "59744.32",
+                "fees": [{"currency": "USDT", "cost": "0.50244973"}],
             }
-            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "0.100002"}}, [])
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "0.00000316"}}, [])
             bot.exchange.get_market_limits.return_value = {"min_cost": "5"}
-            bot.exchange.get_current_price.return_value = 60000.0
+            bot.exchange.get_current_price.return_value = 60293.75
             bot._cycle_lock = threading.Lock()
             bot._reconcile_exchange_state = Mock(return_value=True)
 
@@ -3822,9 +3833,64 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertTrue(bot.risk_manager._is_halted)
             self.assertNotIn("BTC/USDT", bot.risk_manager.open_positions)
             self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances")["BTC"], "0.00000316")
+            self.assertAlmostEqual(bot.risk_manager.trade_history[-1].amount, 0.00841)
+            self.assertFalse(bot.risk_manager.trade_history[-1].accounting_complete)
+            self.assertIsNone(bot.risk_manager.trade_history[-1].pnl)
             bot.exchange.fetch_order.assert_called_once_with("sell-1", "BTC/USDT")
             bot.exchange.place_market_sell.assert_not_called()
             bot._reconcile_exchange_state.assert_called_once_with()
+
+    def test_saved_demo_sell_refuses_wallet_mismatch_without_mutating_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.00000158"})
+            position = bot.risk_manager.open_position(
+                "BTC/USDT", 59223.84, 0.00000158, order_id="buy-1",
+                entry_fee_quote=0.4986647328,
+            )
+            position.accounting_complete = False
+            bot.risk_manager._save_positions()
+            bot.risk_manager.store.create_order_intent(
+                "sell-client", "BTC/USDT", "sell", "0.00841158",
+                {"symbol": "BTC/USDT", "side": "sell", "amount": "0.00841158", "source": "manual"},
+            )
+            bot.risk_manager.store.update_order("sell-client", "SUBMITTED")
+            bot.risk_manager.store.update_order(
+                "sell-client", "PARTIAL_CLOSED", exchange_order_id="sell-1", filled="0.00841",
+                average="59744.32", response={"status": "closed"},
+            )
+            bot.risk_manager.halt("Unresolved terminal sell order")
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_order.return_value = {
+                "id": "sell-1", "symbol": "BTC/USDT", "side": "sell", "status": "closed",
+                "amount": "0.00841158", "filled": "0.00841", "average": "59744.32",
+                "fees": [{"currency": "USDT", "cost": "0.50244973"}],
+            }
+            # A different remainder means the wallet cannot be attributed safely.
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "0.00000200"}}, [])
+            bot.exchange.get_market_limits.return_value = {"min_cost": "5"}
+            bot.exchange.get_current_price.return_value = 60293.75
+            bot._cycle_lock = threading.Lock()
+            bot._reconcile_exchange_state = Mock(return_value=True)
+
+            result = bot.reconcile_terminal_demo_sell("BTC/USDT")
+
+            self.assertFalse(result["success"])
+            self.assertIn("Trading stays halted", result["message"])
+            self.assertAlmostEqual(bot.risk_manager.open_positions["BTC/USDT"].amount, 0.00000158)
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances")["BTC"], "0.00000158")
+            self.assertEqual(len(bot.risk_manager.store.unresolved_orders()), 1)
+            self.assertTrue(bot.risk_manager._is_halted)
+            bot.exchange.place_market_sell.assert_not_called()
+            bot._reconcile_exchange_state.assert_not_called()
 
     def test_stop_fill_reconciliation_uses_position_asset_with_multiple_pairs(self):
         with TemporaryDirectory() as persistence_dir:
@@ -5585,3 +5651,4 @@ class TestShadowLedger(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

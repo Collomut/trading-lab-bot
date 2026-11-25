@@ -1080,7 +1080,10 @@ class TradingBot:
             logger.critical("Failed to synchronize exchange stop for %s (%s)", symbol, type(exc).__name__)
             return False
 
-    def _recover_terminal_partial_sell(self, symbol: str, order: dict, client_order_id: str, requested_amount) -> bool:
+    def _recover_terminal_partial_sell(
+        self, symbol: str, order: dict, client_order_id: str, requested_amount,
+        *, position_already_reduced: bool = False,
+    ) -> bool:
         """Reconcile a terminal partial exit, protect its remainder, then halt for review."""
         if not isinstance(order, dict) or str(order.get("status", "")).lower() not in {"closed", "canceled", "rejected", "expired"}:
             return False
@@ -1091,6 +1094,21 @@ class TradingBot:
                     or filled <= 0 or requested <= 0
                     or filled >= requested * Decimal("0.99999999")):
                 return False
+            position = self.risk_manager.open_positions.get(symbol)
+            if not position:
+                raise ValueError("tracked position is missing")
+            expected_remaining = None
+            fees = self._order_fee_entries(order)
+            if fees is not None:
+                base = symbol.split("/")[0]
+                base_fee = sum((Decimal(str(fee["cost"])) for fee in fees
+                                if str(fee.get("currency")) == base), Decimal("0"))
+                if not base_fee.is_finite() or base_fee < 0:
+                    raise ValueError("sell base-asset fee is invalid")
+                expected_remaining = requested - filled - base_fee
+                if not expected_remaining.is_finite() or expected_remaining < 0:
+                    raise ValueError("sell fees exceed the expected remaining quantity")
+
             balance, open_orders = self.exchange.fetch_account_snapshot()
             base = symbol.split("/")[0]
             baseline = self.risk_manager.store.read_state("baseline_asset_balances") or {}
@@ -1112,6 +1130,16 @@ class TradingBot:
             remaining = total_base - baseline_base - other_positions
             if not remaining.is_finite() or remaining < 0 or remaining > requested:
                 raise ValueError("partial sell balance is outside expected position bounds")
+            quantity_tolerance = Decimal("0.00000002")
+            current_amount = Decimal(str(position.amount))
+            if position_already_reduced:
+                if (current_amount <= 0
+                        or (expected_remaining is not None
+                            and abs(current_amount - expected_remaining) > quantity_tolerance)
+                        or abs(remaining - current_amount) > quantity_tolerance):
+                    raise ValueError("persisted partial remainder does not match the exchange wallet")
+            elif expected_remaining is not None and abs(remaining - expected_remaining) > quantity_tolerance:
+                raise ValueError("exchange remainder does not match confirmed sell fills and fees")
             record = None
             if remaining == 0:
                 fill_price = float(order.get("average") or order.get("price") or 0)
@@ -1128,6 +1156,15 @@ class TradingBot:
                     raise ValueError("closed position could not be persisted")
                 self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
             elif self._below_minimum_notional(symbol, remaining):
+                # A prior interrupted recovery may already have reduced the
+                # persisted position to the residual. Restore the pre-sell
+                # quantity only long enough to allocate the confirmed fill;
+                # accounting stays incomplete because the residual is dust.
+                if position_already_reduced:
+                    if not self.risk_manager.update_position_amount(symbol, float(requested)):
+                        raise ValueError("original sell quantity could not be restored for accounting")
+                if not self.risk_manager.mark_position_accounting_incomplete(symbol):
+                    raise ValueError("dust accounting status could not be persisted")
                 fill_price = float(order.get("average") or order.get("price") or 0)
                 if not math.isfinite(fill_price) or fill_price <= 0:
                     raise ValueError("dust remainder response has no valid average fill price")
@@ -1154,7 +1191,8 @@ class TradingBot:
                     "accounting_complete": bool(record.accounting_complete),
                 })
             else:
-                if not self.risk_manager.update_position_amount(symbol, float(remaining)):
+                if (not position_already_reduced
+                        and not self.risk_manager.update_position_amount(symbol, float(remaining))):
                     raise ValueError("remaining position quantity could not be persisted")
                 if not self._place_and_persist_native_stop(symbol, str(order.get("id", ""))):
                     raise ValueError("remaining position could not be protected by a new exchange stop")
@@ -1206,8 +1244,27 @@ class TradingBot:
             exchange_client_id = str(order.get("clientOrderId") or (order.get("info") or {}).get("clientOrderId") or "")
             if exchange_client_id and exchange_client_id != str(intent.get("client_order_id")):
                 return {"success": False, "message": "The Binance sell belongs to a different order request. No records were changed."}
+            try:
+                requested_amount = Decimal(str(intent.get("amount")))
+                request_json = intent.get("request_json") or {}
+                if isinstance(request_json, str):
+                    request_json = json.loads(request_json)
+                if (not requested_amount.is_finite() or requested_amount <= 0
+                        or not isinstance(request_json, dict)
+                        or Decimal(str(request_json.get("amount"))) != requested_amount
+                        or str(request_json.get("side", "sell")).lower() != "sell"
+                        or str(request_json.get("symbol", symbol)) != symbol):
+                    raise ValueError("saved request does not match the terminal sell intent")
+                exchange_amount = Decimal(str(order.get("amount")))
+                if not exchange_amount.is_finite() or exchange_amount != requested_amount:
+                    raise ValueError("Binance order quantity does not match the saved sell request")
+                current_amount = Decimal(str(position.amount))
+                position_already_reduced = current_amount < requested_amount
+            except (InvalidOperation, TypeError, ValueError, json.JSONDecodeError):
+                return {"success": False, "message": "The saved sell quantity could not be verified against Binance. Trading stays halted."}
             if not self._recover_terminal_partial_sell(
-                    symbol, order, str(intent.get("client_order_id")), position.amount):
+                    symbol, order, str(intent.get("client_order_id")), requested_amount,
+                    position_already_reduced=position_already_reduced):
                 return {"success": False, "message": "The Binance sell could not be safely matched to the remaining wallet balance. Trading stays halted."}
             reconciled = self._reconcile_exchange_state()
             if not reconciled:
@@ -4036,3 +4093,4 @@ class TradingBot:
                 logger.warning(
                     f"    {symbol}: {pos.amount:.6f} entered at ${pos.entry_price:,.2f}"
                 )
+
