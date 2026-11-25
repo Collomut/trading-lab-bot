@@ -1087,27 +1087,72 @@ class TradingBot:
         try:
             filled = Decimal(str(order.get("filled") or 0))
             requested = Decimal(str(requested_amount))
-            if filled <= 0 or filled >= requested * Decimal("0.99999999"):
+            if (not filled.is_finite() or not requested.is_finite()
+                    or filled <= 0 or requested <= 0
+                    or filled >= requested * Decimal("0.99999999")):
                 return False
-            balance, _ = self.exchange.fetch_account_snapshot()
+            balance, open_orders = self.exchange.fetch_account_snapshot()
             base = symbol.split("/")[0]
             baseline = self.risk_manager.store.read_state("baseline_asset_balances") or {}
-            remaining = Decimal(str((balance.get("total") or {}).get(base) or 0)) - Decimal(str(baseline.get(base, "0")))
+            if base not in baseline:
+                raise ValueError("base-asset balance baseline is unavailable")
+            if any(
+                isinstance(item, dict)
+                and str(item.get("symbol", "")).split("/")[0] == base
+                for item in open_orders
+            ):
+                raise ValueError("an exchange order for this base asset remains open")
+            other_positions = sum((
+                Decimal(str(position.amount))
+                for other_symbol, position in self.risk_manager.open_positions.items()
+                if other_symbol != symbol and other_symbol.split("/")[0] == base
+            ), Decimal("0"))
+            total_base = Decimal(str((balance.get("total") or {}).get(base) or 0))
+            baseline_base = Decimal(str(baseline[base]))
+            remaining = total_base - baseline_base - other_positions
             if not remaining.is_finite() or remaining < 0 or remaining > requested:
                 raise ValueError("partial sell balance is outside expected position bounds")
+            record = None
             if remaining == 0:
                 fill_price = float(order.get("average") or order.get("price") or 0)
                 if not math.isfinite(fill_price) or fill_price <= 0:
                     raise ValueError("partial sell response has no valid average fill price")
-                if not self.risk_manager.mark_position_accounting_incomplete(symbol):
-                    raise ValueError("incomplete accounting status could not be persisted")
                 fee_cost = self._resolve_fee_quote_cost(order, symbol, fill_price)
+                if fee_cost is None and not self.risk_manager.mark_position_accounting_incomplete(symbol):
+                    raise ValueError("incomplete accounting status could not be persisted")
                 record = self.risk_manager.close_position(
-                    symbol, fill_price, "Partial sell reconciled to zero remaining balance", fee_cost=fee_cost
+                    symbol, fill_price, "Sell reconciled; no position balance remains",
+                    fee_cost=fee_cost, closed_amount=float(filled),
                 )
                 if not record:
                     raise ValueError("closed position could not be persisted")
                 self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
+            elif self._below_minimum_notional(symbol, remaining):
+                fill_price = float(order.get("average") or order.get("price") or 0)
+                if not math.isfinite(fill_price) or fill_price <= 0:
+                    raise ValueError("dust remainder response has no valid average fill price")
+                fee_cost = self._resolve_fee_quote_cost(order, symbol, fill_price)
+                if fee_cost is None and not self.risk_manager.mark_position_accounting_incomplete(symbol):
+                    raise ValueError("incomplete accounting status could not be persisted")
+                record = self.risk_manager.close_position(
+                    symbol, fill_price,
+                    "Sell reconciled; remaining balance is below Binance's minimum order size",
+                    fee_cost=fee_cost, closed_amount=float(filled),
+                )
+                if not record:
+                    raise ValueError("dust-close trade could not be persisted")
+                # Keep other positions of the same base asset in the expected
+                # balance while moving only this unsellable remainder to baseline.
+                updated_baseline = dict(baseline)
+                updated_baseline[base] = str(total_base - other_positions)
+                self.risk_manager.store.write_state("baseline_asset_balances", updated_baseline)
+                self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
+                self.risk_manager.store.append_event("sell_dust_reconciled", {
+                    "symbol": symbol, "order_id": str(order.get("id", "")),
+                    "filled": str(filled), "remaining_dust": str(remaining),
+                    "baseline_balance": updated_baseline[base],
+                    "accounting_complete": bool(record.accounting_complete),
+                })
             else:
                 if not self.risk_manager.update_position_amount(symbol, float(remaining)):
                     raise ValueError("remaining position quantity could not be persisted")
@@ -1117,7 +1162,7 @@ class TradingBot:
             self.risk_manager.store.append_event("partial_exit_reconciled", {
                 "symbol": symbol, "order_id": str(order.get("id", "")),
                 "filled": str(filled), "remaining": str(remaining),
-                "accounting_complete": False,
+                "accounting_complete": bool(record.accounting_complete) if record else False,
             })
             self.risk_manager.halt(f"Partial sell for {symbol} was reconciled; manual review required")
             return True
@@ -1125,6 +1170,59 @@ class TradingBot:
             self.risk_manager.halt(f"Partial sell for {symbol} could not be safely reconciled; operator action required")
             logger.critical("Partial sell recovery failed for %s (%s)", symbol, type(exc).__name__)
             return False
+
+    def reconcile_terminal_demo_sell(self, symbol: str) -> dict:
+        """Apply a saved, terminal Binance Demo sell without submitting an order."""
+        if not (self.config.exchange.paper_trading and self.config.exchange.paper_environment == "demo"):
+            return {"success": False, "message": "This recovery is available only for Binance Demo."}
+        if getattr(self.exchange, "is_fallback_simulated", False):
+            return {"success": False, "message": "Authenticated Binance Demo data is unavailable; no records were changed."}
+        if not self.risk_manager._is_halted:
+            return {"success": False, "message": "This recovery is available only while a safety halt is active."}
+        if symbol not in {pair.strip() for pair in self.config.strategy.trading_pairs}:
+            return {"success": False, "message": "Choose a configured Binance Demo market."}
+        if not self._cycle_lock.acquire(timeout=10):
+            return {"success": False, "message": "The bot is checking the account. Wait briefly and try again."}
+        try:
+            position = self.risk_manager.open_positions.get(symbol)
+            if not position or position.stop_order_id:
+                return {"success": False, "message": "Recovery requires one tracked position with no saved exchange stop."}
+            unresolved = self.risk_manager.store.unresolved_orders()
+            candidates = [intent for intent in unresolved
+                          if intent.get("symbol") == symbol
+                          and str(intent.get("side", "")).lower() == "sell"
+                          and intent.get("state") in {"FILLED", "PARTIAL_CLOSED", "CANCELED", "REJECTED", "EXPIRED"}
+                          and intent.get("exchange_order_id")]
+            if (len(candidates) != 1 or len(unresolved) != 1):
+                return {"success": False, "message": "The bot does not have exactly one saved completed sell to reconcile. No records were changed."}
+            intent = candidates[0]
+            order_id = str(intent.get("exchange_order_id"))
+            order = self.exchange.fetch_order(order_id, symbol)
+            if (not isinstance(order, dict) or str(order.get("id")) != order_id
+                    or str(order.get("symbol")) != symbol
+                    or str(order.get("side", "")).lower() != "sell"
+                    or str(order.get("status", "")).lower() not in {"closed", "canceled", "rejected", "expired"}):
+                return {"success": False, "message": "Binance does not confirm this saved sell as terminal. No records were changed."}
+            exchange_client_id = str(order.get("clientOrderId") or (order.get("info") or {}).get("clientOrderId") or "")
+            if exchange_client_id and exchange_client_id != str(intent.get("client_order_id")):
+                return {"success": False, "message": "The Binance sell belongs to a different order request. No records were changed."}
+            if not self._recover_terminal_partial_sell(
+                    symbol, order, str(intent.get("client_order_id")), position.amount):
+                return {"success": False, "message": "The Binance sell could not be safely matched to the remaining wallet balance. Trading stays halted."}
+            reconciled = self._reconcile_exchange_state()
+            if not reconciled:
+                return {"success": False, "message": "The sell was recorded, but the full Binance account check still needs review. Trading stays halted."}
+            return {
+                "success": True,
+                "message": "Binance confirms the sell and the remaining balance is reconciled. The safety halt remains until you review the result and resume.",
+                "trading_halted": True,
+            }
+        except Exception as exc:
+            self.risk_manager.halt(f"Demo sell reconciliation failed for {symbol}; operator review required")
+            logger.error("Demo sell reconciliation failed for %s (%s)", symbol, type(exc).__name__)
+            return {"success": False, "message": "The Binance sell could not be verified safely. Trading remains halted; check the account status and logs."}
+        finally:
+            self._cycle_lock.release()
 
     def _pending_unbaselined_stop_review(self) -> dict | None:
         """Return a protective-stop event whose missing asset baseline is unreviewed."""

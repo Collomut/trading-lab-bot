@@ -1322,6 +1322,27 @@ $('reconcile-external-close').addEventListener('click', async () => {
     return;
   }
   const [symbol, position] = candidates[0];
+  const terminalSell = Boolean(d.terminal_demo_sell_recovery_available);
+  if (terminalSell) {
+    if (!confirm(`The bot will check its saved ${symbol} sell directly with Binance Demo and compare the wallet balance. This sends no order. Any remaining amount must be below Binance's minimum trade size. The safety halt will remain until you review it. Continue?`)) return;
+    const button = $('reconcile-external-close');
+    button.disabled = true;
+    $('control-status').textContent = 'Checking the saved sell and remaining Binance balance…';
+    try {
+      const r = await fetch('/api/reconcile-external-close', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, terminal_sell: true })
+      });
+      const result = await r.json();
+      $('control-status').textContent = result.message || 'Demo sell reconciliation finished.';
+      await refreshStatus();
+    } catch (e) {
+      $('control-status').textContent = `Reconciliation failed: ${e.message}`;
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   const sellOrderId = prompt(`Enter the Binance Demo SELL order number for ${symbol}. Check Order History first.`);
   if (!sellOrderId) return;
   if (!confirm(`Verify: Binance Demo shows buy ${position.order_id}, sell ${sellOrderId}, no open orders, and only unsellable dust remaining. This sends no order; it reconciles the saved position and marks accounting incomplete. Continue?`)) return;

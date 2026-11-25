@@ -598,6 +598,12 @@ class WebDashboard:
                 )
                 positions[sym] = pos_dict
 
+        unresolved_orders = risk.store.unresolved_orders()
+        pending_sell_intents = [intent for intent in unresolved_orders
+                                if intent.get("state") in {"FILLED", "PARTIAL_CLOSED", "CANCELED", "REJECTED", "EXPIRED"}
+                                and intent.get("exchange_order_id")
+                                and str(intent.get("side", "")).lower() == "sell"]
+
         # 4. Total portfolio net worth = Cash + Open Position Values
         # If the exchange balance call failed or mark is missing, report unavailable (F-07, F-08).
         if not account_available or usdt_balance is None or has_unrealized_error:
@@ -713,14 +719,14 @@ class WebDashboard:
                 and account_available
                 and self.bot._last_reconciliation_ok
                 and not risk.route_halts()
-                and not risk.store.unresolved_orders()
+                and not unresolved_orders
             ),
             "manual_close_available": bool(
                 self.config.exchange.paper_trading
                 and not is_fallback_sim
                 and account_available
                 and self.bot._last_reconciliation_ok
-                and not risk.store.unresolved_orders()
+                and not unresolved_orders
             ),
             "configured_symbols": [pair.strip() for pair in self.config.strategy.trading_pairs if pair.strip()],
             "external_close_recovery_available": bool(
@@ -728,6 +734,18 @@ class WebDashboard:
                 and self.config.exchange.paper_environment == "demo"
                 and risk._is_halted and not is_fallback_sim
                 and any(p.get("order_id") and not p.get("stop_order_id") for p in positions.values())
+            ),
+            "terminal_demo_sell_recovery_available": bool(
+                self.config.exchange.paper_trading
+                and self.config.exchange.paper_environment == "demo"
+                and risk._is_halted and not is_fallback_sim
+                and len([p for p in positions.values() if p.get("order_id") and not p.get("stop_order_id")]) == 1
+                and len(unresolved_orders) == 1
+                and len(pending_sell_intents) == 1
+                and pending_sell_intents[0].get("symbol") in {
+                    sym for sym, position in positions.items()
+                    if position.get("order_id") and not position.get("stop_order_id")
+                }
             ),
             "closed_trade_accounting_review_available": bool(
                 self.config.exchange.paper_trading
@@ -765,7 +783,7 @@ class WebDashboard:
                 positions,
                 account_available=account_available,
                 exchange_reconciled=self.bot._last_reconciliation_ok,
-                unresolved_orders=risk.store.unresolved_orders(),
+                unresolved_orders=unresolved_orders,
             ),
             "demo_reset_review_available": bool(
                 self.config.exchange.paper_trading
@@ -775,7 +793,7 @@ class WebDashboard:
                 and (risk._halt_reason.startswith("Daily equity drawdown limit reached:")
                      or RiskManager.is_rolling_drawdown_halt(risk._halt_reason))
                 and not positions
-                and not risk.store.unresolved_orders()
+                and not unresolved_orders
             ),
             "testnet_smoke_attempted": risk.store.read_state("testnet_smoke_trade") is not None,
             "prices": prices,
@@ -1343,6 +1361,14 @@ class WebDashboard:
         if not isinstance(payload, dict):
             payload = {}
         symbol = payload.get("symbol")
+        if payload.get("terminal_sell") is True:
+            if not isinstance(symbol, str) or len(symbol) > 32:
+                return web.json_response({"success": False, "message": "Choose a valid configured market."}, status=400)
+            self._status_cache = None
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, self.bot.reconcile_terminal_demo_sell, symbol)
+            self._status_cache = None
+            return web.json_response(result, status=200 if result.get("success") else 409)
         buy_id = payload.get("buy_order_id")
         sell_id = payload.get("sell_order_id")
         if not all(isinstance(v, str) and len(v) <= 32 for v in (symbol, buy_id, sell_id)):

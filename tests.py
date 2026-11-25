@@ -3751,6 +3751,78 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertTrue(bot.risk_manager._is_halted)
             self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
 
+    def test_terminal_sell_with_only_untradeable_dust_closes_and_rebaselines(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.1"})
+            bot.risk_manager.store.create_order_intent("sell-dust-client", "BTC/USDT", "sell", "0.2", {})
+            bot.risk_manager.store.update_order("sell-dust-client", "SUBMITTED")
+            bot.risk_manager.store.update_order("sell-dust-client", "PARTIAL_CLOSED", filled="0.199998")
+            bot.risk_manager.open_position("BTC/USDT", 100.0, 0.2, order_id="buy-1")
+            bot.exchange = Mock()
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "0.100002"}}, [])
+            bot.exchange.get_market_limits.return_value = {"min_cost": "5"}
+            bot.exchange.get_current_price.return_value = 60000.0
+
+            recovered = bot._recover_terminal_partial_sell(
+                "BTC/USDT",
+                {"id": "sell-1", "status": "closed", "amount": "0.199998", "filled": "0.199998",
+                 "average": "101", "fees": [{"currency": "USDT", "cost": "0.1"}]},
+                "sell-dust-client", "0.2",
+            )
+
+            self.assertTrue(recovered)
+            self.assertNotIn("BTC/USDT", bot.risk_manager.open_positions)
+            self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances")["BTC"], "0.100002")
+            self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
+            self.assertAlmostEqual(bot.risk_manager.trade_history[-1].amount, 0.199998)
+            self.assertTrue(bot.risk_manager.trade_history[-1].accounting_complete)
+            bot.exchange.place_native_stop_loss.assert_not_called()
+
+    def test_saved_demo_sell_can_be_reconciled_without_sending_an_order(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.trade_log_path = Path(persistence_dir) / "trades.jsonl"
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BTC": "0.1"})
+            bot.risk_manager.open_position("BTC/USDT", 100.0, 0.2, order_id="buy-1")
+            bot.risk_manager.store.create_order_intent("sell-client", "BTC/USDT", "sell", "0.2", {})
+            bot.risk_manager.store.update_order("sell-client", "SUBMITTED")
+            bot.risk_manager.store.update_order(
+                "sell-client", "PARTIAL_CLOSED", exchange_order_id="sell-1", filled="0.199998",
+                average="101", response={"status": "closed"},
+            )
+            bot.risk_manager.halt("Unresolved terminal sell order")
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_order.return_value = {
+                "id": "sell-1", "symbol": "BTC/USDT", "side": "sell", "status": "closed",
+                "amount": "0.199998", "filled": "0.199998", "average": "101",
+                "fees": [{"currency": "USDT", "cost": "0.1"}],
+            }
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BTC": "0.100002"}}, [])
+            bot.exchange.get_market_limits.return_value = {"min_cost": "5"}
+            bot.exchange.get_current_price.return_value = 60000.0
+            bot._cycle_lock = threading.Lock()
+            bot._reconcile_exchange_state = Mock(return_value=True)
+
+            result = bot.reconcile_terminal_demo_sell("BTC/USDT")
+
+            self.assertTrue(result["success"], result["message"])
+            self.assertTrue(result["trading_halted"])
+            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertNotIn("BTC/USDT", bot.risk_manager.open_positions)
+            self.assertEqual(bot.risk_manager.store.unresolved_orders(), [])
+            bot.exchange.fetch_order.assert_called_once_with("sell-1", "BTC/USDT")
+            bot.exchange.place_market_sell.assert_not_called()
+            bot._reconcile_exchange_state.assert_called_once_with()
+
     def test_stop_fill_reconciliation_uses_position_asset_with_multiple_pairs(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
@@ -4851,6 +4923,42 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
 # ==============================================================================
 
 class TestReconcileOrdersDashboardHandler(unittest.TestCase):
+    def test_saved_demo_sell_recovery_endpoint_is_same_origin_and_sends_no_order(self):
+        dashboard = object.__new__(WebDashboard)
+        dashboard._status_cache = "stale"
+        dashboard.bot = Mock()
+        dashboard.bot.reconcile_terminal_demo_sell.return_value = {
+            "success": True, "message": "Verified sale reconciled.", "trading_halted": True,
+        }
+
+        class Request:
+            headers = {"Host": "localhost:8080", "Origin": "http://localhost:8080"}
+            scheme = "http"
+            host = "localhost:8080"
+
+            async def json(self):
+                return {"symbol": "BTC/USDT", "terminal_sell": True}
+
+        class InlineLoop:
+            async def run_in_executor(self, _executor, function, *args):
+                return function(*args)
+
+        request = Request()
+        with patch("dashboard.asyncio.get_event_loop", return_value=InlineLoop()):
+            coroutine = dashboard.handle_reconcile_external_close(request)
+            try:
+                coroutine.send(None)
+            except StopIteration as completed:
+                response = completed.value
+            else:
+                self.fail("The terminal-sale recovery endpoint unexpectedly yielded")
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(json.loads(response.text)["trading_halted"])
+        self.assertIsNone(dashboard._status_cache)
+        dashboard.bot.reconcile_terminal_demo_sell.assert_called_once_with("BTC/USDT")
+        dashboard.bot.reconcile_external_close.assert_not_called()
+
     def test_endpoint_is_same_origin_and_never_runs_a_cycle(self):
         dashboard = object.__new__(WebDashboard)
         dashboard._status_cache = "stale"
