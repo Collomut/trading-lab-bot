@@ -2559,6 +2559,44 @@ class FakeExchange:
 class TestBotEngineOrderLifecycle(unittest.TestCase):
     """Verifies complete order execution, fee deduction, stop loss synchronization, recovery, and alerts."""
 
+    def test_reconcile_orders_only_checks_account_without_running_strategy_and_stays_paused(self):
+        bot = object.__new__(TradingBot)
+        bot.risk_manager = Mock()
+        bot.risk_manager.store.unresolved_orders.return_value = []
+        bot._cycle_lock = threading.Lock()
+        bot._reconcile_terminal_no_fill_order_intents = Mock()
+        bot._reconcile_exchange_state = Mock(return_value=True)
+        bot.run_once = Mock()
+
+        success, message = bot.reconcile_orders_only()
+
+        self.assertTrue(success)
+        self.assertIn("Entries remain paused", message)
+        bot.risk_manager.set_exit_only.assert_called()
+        self.assertEqual(bot.risk_manager.set_exit_only.call_count, 2)
+        bot._reconcile_terminal_no_fill_order_intents.assert_called_once_with()
+        bot._reconcile_exchange_state.assert_called_once_with()
+        bot.run_once.assert_not_called()
+        self.assertFalse(bot._cycle_lock.locked())
+
+    def test_reconcile_orders_only_failure_keeps_entry_mode_paused(self):
+        bot = object.__new__(TradingBot)
+        bot.risk_manager = Mock()
+        bot.risk_manager.store.unresolved_orders.return_value = []
+        bot.risk_manager._halt_reason = "Exchange reconciliation failed: account mismatch"
+        bot._last_account_error = "Account reconciliation failed."
+        bot._cycle_lock = threading.Lock()
+        bot._reconcile_terminal_no_fill_order_intents = Mock()
+        bot._reconcile_exchange_state = Mock(return_value=False)
+
+        success, message = bot.reconcile_orders_only()
+
+        self.assertFalse(success)
+        self.assertIn("Entries remain paused", message)
+        self.assertIn("no order was sent", message)
+        self.assertEqual(bot.risk_manager.set_exit_only.call_count, 2)
+        self.assertFalse(bot._cycle_lock.locked())
+
     def test_manual_demo_buy_reuses_risk_checks_and_marks_operator_managed_position(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
@@ -4812,6 +4850,52 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
 # 7. Dashboard API & Security Suite
 # ==============================================================================
 
+class TestReconcileOrdersDashboardHandler(unittest.TestCase):
+    def test_endpoint_is_same_origin_and_never_runs_a_cycle(self):
+        dashboard = object.__new__(WebDashboard)
+        dashboard._status_cache = "stale"
+        dashboard.bot = Mock()
+        dashboard.bot.reconcile_orders_only.return_value = (
+            True, "Binance order and account checks passed. Entries remain paused."
+        )
+        dashboard.bot.risk_manager.entry_mode.return_value = "EXIT_ONLY"
+
+        req = make_mocked_request(
+            "POST", "/api/reconcile-orders-only",
+            headers={"Host": "localhost:8080", "Origin": "http://localhost:8080"},
+        )
+        class InlineLoop:
+            async def run_in_executor(self, _executor, function):
+                return function()
+
+        def finish(coroutine):
+            try:
+                coroutine.send(None)
+            except StopIteration as completed:
+                return completed.value
+            self.fail("The reconciliation handler unexpectedly yielded")
+
+        with patch("dashboard.asyncio.get_running_loop", return_value=InlineLoop()):
+            response = finish(dashboard.handle_reconcile_orders_only(req))
+
+        self.assertEqual(response.status, 200)
+        body = json.loads(response.text)
+        self.assertTrue(body["success"])
+        self.assertEqual(body["entry_mode"], "EXIT_ONLY")
+        self.assertIsNone(dashboard._status_cache)
+        dashboard.bot.reconcile_orders_only.assert_called_once_with()
+        dashboard.bot.run_once.assert_not_called()
+
+        evil = make_mocked_request(
+            "POST", "/api/reconcile-orders-only",
+            headers={"Host": "localhost:8080", "Origin": "http://attacker.invalid"},
+        )
+        with patch("dashboard.asyncio.get_running_loop", return_value=InlineLoop()):
+            rejected = finish(dashboard.handle_reconcile_orders_only(evil))
+        self.assertEqual(rejected.status, 403)
+        dashboard.bot.reconcile_orders_only.assert_called_once_with()
+
+
 class TestDashboardApiAndSecurity(unittest.TestCase):
     """Verifies authentication, CSRF origin checking, health probes, and cache-control headers."""
 
@@ -5077,6 +5161,8 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertNotIn("DASHBOARD_TOKEN", LOGIN_HTML)
         self.assertIn("review-closed-trade", overview_page)
         self.assertIn("/api/reconcile-closed-trade", overview_page)
+        self.assertIn("reconcile-orders", overview_page)
+        self.assertIn("/api/reconcile-orders-only", overview_page)
 
     def test_wording_safety_no_misleading_profit_claims(self):
         banned_phrases = [

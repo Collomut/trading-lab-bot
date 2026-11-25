@@ -3504,6 +3504,43 @@ class TradingBot:
         finally:
             self._cycle_lock.release()
 
+    def reconcile_orders_only(self) -> tuple[bool, str]:
+        """Reconcile saved order intents and account state without running a strategy cycle.
+
+        This operator action is deliberately reconciliation-only: it serializes
+        against the worker, durably pauses new entries before contacting the
+        exchange, and leaves entries paused even when reconciliation succeeds.
+        """
+        if not self._cycle_lock.acquire(timeout=10):
+            return False, "The bot is busy checking the account. Wait briefly and try again; no order was sent."
+        risk = self.risk_manager
+        try:
+            risk.set_exit_only()
+            # Resolve only terminal, confirmed zero-fill intents first. The
+            # complete account pass below still has to validate balances,
+            # positions, protective orders, and exchange open orders.
+            self._reconcile_terminal_no_fill_order_intents()
+            reconciled = self._reconcile_exchange_state()
+            # Keep this action incapable of re-enabling entries, even if a
+            # successful account check clears a transient reconciliation halt.
+            risk.set_exit_only()
+            if not reconciled:
+                detail = self._last_account_error or risk._halt_reason or "account state still needs review"
+                return False, f"Reconciliation is still incomplete: {detail}. Entries remain paused; no order was sent."
+            unresolved = risk.store.unresolved_orders()
+            if unresolved:
+                return False, f"{len(unresolved)} order record(s) still need exchange confirmation. Entries remain paused; no order was sent."
+            return True, "Binance order and account checks passed. Entries remain paused. Review the account status before choosing Resume."
+        except Exception as exc:
+            try:
+                risk.set_exit_only()
+            except Exception:
+                risk.halt("Order reconciliation pause could not be saved; operator review required")
+            logger.exception("Dashboard reconciliation-only action failed")
+            return False, f"Reconciliation could not be completed ({type(exc).__name__}). Entries remain paused; no order was sent."
+        finally:
+            self._cycle_lock.release()
+
     def review_demo_account_reset(self) -> tuple[bool, str]:
         """Rebase a deliberately reset Demo account, but leave entries paused."""
         if not self._cycle_lock.acquire(timeout=10):

@@ -239,6 +239,7 @@ class WebDashboard:
         self.app.router.add_get('/api/logs', self.handle_logs_api)
         self.app.router.add_get('/api/candles', self.handle_candles)
         self.app.router.add_post('/api/run-cycle', self.handle_run_cycle)
+        self.app.router.add_post('/api/reconcile-orders-only', self.handle_reconcile_orders_only)
         self.app.router.add_post('/api/exit-only', self.handle_exit_only)
         self.app.router.add_post('/api/review-demo-reset', self.handle_demo_reset_review)
         self.app.router.add_post('/api/resume', self.handle_resume_entries)
@@ -1201,6 +1202,19 @@ class WebDashboard:
         except Exception:
             logger.exception("Manual dashboard cycle failed")
             return web.json_response({"error": "Cycle failed; inspect service logs."}, status=500)
+
+    async def handle_reconcile_orders_only(self, request):
+        """Check saved exchange orders without running strategy or placing orders."""
+        if not self._is_valid_origin(request):
+            return web.json_response({"error": "Same-origin request required."}, status=403)
+        self._status_cache = None
+        loop = asyncio.get_running_loop()
+        success, message = await loop.run_in_executor(None, self.bot.reconcile_orders_only)
+        return web.json_response({
+            "success": success,
+            "entry_mode": self.bot.risk_manager.entry_mode(),
+            "message": message,
+        }, status=200 if success else 409)
 
     async def handle_exit_only(self, request):
         if not self._is_valid_origin(request):
