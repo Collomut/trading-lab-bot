@@ -2,7 +2,7 @@
 <nav><div class="nav-inner"><a class="brand" href="/">TRADING LAB</a><div class="nav-links"><a class="nav-link active" href="/">Overview</a><a class="nav-link" href="/trade-desk">Trade desk</a><a class="nav-link" href="/positions">Positions</a><a class="nav-link" href="/history">Trades</a><a class="nav-link" href="/strategy">Strategy</a><a class="nav-link" href="/experiments">Experiments</a><a class="nav-link" href="/logs">Logs</a><a class="nav-link" href="/terms">Glossary</a></div><button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode"><span aria-hidden="true">◐</span><span data-theme-label>Dark mode</span></button></div></nav>
 <main class="container"><header class="page-head"><div><div class="eyebrow">Paper-trading dashboard</div><h1>Overview</h1></div><div class="status"><span id="dot" class="dot"></span><span id="connection" data-skeleton aria-busy="true">Connecting…</span></div></header>
 <div class="notice compact"><strong>Practice mode</strong><span id="mode" data-skeleton aria-busy="true">Loading…</span><span class="muted-inline">· App-monitored exits can fail during outages.</span></div>
-<section id="trading-controls" class="card trading-controls-card"><div class="trading-controls-header"><strong>Trading controls</strong><div class="help">Resume requires a fresh successful account check. Safety-halt recovery also requires your review and no open bot positions or unresolved orders. Daily and drawdown limits stay in force.</div></div><div class="trading-controls-actions"><button id="entry-control" type="button" class="button">Pause entries</button><button id="review-demo-reset" type="button" class="button secondary" hidden style="display:none">Review Demo reset</button><button id="emergency-stop" type="button" class="button secondary">Emergency stop</button><button id="reconcile-orders" type="button" class="button secondary">Reconcile orders only</button><button id="run-cycle" type="button" class="button secondary">Run check now</button><button id="test-alert" type="button" class="button secondary">Test alerts</button><button id="reconcile-external-close" type="button" class="button secondary" hidden style="display:none">Reconcile Demo sell</button><button id="review-closed-trade" type="button" class="button secondary" hidden style="display:none">Verify closed trade P&amp;L</button><button id="testnet-smoke" type="button" class="button secondary" hidden style="display:none">One-time Testnet smoke trade · up to $10</button></div><span id="control-status" class="help" aria-live="polite"></span></section>
+<section id="trading-controls" class="card trading-controls-card"><div class="trading-controls-header"><strong>Trading controls</strong><div class="help">Resume requires a fresh successful account check. Safety-halt recovery also requires your review and no open bot positions or unresolved orders. Daily and drawdown limits stay in force.</div></div><div class="trading-controls-actions"><button id="entry-control" type="button" class="button">Pause entries</button><button id="review-demo-reset" type="button" class="button secondary" hidden style="display:none">Review Demo reset</button><button id="emergency-stop" type="button" class="button secondary">Emergency stop</button><button id="reconcile-orders" type="button" class="button secondary">Reconcile orders only</button><button id="run-cycle" type="button" class="button secondary">Run check now</button><button id="test-alert" type="button" class="button secondary">Test alerts</button><button id="reconcile-external-close" type="button" class="button secondary" hidden style="display:none">Verify completed Demo sell</button><button id="review-closed-trade" type="button" class="button secondary" hidden style="display:none">Verify closed trade P&amp;L</button><button id="testnet-smoke" type="button" class="button secondary" hidden style="display:none">One-time Testnet smoke trade · up to $10</button></div><span id="reconcile-demo-sell-help" class="help" hidden style="display:none">Use only after Binance Demo already shows the sell as filled. This verifies and records that sale; it does not place an order.</span><span id="control-status" class="help" aria-live="polite"></span><span id="control-action-status" class="help" role="status" aria-live="polite" hidden></span></section>
 <div id="account-alert" class="notice compact" role="status" hidden style="display:none"><strong>Account check</strong><span id="account-message"></span></div>
 <div class="overview-metrics"><section class="card metric-card"><div class="metric-label">Available USDT</div><div class="metric" id="cash-balance" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Tracked account value</div><div class="metric" id="net-worth" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Estimated P&amp;L (Net)</div><div class="metric" id="pnl" data-skeleton aria-busy="true">—</div></section><section class="card metric-card"><div class="metric-label">Open positions</div><div class="metric" id="open-count" data-skeleton aria-busy="true">—</div></section></div>
 
@@ -1215,6 +1215,8 @@ async function refreshStatus() {
     const showExternalRecovery = Boolean(d.external_close_recovery_available);
     recoveryButton.hidden = !showExternalRecovery;
     recoveryButton.style.display = showExternalRecovery ? 'inline-flex' : 'none';
+    $('reconcile-demo-sell-help').hidden = !showExternalRecovery;
+    $('reconcile-demo-sell-help').style.display = showExternalRecovery ? 'block' : 'none';
     const closedTradeReview = $('review-closed-trade');
     const showClosedTradeReview = Boolean(d.closed_trade_accounting_review_available);
     closedTradeReview.hidden = !showClosedTradeReview;
@@ -1318,7 +1320,8 @@ $('reconcile-external-close').addEventListener('click', async () => {
   const d = await (await fetch('/api/status', { cache: 'no-store' })).json();
   const candidates = Object.entries(d.positions || {}).filter(([, p]) => p.order_id && !p.stop_order_id);
   if (candidates.length !== 1) {
-    $('control-status').textContent = 'Recovery requires exactly one tracked Demo position without a saved stop.';
+    $('control-action-status').hidden = false;
+    $('control-action-status').textContent = 'Recovery requires exactly one tracked Demo position without a saved stop.';
     return;
   }
   const [symbol, position] = candidates[0];
@@ -1327,38 +1330,44 @@ $('reconcile-external-close').addEventListener('click', async () => {
     if (!confirm(`The bot will check its saved ${symbol} sell directly with Binance Demo and compare the wallet balance. This sends no order. Any remaining amount must be below Binance's minimum trade size. The safety halt will remain until you review it. Continue?`)) return;
     const button = $('reconcile-external-close');
     button.disabled = true;
-    $('control-status').textContent = 'Checking the saved sell and remaining Binance balance…';
+    $('control-action-status').hidden = false;
+    $('control-action-status').textContent = 'Checking the saved sell and remaining Binance balance…';
     try {
       const r = await fetch('/api/reconcile-external-close', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol, terminal_sell: true })
       });
       const result = await r.json();
-      $('control-status').textContent = result.message || 'Demo sell reconciliation finished.';
       await refreshStatus();
+      $('control-action-status').hidden = false;
+      $('control-action-status').textContent = result.message || 'Demo sell reconciliation finished.';
     } catch (e) {
-      $('control-status').textContent = `Reconciliation failed: ${e.message}`;
+      $('control-action-status').hidden = false;
+      $('control-action-status').textContent = `Reconciliation failed: ${e.message}`;
     } finally {
       button.disabled = false;
     }
     return;
   }
-  const sellOrderId = prompt(`Enter the Binance Demo SELL order number for ${symbol}. Check Order History first.`);
+  const sellOrderId = prompt(`Enter the Binance Demo SELL order number for ${symbol}. Only continue if the sell is already filled in Binance Demo. Check Order History first; this button does not place a sell.`);
   if (!sellOrderId) return;
   if (!confirm(`Verify: Binance Demo shows buy ${position.order_id}, sell ${sellOrderId}, no open orders, and only unsellable dust remaining. This sends no order; it reconciles the saved position and marks accounting incomplete. Continue?`)) return;
   const button = $('reconcile-external-close');
   button.disabled = true;
-  $('control-status').textContent = 'Verifying the two Binance Demo fills and remaining balance…';
+  $('control-action-status').hidden = false;
+  $('control-action-status').textContent = 'Verifying the two Binance Demo fills and remaining balance…';
   try {
     const r = await fetch('/api/reconcile-external-close', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, buy_order_id: String(position.order_id), sell_order_id: sellOrderId.trim() })
     });
     const result = await r.json();
-    $('control-status').textContent = result.message || 'External close reconciliation finished.';
     await refreshStatus();
+    $('control-action-status').hidden = false;
+    $('control-action-status').textContent = result.message || 'External close reconciliation finished.';
   } catch (e) {
-    $('control-status').textContent = `Reconciliation failed: ${e.message}`;
+    $('control-action-status').hidden = false;
+    $('control-action-status').textContent = `Reconciliation failed: ${e.message}`;
   } finally {
     button.disabled = false;
   }
@@ -1465,3 +1474,4 @@ $('testnet-smoke').addEventListener('click', async () => {
   }
 });
 </script></body></html>
+
