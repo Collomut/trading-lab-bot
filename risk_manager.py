@@ -219,6 +219,7 @@ class RiskManager:
     ROLLING_DRAWDOWN_HALT_PREFIX = "Rolling peak-to-trough drawdown limit reached:"
     REVIEWED_CLEAR_HALT_PREFIXES = (
         "Emergency stop",
+        "Existing position uses a different exit policy",
         "Exchange stop filled",
         "Consecutive loss limit reached",
         "Consecutive loss limit persists",

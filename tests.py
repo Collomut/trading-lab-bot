@@ -1444,6 +1444,9 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertTrue(RiskManager.is_reviewed_clear_halt("Buy fee details were incomplete for BTC/USDT; position protected with stop, operator reconciliation required"))
             self.assertFalse(RiskManager.is_reviewed_clear_halt("Open-position state is unreadable; operator reconciliation required"))
             self.assertTrue(RiskManager.is_reviewed_clear_halt("Unresolved order intent exists; exchange reconciliation required"))
+            self.assertTrue(RiskManager.is_reviewed_clear_halt(
+                "Existing position uses a different exit policy; close and reconcile the Demo sell before reviewing and resuming"
+            ))
 
             # A previously-sticky execution halt is now recoverable via review.
             rm.halt("Buy fee details were incomplete for BTC/USDT; position protected with stop, operator reconciliation required")
@@ -3914,6 +3917,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             bot.risk_manager.open_position("BTC/USDT", 100.0, 1.0)
             bot.risk_manager.close_position("BTC/USDT", 99.0, "Test loss")
             self.assertTrue(bot.risk_manager._is_halted)
+
             prior_daily_loss = bot.risk_manager._daily_loss
             success, _ = bot.resume_entries()
             self.assertFalse(success)
@@ -3940,6 +3944,32 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertFalse(success)
             self.assertIn("positions", message)
             self.assertTrue(bot.risk_manager._is_halted)
+
+    def test_exit_policy_mismatch_halt_can_only_be_reviewed_after_position_is_flat(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.halt(
+                "Existing position uses a different exit policy; close and reconcile the Demo sell before reviewing and resuming"
+            )
+            bot.risk_manager.open_position("BTC/USDT", 100.0, 1.0)
+            bot._cycle_lock = threading.Lock()
+            bot._last_account_error = ""
+            bot._reconcile_exchange_state = Mock(return_value=True)
+
+            success, message = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertFalse(success)
+            self.assertIn("positions", message)
+            self.assertTrue(bot.risk_manager._is_halted)
+
+            # This models a separately verified/reconciled Demo close. The
+            # halt can then be cleared only by the normal account review path.
+            bot.risk_manager.close_position("BTC/USDT", 101.0, "Verified Demo close")
+            success, message = bot.resume_entries(acknowledge_manual_halt=True)
+            self.assertTrue(success, message)
+            self.assertFalse(bot.risk_manager._is_halted)
+            audit = bot.risk_manager.store.list_events(event_type="manual_halt_review_acknowledged")
+            self.assertEqual(len(audit), 1)
 
     def test_resume_entries_rebases_rolling_drawdown_peak_after_reconciliation(self):
         with TemporaryDirectory() as persistence_dir:

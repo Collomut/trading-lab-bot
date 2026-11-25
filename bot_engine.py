@@ -75,7 +75,7 @@ class TradingBot:
                 for position in self.risk_manager.open_positions.values()
         )):
             self.risk_manager.halt(
-                "Existing position uses a different exit policy; reconcile it before starting the paper profile"
+                "Existing position uses a different exit policy; keep its matching profile active or close and reconcile the Demo sell before reviewing and resuming"
             )
         self.is_running = False
         self._cycle_count = 0
