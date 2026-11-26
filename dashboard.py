@@ -1193,20 +1193,42 @@ class WebDashboard:
         if timeframe not in allowed_timeframes:
             return web.json_response({"error": "Unsupported chart timeframe."}, status=400)
         loop = asyncio.get_event_loop()
+        exchange = self.bot.exchange
         candles = await loop.run_in_executor(
-            None, self.bot.exchange.fetch_ohlcv, symbol, timeframe, 100
+            None, exchange.fetch_ohlcv, symbol, timeframe, 100
         )
         if not candles:
-            return web.json_response({"error": "Market candles are temporarily unavailable."}, status=502)
+            return web.json_response(
+                {"error": "Market candles are temporarily unavailable."}, status=502,
+                headers={"Cache-Control": "no-store"},
+            )
+        # In paper Demo/Testnet mode, candles are deliberately fetched from
+        # Binance's public Spot market-data client. Use that same client for
+        # the chart quote so its headline price cannot silently come from a
+        # different paper-account endpoint. Live mode uses the configured
+        # Binance client for both candles and quote.
+        public_feed = getattr(exchange, "market_data_exchange", None) is not None
+        if public_feed:
+            chart_price = await loop.run_in_executor(
+                None, exchange.get_public_market_data_price, symbol
+            )
+            price_source = "Binance Spot public market data"
+        else:
+            chart_price = await loop.run_in_executor(
+                None, exchange.get_current_price, symbol
+            )
+            price_source = "Configured Binance Spot market data"
         return web.json_response({
             "symbol": symbol,
             "timeframe": timeframe,
+            "price": chart_price,
+            "price_source": price_source,
             "candles": [
                 {"time": int(c[0]), "open": float(c[1]), "high": float(c[2]),
                  "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
                 for c in candles if len(c) >= 6
             ],
-        })
+        }, headers={"Cache-Control": "no-store"})
 
     async def handle_run_cycle(self, request):
         if not self._is_valid_origin(request):

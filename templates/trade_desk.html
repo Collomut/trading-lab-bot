@@ -16,9 +16,9 @@
 
   <section class="trade-layout" aria-label="Market chart and order controls">
     <section class="card trade-chart-card">
-      <div class="trade-chart-head"><div><div class="eyebrow">Market chart <span class="trade-live-indicator"><i></i> Live · 15 sec</span></div><div class="trade-quote"><strong id="chart-price">—</strong><span id="chart-change" class="tag" title="Change across the candles currently loaded">—</span></div></div><div class="trade-chart-controls"><label class="sr-only" for="desk-symbol">Market</label><select id="desk-symbol" class="button secondary" aria-label="Choose market"></select><label class="sr-only" for="desk-timeframe">Chart interval</label><select id="desk-timeframe" class="button secondary" aria-label="Choose chart interval"><option value="15m">15 minutes</option><option value="1h" selected>1 hour</option><option value="4h">4 hours</option><option value="1d">1 day</option></select></div></div>
+      <div class="trade-chart-head"><div><div class="eyebrow">Market chart <span class="trade-live-indicator"><i></i> Spot market · refreshes every 15 sec</span></div><div class="trade-quote"><strong id="chart-price">—</strong><span id="chart-change" class="tag" title="Change across the candles currently loaded">—</span></div></div><div class="trade-chart-controls"><label class="sr-only" for="desk-symbol">Market</label><select id="desk-symbol" class="button secondary" aria-label="Choose market"></select><label class="sr-only" for="desk-timeframe">Chart interval</label><select id="desk-timeframe" class="button secondary" aria-label="Choose chart interval"><option value="15m">15 minutes</option><option value="1h" selected>1 hour</option><option value="4h">4 hours</option><option value="1d">1 day</option></select></div></div>
       <div class="trade-chart-wrap"><canvas id="desk-chart" aria-label="Live candlestick chart"></canvas><div id="chart-empty" class="trade-chart-empty" hidden>Market candles are temporarily unavailable.</div></div>
-      <div class="trade-chart-foot"><span><i class="chart-legend-up"></i> Rising</span><span><i class="chart-legend-down"></i> Falling</span><span id="chart-time">Waiting for market data</span></div>
+      <div class="trade-chart-foot"><span><i class="chart-legend-up"></i> Rising</span><span><i class="chart-legend-down"></i> Falling</span><span id="chart-source">Market data source</span><span id="chart-time">Waiting for market data</span></div>
     </section>
 
     <aside class="card trade-order-card">
@@ -42,8 +42,8 @@
 (() => {
   const $ = id => document.getElementById(id);
   const canvas = $('desk-chart'), ctx = canvas.getContext('2d');
-  let status = null, candles = [], refreshTimer;
-  const money = n => Number.isFinite(Number(n)) ? '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) : 'Unavailable';
+  let status = null, candles = [], chartPrice = null, refreshTimer, candleRequestId = 0, displayedChartKey = '';
+  const money = n => n === null || n === undefined || n === '' ? 'Unavailable' : Number.isFinite(Number(n)) ? '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) : 'Unavailable';
   const number = n => Number.isFinite(Number(n)) ? Number(n).toLocaleString(undefined,{maximumFractionDigits:8}) : '—';
   function draw() {
     const rect = canvas.getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
@@ -54,25 +54,44 @@
     ctx.clearRect(0,0,w,h);
     if (!candles.length) return;
     const shown = candles.slice(-70), lows = shown.map(c=>c.low), highs = shown.map(c=>c.high);
+    if(Number.isFinite(chartPrice)&&chartPrice>0){lows.push(chartPrice);highs.push(chartPrice);}
     const lo=Math.min(...lows), hi=Math.max(...highs), span=Math.max(hi-lo,Math.abs(hi)*0.001,1e-8);
     const y=v=>pad.t+(hi-v)/span*(h-pad.t-pad.b), slot=(w-pad.l-pad.r)/shown.length, body=Math.max(2,slot*.58);
     ctx.font='11px system-ui, sans-serif'; ctx.textAlign='right'; ctx.textBaseline='middle';
     for(let i=0;i<5;i++){const val=hi-span*i/4, yy=y(val);ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--line').trim()||'#303030';ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#888';ctx.fillText(number(val),w-6,yy);}
     shown.forEach((c,i)=>{const x=pad.l+i*slot+slot/2, up=c.close>=c.open, color=up?'#27bd8a':'#f04e63';ctx.strokeStyle=color;ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(x,y(c.high));ctx.lineTo(x,y(c.low));ctx.stroke();const top=y(Math.max(c.open,c.close)), bottom=y(Math.min(c.open,c.close));ctx.fillRect(x-body/2,top,body,Math.max(1,bottom-top));});
-    const last=shown[shown.length-1], yy=y(last.close);ctx.setLineDash([4,3]);ctx.strokeStyle='#d7b252';ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle='#d7b252';ctx.fillRect(w-pad.r+3,yy-10,pad.r-5,20);ctx.fillStyle='#111';ctx.textAlign='center';ctx.fillText(number(last.close),w-pad.r/2,yy);
+    const last=shown[shown.length-1], quote=Number.isFinite(chartPrice)&&chartPrice>0?chartPrice:last.close, yy=y(quote);ctx.setLineDash([4,3]);ctx.strokeStyle='#d7b252';ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#d7b252';ctx.fillRect(w-pad.r+3,yy-10,pad.r-5,20);ctx.fillStyle='#111';ctx.textAlign='center';ctx.fillText(number(quote),w-pad.r/2,yy);
   }
   async function loadCandles() {
-    const symbol=$('desk-symbol').value;if(!symbol)return;
-    try{const q=new URLSearchParams({symbol,timeframe:$('desk-timeframe').value});const r=await fetch('/api/candles?'+q,{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'Market data unavailable');candles=d.candles||[];$('chart-empty').hidden=!!candles.length;draw();if(candles.length>1){const first=Number(candles[0].close),last=Number(candles[candles.length-1].close),change=first?((last-first)/first*100):0;$('chart-change').textContent=`${change>=0?'+':''}${change.toFixed(2)}%`;$('chart-change').className='tag '+(change>=0?'positive':'negative');}$('chart-time').textContent='Updated '+new Date().toLocaleTimeString();}
-    catch(_){$('chart-empty').hidden=false;$('chart-time').textContent='Waiting for market data';}
+    const symbol=$('desk-symbol').value, timeframe=$('desk-timeframe').value;if(!symbol)return;
+    const requestId=++candleRequestId, key=`${symbol}|${timeframe}`;
+    const isCurrent=()=>requestId===candleRequestId&&symbol===$('desk-symbol').value&&timeframe===$('desk-timeframe').value;
+    if(displayedChartKey!==key){candles=[];chartPrice=null;displayedChartKey='';draw();$('chart-price').textContent='Unavailable';$('chart-change').textContent='—';$('chart-empty').hidden=true;}
+    try{
+      const q=new URLSearchParams({symbol,timeframe}),r=await fetch('/api/candles?'+q,{cache:'no-store'}),d=await r.json();
+      if(!isCurrent())return;
+      if(!r.ok)throw Error(d.error||'Market data unavailable');
+      if(d.symbol!==symbol||d.timeframe!==timeframe||!Array.isArray(d.candles))throw Error('Market data did not match the selected chart.');
+      const next=d.candles.map(c=>({time:Number(c.time),open:Number(c.open),high:Number(c.high),low:Number(c.low),close:Number(c.close),volume:Number(c.volume)}));
+      if(next.some(c=>![c.time,c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite)||c.time<=0||Math.min(c.open,c.high,c.low,c.close)<=0||c.volume<0||c.high<Math.max(c.open,c.close,c.low)||c.low>Math.min(c.open,c.close)))throw Error('Market candles failed validation.');
+      const intervalMs={'15m':900000,'1h':3600000,'4h':14400000,'1d':86400000}[timeframe], now=Date.now();
+      if(!next.length||next.some((c,i)=>c.time%intervalMs!==0||(i>0&&c.time-next[i-1].time!==intervalMs)))throw Error('Market candles are incomplete or out of order.');
+      const latestCandleTime=next[next.length-1].time;
+      if(latestCandleTime>now+2000||now-latestCandleTime>intervalMs*2)throw Error('Market candles are stale.');
+      candles=next;chartPrice=Number.isFinite(Number(d.price))&&d.price!==null?Number(d.price):null;displayedChartKey=key;$('chart-empty').hidden=!!candles.length;draw();
+      $('chart-price').textContent=money(d.price);$('chart-source').textContent=d.price_source||'Market data source unavailable';
+      if(candles.length>1){const first=candles[0].close,last=candles[candles.length-1].close,change=first?((last-first)/first*100):0;$('chart-change').textContent=`${change>=0?'+':''}${change.toFixed(2)}%`;$('chart-change').className='tag '+(change>=0?'positive':'negative');}
+      $('chart-time').textContent='Updated '+new Date().toLocaleTimeString();
+    }
+    catch(_){if(!isCurrent())return;candles=[];chartPrice=null;displayedChartKey='';draw();$('chart-empty').hidden=false;$('chart-price').textContent='Unavailable';$('chart-source').textContent='Market data unavailable';$('chart-time').textContent='Waiting for market data';}
   }
   async function refreshStatus() {
     try{
       const r=await fetch('/api/status',{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.error||'Account status unavailable');status=d;
       const pairs=d.configured_symbols||[], select=$('desk-symbol'), old=select.value;
       if(pairs.join('|')!==[...select.options].map(o=>o.value).join('|')){select.replaceChildren(...pairs.map(pair=>{const o=document.createElement('option');o.value=pair;o.textContent=pair;return o;}));if(pairs.includes(old))select.value=old;}
-      const quote=Number((d.prices||{})[select.value]);$('chart-price').textContent=money(quote);$('desk-cash').textContent=d.account_available?money(d.cash_balance):'Unavailable';$('desk-positions').textContent=`${d.positions_count||0} / ${d.max_positions||0}`;
+      $('desk-cash').textContent=d.account_available?money(d.cash_balance):'Unavailable';$('desk-positions').textContent=`${d.positions_count||0} / ${d.max_positions||0}`;
       const clean=Boolean(d.account_available&&d.exchange_reconciled&&!d.halted&&(!d.route_halts||Object.keys(d.route_halts).length===0)&&d.entry_mode==='ACTIVE');
       $('desk-dot').className='dot '+(clean?'ok':'bad');$('desk-mode').textContent=d.paper_trading&&d.paper_environment==='demo'&&!d.fallback_simulated?'Binance Demo · Practice funds':d.fallback_simulated?'Simulated fallback · orders disabled':d.paper_trading?`Practice mode · ${d.paper_environment||'paper'} · manual orders disabled`:'Live mode · manual controls disabled';
       $('desk-account-state').textContent=d.halted?'Safety pause active':d.account_available&&d.exchange_reconciled?'Checked':'Needs review';

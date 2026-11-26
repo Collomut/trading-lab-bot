@@ -5111,6 +5111,63 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
 # 7. Dashboard API & Security Suite
 # ==============================================================================
 
+class TestCandlesDashboardHandler(unittest.TestCase):
+    def _make_dashboard(self, public_feed):
+        dashboard = object.__new__(WebDashboard)
+        dashboard.config = Mock()
+        dashboard.config.strategy.timeframe = "1h"
+        dashboard.config.strategy.trading_pairs = ["BTC/USDT"]
+        dashboard.bot = Mock()
+        exchange = dashboard.bot.exchange
+        exchange.market_data_exchange = object() if public_feed else None
+        exchange.fetch_ohlcv.return_value = [[1_000, 1.0, 1.2, 0.9, 1.1, 10.0]]
+        exchange.get_public_market_data_price.return_value = 1.15
+        exchange.get_current_price.return_value = 1.14
+        return dashboard
+
+    def _run(self, dashboard, query):
+        class Request:
+            def __init__(self, values):
+                self.query = values
+
+        class InlineLoop:
+            async def run_in_executor(self, _executor, function, *args):
+                return function(*args)
+
+        coroutine = dashboard.handle_candles(Request(query))
+        with patch("dashboard.asyncio.get_event_loop", return_value=InlineLoop()):
+            try:
+                coroutine.send(None)
+            except StopIteration as completed:
+                return completed.value
+        self.fail("The candle handler unexpectedly yielded")
+
+    def test_demo_chart_quote_uses_the_same_public_market_feed_as_candles(self):
+        dashboard = self._make_dashboard(public_feed=True)
+
+        response = self._run(dashboard, {"symbol": "BTC/USDT", "timeframe": "1h"})
+
+        body = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body["price"], 1.15)
+        self.assertEqual(body["price_source"], "Binance Spot public market data")
+        dashboard.bot.exchange.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", 100)
+        dashboard.bot.exchange.get_public_market_data_price.assert_called_once_with("BTC/USDT")
+        dashboard.bot.exchange.get_current_price.assert_not_called()
+        self.assertEqual(response.headers.get("Cache-Control"), "no-store")
+
+    def test_live_chart_quote_uses_the_same_configured_feed_as_candles(self):
+        dashboard = self._make_dashboard(public_feed=False)
+
+        response = self._run(dashboard, {"symbol": "BTC/USDT", "timeframe": "1h"})
+
+        body = json.loads(response.text)
+        self.assertEqual(body["price"], 1.14)
+        self.assertEqual(body["price_source"], "Configured Binance Spot market data")
+        dashboard.bot.exchange.get_current_price.assert_called_once_with("BTC/USDT")
+        dashboard.bot.exchange.get_public_market_data_price.assert_not_called()
+
+
 class TestReconcileOrdersDashboardHandler(unittest.TestCase):
     def test_saved_demo_sell_recovery_endpoint_is_same_origin_and_sends_no_order(self):
         dashboard = object.__new__(WebDashboard)
