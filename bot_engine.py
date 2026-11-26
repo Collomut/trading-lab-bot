@@ -1186,6 +1186,7 @@ class TradingBot:
                 self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
                 self.risk_manager.store.append_event("sell_dust_reconciled", {
                     "symbol": symbol, "order_id": str(order.get("id", "")),
+                    "buy_order_id": str(getattr(position, "order_id", "") or ""),
                     "filled": str(filled), "remaining_dust": str(remaining),
                     "baseline_balance": updated_baseline[base],
                     "accounting_complete": bool(record.accounting_complete),
@@ -1199,9 +1200,11 @@ class TradingBot:
             self.risk_manager.store.mark_order_applied(client_order_id)
             self.risk_manager.store.append_event("partial_exit_reconciled", {
                 "symbol": symbol, "order_id": str(order.get("id", "")),
+                "buy_order_id": str(getattr(position, "order_id", "") or ""),
                 "filled": str(filled), "remaining": str(remaining),
                 "accounting_complete": bool(record.accounting_complete) if record else False,
             })
+            self.risk_manager.set_exit_only()
             self.risk_manager.halt(f"Partial sell for {symbol} was reconciled; manual review required")
             return True
         except Exception as exc:
@@ -1289,6 +1292,9 @@ class TradingBot:
                     position_already_reduced=position_already_reduced):
                 return {"success": False, "message": "The Binance sell could not be safely matched to the remaining wallet balance. Trading stays halted."}
             reconciled = self._reconcile_exchange_state()
+            self.risk_manager.set_exit_only()
+            if reconciled:
+                self.risk_manager.halt("Demo sell reconciled; operator review required before resuming")
             if not reconciled:
                 return {"success": False, "message": "The sell was recorded, but the full Binance account check still needs review. Trading stays halted."}
             return {
@@ -3193,19 +3199,25 @@ class TradingBot:
             self._cycle_lock.release()
 
     def _pending_external_close_accounting(self) -> list[tuple[str, str, str, dict]]:
-        """Find closed Demo trades whose prior external-close audit proves their order pair."""
+        """Find incomplete Demo closes whose audit and order ledger uniquely prove their order pair."""
         list_events = getattr(self.risk_manager.store, "list_events", None)
         list_trades = getattr(self.risk_manager.store, "list_trades", None)
-        if not callable(list_events) or not callable(list_trades):
+        list_orders = getattr(self.risk_manager.store, "list_order_intents", None)
+        if not callable(list_events) or not callable(list_trades) or not callable(list_orders):
             return []
         try:
-            events = list_events(500, event_type="external_close_reconciled")
+            events = [
+                *list_events(1000, event_type="external_close_reconciled"),
+                *list_events(1000, event_type="sell_dust_reconciled"),
+            ]
             trades = list_trades(1000)
+            orders = list_orders(5000)
             completed_ids = set()
-            for event in list_events(500, event_type="external_close_accounting_completed"):
-                details = event.get("details", {}) if isinstance(event, dict) else {}
-                if isinstance(details, dict) and details.get("sell_order_id"):
-                    completed_ids.add(str(details["sell_order_id"]))
+            for event_type in ("external_close_accounting_completed", "closed_trade_accounting_completed"):
+                for event in list_events(1000, event_type=event_type):
+                    details = event.get("details", {}) if isinstance(event, dict) else {}
+                    if isinstance(details, dict) and details.get("sell_order_id"):
+                        completed_ids.add(str(details["sell_order_id"]))
         except Exception as exc:
             logger.warning("Could not inspect closed-trade reconciliation records (%s)", type(exc).__name__)
             return []
@@ -3215,9 +3227,10 @@ class TradingBot:
             if not isinstance(details, dict) or details.get("accounting_complete") is not False:
                 continue
             symbol = details.get("symbol")
-            buy_id = str(details.get("buy_order_id") or "")
             sell_id = str(details.get("sell_order_id") or "")
-            if (not isinstance(symbol, str) or not buy_id.isdigit() or not sell_id.isdigit()
+            if not sell_id:
+                sell_id = str(details.get("order_id") or "")
+            if (not isinstance(symbol, str) or not sell_id.isdigit()
                     or sell_id in completed_ids):
                 continue
             matches = [row for row in trades if isinstance(row, dict)
@@ -3225,7 +3238,35 @@ class TradingBot:
                        and str(row.get("order_id") or "") == sell_id
                        and (row.get("accounting_complete") is False or row.get("pnl") is None)]
             if len(matches) == 1:
-                candidates.append((symbol, buy_id, sell_id, matches[0]))
+                saved = matches[0]
+                buy_id = str(details.get("buy_order_id") or saved.get("entry_order_id") or "")
+                if not buy_id.isdigit():
+                    # Legacy dust-close audits did not store the entry order id.
+                    # Recover it only when one applied BUY intent matches the
+                    # market, entry price, and entry timestamp unambiguously.
+                    try:
+                        entry_price = Decimal(str(saved.get("entry_price")))
+                        entry_time = datetime.fromisoformat(str(saved.get("entry_time")).replace("Z", "+00:00"))
+                        possible = []
+                        for order in orders:
+                            if (str(order.get("symbol")) != symbol
+                                    or str(order.get("side", "")).lower() != "buy"
+                                    or str(order.get("state", "")).upper() != "FILLED"
+                                    or not order.get("applied")
+                                    or not str(order.get("exchange_order_id") or "").isdigit()):
+                                continue
+                            average = Decimal(str(order.get("average") or 0))
+                            created = datetime.fromisoformat(str(order.get("created_at")).replace("Z", "+00:00"))
+                            if (average.is_finite() and average > 0
+                                    and abs(average - entry_price) <= max(Decimal("0.00000001"), entry_price * Decimal("0.00000001"))
+                                    and abs((created - entry_time).total_seconds()) <= 600):
+                                possible.append(str(order["exchange_order_id"]))
+                        if len(possible) == 1:
+                            buy_id = possible[0]
+                    except (InvalidOperation, TypeError, ValueError, KeyError):
+                        buy_id = ""
+                if buy_id.isdigit():
+                    candidates.append((symbol, buy_id, sell_id, saved))
         return candidates
 
     def reconcile_closed_external_trade(self) -> dict:
@@ -3237,6 +3278,9 @@ class TradingBot:
         if not self._cycle_lock.acquire(timeout=10):
             return {"success": False, "message": "The bot is checking the account. Wait and try again."}
         try:
+            # Reviewing historical accounting is never permission to trade.
+            # Pause entries first and keep them paused on both success and error.
+            self.risk_manager.set_exit_only()
             candidates = self._pending_external_close_accounting()
             if len(candidates) != 1:
                 return {"success": False, "message": "There must be exactly one auditable closed Demo trade awaiting fee review; no records were changed."}
@@ -3323,12 +3367,15 @@ class TradingBot:
                 expected_dust = net_bought - sold - base_sold_fee
                 if expected_dust < 0:
                     raise ValueError("verified fees imply a negative residual")
-                event_rows = self.risk_manager.store.list_events(2000, event_type="external_close_reconciled")
+                event_rows = [
+                    *self.risk_manager.store.list_events(2000, event_type="external_close_reconciled"),
+                    *self.risk_manager.store.list_events(2000, event_type="sell_dust_reconciled"),
+                ]
                 prior = [event.get("details", {}) for event in event_rows
                          if isinstance(event, dict) and isinstance(event.get("details"), dict)
-                         and str(event["details"].get("sell_order_id")) == sell_order_id]
+                         and str(event["details"].get("sell_order_id") or event["details"].get("order_id")) == sell_order_id]
                 if len(prior) != 1:
-                    raise ValueError("the external-close audit pair is not unique")
+                    raise ValueError("the closed-trade audit record is not unique")
                 recorded_dust = Decimal(str(prior[0].get("remaining_dust")))
                 if not recorded_dust.is_finite() or abs(expected_dust - recorded_dust) > Decimal("0.00000002"):
                     raise ValueError("verified residual does not match the recorded account reconciliation")
@@ -3401,7 +3448,7 @@ class TradingBot:
                 except Exception:
                     daily_risk_saved = False
                     self.risk_manager.halt("Reconciled trade P&L is saved, but daily risk state needs review")
-            self.risk_manager.store.append_event("external_close_accounting_completed", {
+            self.risk_manager.store.append_event("closed_trade_accounting_completed", {
                 "symbol": symbol, "buy_order_id": buy_order_id, "sell_order_id": sell_order_id,
                 "buy_fills": str(bought), "sell_fills": str(sold),
                 "entry_fee_quote_allocated": str(entry_fee_allocated),
@@ -3410,6 +3457,8 @@ class TradingBot:
                 "source": "verified Binance Demo private fills",
                 "daily_risk_state_saved": daily_risk_saved,
             })
+            self.risk_manager.set_exit_only()
+            self.risk_manager.halt("Closed-trade accounting reviewed; operator review required before resuming")
             return {"success": True, "accounting_complete": True, "pnl": round(float(net_pnl), 8),
                     "fee": round(float(total_fee), 8), "message": (
                         "Binance Demo fills and fees were re-verified. The closed trade’s net P&L is now reconciled."
@@ -3443,6 +3492,7 @@ class TradingBot:
             position = self.risk_manager.open_positions.get(symbol)
             if not position or position.stop_order_id:
                 return {"success": False, "message": "Recovery requires the tracked position with no saved exchange stop."}
+            self.risk_manager.set_exit_only()
             if str(position.order_id) != buy_order_id:
                 return {"success": False, "message": "The buy order number does not match the bot's saved position."}
             balance, open_orders = self.exchange.fetch_account_snapshot()
@@ -3656,6 +3706,11 @@ class TradingBot:
             self._last_account_balance = balance
             self._last_account_error = ""
             clean = self._reconcile_exchange_state()
+            # Reconciliation repairs records only. Do not let a successful
+            # account check silently reactivate entries after an external close.
+            self.risk_manager.set_exit_only()
+            if clean:
+                self.risk_manager.halt("Demo close reconciled; operator review required before resuming")
             return {"success": clean, "accounting_complete": bool(record.accounting_complete),
                     "message": ("The Demo sell, fills, fees and remaining dust now match Binance. Net P&L has been reconciled; review the safety halt before resuming." if record.accounting_complete else
                                 "The Demo sell and remaining dust now match Binance, but a fee could not be valued. Accounting remains pending review.") if clean else

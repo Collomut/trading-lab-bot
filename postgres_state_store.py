@@ -494,6 +494,15 @@ class PostgresStateStore:
                 (client_order_id,),
             ).fetchone()
 
+    def list_order_intents(self, limit=2000):
+        """Return recent order intents for exact audit correlation; never changes state."""
+        limit = max(1, min(int(limit), 10000))
+        with self._pool.connection() as conn:
+            return conn.execute(
+                "SELECT * FROM bot_private.order_intents ORDER BY created_at DESC LIMIT %s",
+                (limit,),
+            ).fetchall()
+
     def is_known_client_order(self, client_order_id):
         if not client_order_id:
             return False

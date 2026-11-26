@@ -222,6 +222,25 @@ class StateStore:
             row = conn.execute("SELECT * FROM order_intents WHERE client_order_id=?", (client_order_id,)).fetchone()
             return dict(row) if row else None
 
+    def list_order_intents(self, limit=2000):
+        """Return recent order intents for exact audit correlation; never changes state."""
+        limit = max(1, min(int(limit), 10000))
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT * FROM order_intents ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            for field in ("request_json", "response_json"):
+                if isinstance(item.get(field), str):
+                    try:
+                        item[field] = json.loads(item[field])
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        item[field] = None
+            result.append(item)
+        return result
+
     def is_known_client_order(self, client_order_id: str) -> bool:
         if not client_order_id:
             return False
