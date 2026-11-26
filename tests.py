@@ -1447,6 +1447,15 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertTrue(RiskManager.is_reviewed_clear_halt(
                 "Existing position uses a different exit policy; close and reconcile the Demo sell before reviewing and resuming"
             ))
+            for reason in (
+                "Demo sell reconciled; operator review required before resuming",
+                "Demo close reconciled; operator review required before resuming",
+                "Closed-trade accounting reviewed; operator review required before resuming",
+            ):
+                self.assertTrue(RiskManager.is_reviewed_clear_halt(reason))
+                rm.halt(reason)
+                self.assertTrue(rm.acknowledge_manual_halt_review())
+                self.assertFalse(rm._is_halted)
 
             # A previously-sticky execution halt is now recoverable via review.
             rm.halt("Buy fee details were incomplete for BTC/USDT; position protected with stop, operator reconciliation required")
