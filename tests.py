@@ -2250,7 +2250,10 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
             [start + i * 3_600_000, 100, 101, 99, 100, 10]
             for i in range(2502)
         ])
-        closed = connector.fetch_closed_ohlcv("BTC/USDT", "1h", 2501)
+        # Freeze the filter clock safely inside the same hour. Otherwise the
+        # 2-second candle-finalization buffer makes this boundary-sensitive.
+        with patch("exchange.time.time", return_value=(latest_open + 60_000) / 1000):
+            closed = connector.fetch_closed_ohlcv("BTC/USDT", "1h", 2501)
         self.assertEqual(len(closed), 2501)
         self.assertLess(closed[-1][0], latest_open)
         connector.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", 2502)
@@ -2268,7 +2271,8 @@ class TestExchangeConnectorAndSecurity(unittest.TestCase):
             [start + i * 3_600_000, 100, 101, 99, 100, 10]
             for i in range(2501)
         ])
-        closed = connector.fetch_closed_ohlcv("BTC/USDT", "1h", 2500)
+        with patch("exchange.time.time", return_value=(latest_open + 60_000) / 1000):
+            closed = connector.fetch_closed_ohlcv("BTC/USDT", "1h", 2500)
         self.assertEqual(len(closed), 2500)
         self.assertLess(closed[-1][0], latest_open)
         connector.fetch_ohlcv.assert_called_once_with("BTC/USDT", "1h", 2501)
@@ -2640,6 +2644,52 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(bot.risk_manager.open_positions["BTC/USDT"].route, "manual_operator")
             bot._reconcile_exchange_state.assert_called_once_with()
             bot._handle_buy_signal.assert_called_once()
+
+    def test_manual_demo_buy_can_explicitly_disable_stop_without_bypassing_checks(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = SimpleNamespace(
+                exchange=SimpleNamespace(paper_trading=True, paper_environment="demo"),
+                strategy=SimpleNamespace(trading_pairs=["BTC/USDT"]),
+            )
+            bot.exchange = SimpleNamespace(is_fallback_simulated=False)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot._cycle_lock = threading.Lock()
+            bot._last_reconciliation_ok = False
+            bot._reconcile_exchange_state = Mock(side_effect=lambda: setattr(bot, "_last_reconciliation_ok", True) or True)
+
+            def simulate_entry(signal, decision_key):
+                self.assertFalse(signal.indicators["use_stop_loss"])
+                position = bot.risk_manager.open_position(
+                    signal.symbol, 100.0, 1.0, order_id="demo-buy-2",
+                    route="manual_operator", stop_policy="operator_no_stop",
+                )
+                return position
+
+            bot._handle_buy_signal = Mock(side_effect=simulate_entry)
+            result = bot.manual_demo_buy("BTC/USDT", "1123456789abcdef0123456789abcdef", use_stop_loss=False)
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["stop_policy"], "operator_no_stop")
+            self.assertFalse(result["stop_protected"])
+            self.assertIn("no stop loss", result["message"])
+            saved = bot.risk_manager.open_positions["BTC/USDT"]
+            self.assertFalse(saved.should_stop_loss(1.0))
+            saved.take_profit_price = 110.0
+            self.assertEqual(bot.risk_manager.check_positions(lambda _symbol: 110.0), [("BTC/USDT", "TAKE-PROFIT triggered")])
+
+    def test_no_stop_policy_is_rejected_for_non_manual_positions_and_persists_for_manual(self):
+        with TemporaryDirectory() as persistence_dir:
+            risk = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            with self.assertRaises(ValueError):
+                risk.open_position("BTC/USDT", 100.0, 1.0, stop_policy="operator_no_stop")
+            position = risk.open_position(
+                "BTC/USDT", 100.0, 1.0, route="manual_operator",
+                stop_policy="operator_no_stop",
+            )
+            restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertEqual(restored.open_positions["BTC/USDT"].stop_policy, "operator_no_stop")
+            self.assertEqual(restored.open_positions["BTC/USDT"].entry_price, position.entry_price)
 
     def test_manual_demo_buy_fails_closed_outside_demo_or_with_safety_halt(self):
         bot = object.__new__(TradingBot)

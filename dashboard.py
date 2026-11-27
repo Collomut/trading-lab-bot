@@ -562,6 +562,7 @@ class WebDashboard:
                 pos_dict["estimated_exit_fee"] = None
                 pos_dict["estimated_exit_fee_rate"] = 0.001
                 pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
+                pos_dict["stop_protected"] = bool(pos.stop_order_id)
                 pos_dict["target_gain_dollars"] = (
                     round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
                     if pos.take_profit_price is not None else None
@@ -592,11 +593,19 @@ class WebDashboard:
                 pos_dict["estimated_exit_fee"] = round(estimated_exit_fee, 4)
                 pos_dict["estimated_exit_fee_rate"] = ESTIMATED_TAKER_FEE_RATE
                 pos_dict["max_loss_dollars"] = round(abs(pos.entry_price - pos.stop_loss_price) * pos.amount, 2)
+                pos_dict["stop_protected"] = bool(pos.stop_order_id)
                 pos_dict["target_gain_dollars"] = (
                     round((pos.take_profit_price - pos.entry_price) * pos.amount, 2)
                     if pos.take_profit_price is not None else None
                 )
                 positions[sym] = pos_dict
+
+            if getattr(pos, "stop_policy", "exchange") == "operator_no_stop":
+                # The price stored internally for sizing is only a reference;
+                # it is not an active or guaranteed exit level.
+                pos_dict["stop_loss_price"] = None
+                pos_dict["max_loss_dollars"] = None
+                pos_dict["stop_protected"] = False
 
         unresolved_orders = risk.store.unresolved_orders()
         pending_sell_intents = [intent for intent in unresolved_orders
@@ -733,18 +742,18 @@ class WebDashboard:
                 self.config.exchange.paper_trading
                 and self.config.exchange.paper_environment == "demo"
                 and risk._is_halted and not is_fallback_sim
-                and any(p.get("order_id") and not p.get("stop_order_id") for p in positions.values())
+                and any(p.get("order_id") and p.get("stop_policy", "exchange") == "exchange" and not p.get("stop_order_id") for p in positions.values())
             ),
             "terminal_demo_sell_recovery_available": bool(
                 self.config.exchange.paper_trading
                 and self.config.exchange.paper_environment == "demo"
                 and risk._is_halted and not is_fallback_sim
-                and len([p for p in positions.values() if p.get("order_id") and not p.get("stop_order_id")]) == 1
+                and len([p for p in positions.values() if p.get("order_id") and p.get("stop_policy", "exchange") == "exchange" and not p.get("stop_order_id")]) == 1
                 and len(unresolved_orders) == 1
                 and len(pending_sell_intents) == 1
                 and pending_sell_intents[0].get("symbol") in {
                     sym for sym, position in positions.items()
-                    if position.get("order_id") and not position.get("stop_order_id")
+                    if position.get("order_id") and position.get("stop_policy", "exchange") == "exchange" and not position.get("stop_order_id")
                 }
             ),
             "closed_trade_accounting_review_available": bool(
@@ -924,7 +933,12 @@ class WebDashboard:
                 "entry_price": str(details.get("entry_price", ""))[:80],
                 "amount": str(details.get("amount", ""))[:80],
                 "stop_protected": bool(details.get("stop_protected", False)),
-                "message": "Operator-requested Binance Demo buy; processed through the bot's normal sizing and risk checks.",
+                "stop_policy": str(details.get("stop_policy", "exchange"))[:32],
+                "message": (
+                    "Operator-requested Binance Demo buy with no stop loss; account, sizing, and position checks still apply."
+                    if details.get("stop_policy") == "operator_no_stop" else
+                    "Operator-requested Binance Demo buy; processed through the bot's normal sizing and risk checks."
+                ),
             }
         if event_type == "order_reconciled_no_fill":
             return {
@@ -1360,14 +1374,17 @@ class WebDashboard:
             return web.json_response({"success": False, "message": "Choose a configured market and confirm the Demo order."}, status=400)
         symbol = payload.get("symbol")
         request_id = payload.get("request_id")
+        use_stop_loss = payload.get("use_stop_loss", True)
         if not isinstance(symbol, str) or not symbol.strip() or len(symbol) > 32:
             return web.json_response({"success": False, "message": "Choose a valid configured market."}, status=400)
         if payload.get("confirmed") is not True:
             return web.json_response({"success": False, "message": "Confirm the Demo order before sending it."}, status=400)
+        if not isinstance(use_stop_loss, bool):
+            return web.json_response({"success": False, "message": "Choose whether to use a stop loss."}, status=400)
         self._status_cache = None
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            None, self.bot.manual_demo_buy, symbol.strip(), request_id
+            None, self.bot.manual_demo_buy, symbol.strip(), request_id, use_stop_loss
         )
         self._status_cache = None
         status = 200 if result.get("success") else 409

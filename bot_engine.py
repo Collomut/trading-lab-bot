@@ -982,6 +982,10 @@ class TradingBot:
 
     def _place_and_persist_native_stop(self, symbol: str, entry_order_id: str, fallback_sl: float | None = None, fallback_amount: float | None = None) -> bool:
         position = self.risk_manager.open_positions.get(symbol)
+        if position and getattr(position, "stop_policy", "exchange") == "operator_no_stop":
+            # This is an explicit, persisted manual Demo choice, not a missing
+            # stop to repair. All other positions retain fail-closed behavior.
+            return True
         amount = position.amount if position else fallback_amount
         sl_price = position.stop_loss_price if position else fallback_sl
         if not amount or not sl_price or amount <= 0 or sl_price <= 0:
@@ -1599,6 +1603,10 @@ class TradingBot:
                 # pair, which would otherwise mis-attribute this position's
                 # balance and tolerance checks to the wrong asset.
                 base = configured.get(symbol, symbol.split("/")[0] if "/" in symbol else symbol)
+                if position.stop_policy == "operator_no_stop":
+                    if position.stop_order_id or position.stop_client_order_id:
+                        raise ValueError(f"no-stop manual position {symbol} unexpectedly has a saved stop order")
+                    continue
                 if not position.stop_order_id or not position.stop_client_order_id:
                     raise ValueError(f"tracked position {symbol} has no persisted exchange stop")
                 if symbol in seen_stops:
@@ -2287,13 +2295,14 @@ class TradingBot:
         atr = signal.indicators.get("atr", 0.0)
         profile_name = getattr(self.config.strategy, "name", "combined").strip().lower()
         candidate_strategy = signal.indicators.get("strategy") if isinstance(signal.indicators, dict) else None
-        ema72_candidate = profile_name == "macro_donchian_ema72" or (
+        operator_entry = indicators.get("manual_operator") is True
+        ema72_candidate = not operator_entry and (profile_name == "macro_donchian_ema72" or (
             profile_name == "dynamic_regime" and candidate_strategy == "macro_donchian_ema72"
-        )
-        pullback_candidate = profile_name == "macro_trend_pullback" or (
+        ))
+        pullback_candidate = not operator_entry and (profile_name == "macro_trend_pullback" or (
             profile_name == "dynamic_regime" and candidate_strategy == "macro_trend_pullback"
-        )
-        recovery_candidate = profile_name == "dynamic_regime" and candidate_strategy == "downtrend_rsi_recovery_testnet"
+        ))
+        recovery_candidate = not operator_entry and profile_name == "dynamic_regime" and candidate_strategy == "downtrend_rsi_recovery_testnet"
         managed_candidate = ema72_candidate or pullback_candidate or recovery_candidate
         # Reserve headroom under the 0.20% strategy cap for entry fees and
         # rounded exchange quantities before the post-fill risk validation.
@@ -2490,6 +2499,10 @@ class TradingBot:
                     self.risk_manager.halt(f"Candidate target became invalid after fill for {symbol}; manual reconciliation required")
                     return
 
+            manual_no_stop = bool(
+                indicators.get("manual_operator") is True
+                and indicators.get("use_stop_loss") is False
+            )
             try:
                 self.risk_manager.open_position(
                     symbol=symbol,
@@ -2507,6 +2520,7 @@ class TradingBot:
                     route=str(indicators.get("route", "") or ""),
                     regime=str(indicators.get("regime", "") or ""),
                     simulated=self._simulated_wallet_active(),
+                    stop_policy="operator_no_stop" if manual_no_stop else "exchange",
                 )
             except Exception as exc:
                 logger.error("Failed to open local position: %s", exc)
@@ -2528,8 +2542,9 @@ class TradingBot:
             if not position or actual_stop_risk is None:
                 self.risk_manager.halt(f"Post-fill risk could not be validated for {symbol}; reconcile position and stop")
 
-            # F-02: Even if local persistence failed or risk_manager is halted,
-            # we MUST still place the native stop loss on the exchange for the acquired coins!
+            # If the operator explicitly selected no stop for a manual Demo
+            # entry, preserve that policy. Every automated or stop-enabled
+            # position still requires a confirmed exchange-native stop.
             stop_placed = self._place_and_persist_native_stop(
                 symbol, order.get("id", ""), fallback_sl=actual_stop_loss, fallback_amount=fill_amount
             )
@@ -2609,7 +2624,11 @@ class TradingBot:
                 })
 
             pos = self.risk_manager.open_positions.get(symbol)
-            sl_text = f"${pos.stop_loss_price:,.2f}" if pos else "N/A"
+            sl_text = (
+                "None (operator chose no stop)"
+                if pos and pos.stop_policy == "operator_no_stop"
+                else f"${pos.stop_loss_price:,.2f}" if pos else "N/A"
+            )
             tp_text = (
                 f"${pos.take_profit_price:,.2f} (100×ATR backstop)" if pos and pos.exit_policy in {"ema72_signal", "ema36_signal"} and pos.take_profit_price is not None
                 else "EMA72 completed-candle exit" if pos and pos.exit_policy == "ema72_signal"
@@ -2750,7 +2769,7 @@ class TradingBot:
                 self.send_notification(msg, subject=f"🔴 Bot SELL: {symbol} (P&L: {subject_pnl})")
                 self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
 
-    def manual_demo_buy(self, symbol: str, request_id: str) -> dict:
+    def manual_demo_buy(self, symbol: str, request_id: str, use_stop_loss: bool = True) -> dict:
         """Open one operator-requested Demo position through normal risk and fill handling."""
         allowed_symbols = {pair.strip() for pair in self.config.strategy.trading_pairs}
         if not (self.config.exchange.paper_trading
@@ -2762,6 +2781,8 @@ class TradingBot:
             return {"success": False, "message": "Choose a market configured for this bot."}
         if not isinstance(request_id, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", request_id):
             return {"success": False, "message": "The trade request could not be validated. Refresh and try again."}
+        if not isinstance(use_stop_loss, bool):
+            return {"success": False, "message": "Choose whether this Demo position should use a stop loss."}
         if not self._cycle_lock.acquire(timeout=10):
             return {"success": False, "message": "The bot is checking the account. Wait briefly and try again."}
         try:
@@ -2787,7 +2808,8 @@ class TradingBot:
             signal = TradeSignal(
                 Signal.BUY, symbol, 1.0,
                 "Manual Demo entry requested by operator",
-                {"manual_operator": True, "strategy": "manual_demo", "route": "manual_operator"},
+                {"manual_operator": True, "strategy": "manual_demo", "route": "manual_operator",
+                 "use_stop_loss": use_stop_loss},
             )
             self._handle_buy_signal(signal, decision_key=decision_key)
             position = risk.open_positions.get(symbol)
@@ -2801,6 +2823,7 @@ class TradingBot:
                 "entry_price": position.entry_price,
                 "amount": position.amount,
                 "stop_loss_price": position.stop_loss_price,
+                "stop_policy": position.stop_policy,
                 "take_profit_price": position.take_profit_price,
                 "stop_protected": bool(position.stop_order_id),
                 "accounting_complete": bool(position.accounting_complete),
@@ -2810,7 +2833,16 @@ class TradingBot:
                 risk.store.append_event("manual_demo_buy_completed", details)
             except Exception:
                 logger.exception("Manual Demo buy completed but its audit event could not be saved for %s", symbol)
-            if not position.stop_order_id:
+            if position.stop_policy == "operator_no_stop":
+                message = (
+                    f"Demo buy filled for {symbol} with no stop loss, as selected. Losses can continue to grow if the price falls. "
+                    "The configured take-profit still applies; monitor this position and close it manually when appropriate."
+                )
+                if not position.accounting_complete:
+                    message += " Fee accounting is incomplete, so new orders are paused until the fill is reviewed."
+                if risk._is_halted:
+                    message += f" Safety pause active: {risk._halt_reason or 'operator review required'}. No further orders can be placed."
+            elif not position.stop_order_id:
                 message = (
                     f"Demo buy filled for {symbol}, but its exchange stop is not confirmed. "
                     "New orders are halted. Do not retry; review the open position and Binance Demo order history now."
@@ -2848,6 +2880,8 @@ class TradingBot:
         # 1. Sync any tightened break-even or trailing stops to Binance exchange (F-05)
         for sym, pos in list(self.risk_manager.open_positions.items()):
             if pos.exit_policy in {"ema72_signal", "downtrend_rsi_recovery", "ema36_signal"}:
+                continue
+            if pos.stop_policy == "operator_no_stop":
                 continue
             cur_p = self.exchange.get_current_price(sym)
             if cur_p is not None and cur_p > 0:
@@ -2970,11 +3004,12 @@ class TradingBot:
             for symbol, pos in positions.items():
                 current = self.exchange.get_current_price(symbol)
                 if current is None or current <= 0:
+                    stop_text = "No stop loss (operator-managed)" if getattr(pos, "stop_policy", "exchange") == "operator_no_stop" else f"SL: ${pos.stop_loss_price:,.2f}"
                     target = ("EMA72 close exit" if pos.exit_policy == "ema72_signal"
                               else "EMA36 close exit" if pos.exit_policy == "ema36_signal"
                               else f"${pos.take_profit_price:,.2f} (2×ATR target)" if pos.exit_policy == "downtrend_rsi_recovery"
                               else f"${pos.take_profit_price:,.2f}")
-                    print(f"    ⚠️ {symbol}: price unavailable | SL: ${pos.stop_loss_price:,.2f} | TP/exit: {target}")
+                    print(f"    ⚠️ {symbol}: price unavailable | {stop_text} | TP/exit: {target}")
                     continue
                 pnl = pos.unrealized_pnl(current)
                 pnl_pct = pos.unrealized_pnl_pct(current)
@@ -2986,7 +3021,7 @@ class TradingBot:
                 print(
                     f"    {emoji} {symbol}: ${pos.entry_price:,.2f} → "
                     f"${current:,.2f} | P&L: ${pnl:+,.2f} ({pnl_pct:+.2f}%){be_tag} | "
-                    f"SL: ${pos.stop_loss_price:,.2f} | TP/exit: {target}"
+                    f"{'No stop loss (operator-managed)' if getattr(pos, 'stop_policy', 'exchange') == 'operator_no_stop' else f'SL: ${pos.stop_loss_price:,.2f}'} | TP/exit: {target}"
                 )
 
         print(f"{'─' * 60}")

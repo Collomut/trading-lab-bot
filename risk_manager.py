@@ -111,6 +111,7 @@ class Position:
     entry_fee_quote: float = 0.0
     highest_price: float = 0.0  # For trailing stop
     break_even_activated: bool = False
+    stop_policy: str = "exchange"  # "exchange" or explicit operator-managed no-stop mode
     exit_policy: str = "risk_managed"
     accounting_complete: bool = True
     route: str = ""        # Router-selected strategy id at entry
@@ -137,6 +138,8 @@ class Position:
 
     def should_stop_loss(self, current_price: float) -> bool:
         """Check if stop-loss should trigger."""
+        if self.stop_policy == "operator_no_stop":
+            return False
         return current_price <= self.stop_loss_price
 
     def should_take_profit(self, current_price: float) -> bool:
@@ -486,6 +489,11 @@ class RiskManager:
                 if not isinstance(data, dict):
                     raise ValueError("open-position state must be an object")
                 for sym, pos_data in data.items():
+                    if not isinstance(pos_data, dict):
+                        raise ValueError(f"invalid persisted position for {sym}")
+                    # Positions written before the policy field existed used
+                    # exchange-native stops; retain that safe default.
+                    pos_data.setdefault("stop_policy", "exchange")
                     position = Position.from_dict(pos_data)
                     numeric_values = (
                         position.entry_price, position.amount, position.stop_loss_price,
@@ -502,6 +510,9 @@ class RiskManager:
                             not all(math.isfinite(float(value)) for value in numeric_values) or
                             position.entry_price <= 0 or position.amount <= 0 or
                             position.stop_loss_price <= 0 or
+                            position.stop_policy not in {"exchange", "operator_no_stop"} or
+                            (position.stop_policy == "operator_no_stop" and
+                             (position.route != "manual_operator" or position.stop_order_id or position.stop_client_order_id)) or
                             not valid_target or position.exit_policy not in {"risk_managed", "ema72_signal", "downtrend_rsi_recovery"}):
                         raise ValueError(f"invalid persisted position for {sym}")
                     self.open_positions[sym] = position
@@ -996,10 +1007,15 @@ class RiskManager:
         route: str = "",
         regime: str = "",
         simulated: bool = False,
+        stop_policy: str = "exchange",
     ) -> Position:
         """Record and persist a new open position."""
-        if exit_policy not in {"risk_managed", "ema72_signal", "downtrend_rsi_recovery"}:
+        if exit_policy not in {"risk_managed", "ema72_signal", "downtrend_rsi_recovery", "ema36_signal"}:
             raise ValueError("Unsupported position exit policy")
+        if stop_policy not in {"exchange", "operator_no_stop"}:
+            raise ValueError("Unsupported stop policy")
+        if stop_policy == "operator_no_stop" and route != "manual_operator":
+            raise ValueError("No-stop mode is available only for operator-managed Demo positions")
         selected_stop = self.calculate_stop_loss(entry_price, atr) if stop_loss_override is None else float(stop_loss_override)
         selected_target = (
             float(take_profit_override)
@@ -1025,6 +1041,7 @@ class RiskManager:
             entry_fee_quote=max(0.0, float(entry_fee_quote)),
             highest_price=entry_price,
             break_even_activated=False,
+            stop_policy=stop_policy,
             exit_policy=exit_policy,
             route=route,
             regime=regime,
@@ -1231,6 +1248,14 @@ class RiskManager:
                 if position.should_stop_loss(current_price):
                     to_close.append((symbol, "STOP-LOSS triggered"))
                 elif position.should_take_profit(current_price):
+                    to_close.append((symbol, "TAKE-PROFIT triggered"))
+                continue
+
+            # Manual Demo positions can deliberately omit a stop. Keep the
+            # configured take-profit check, but never synthesize a stop through
+            # break-even or trailing logic for that explicit policy.
+            if position.stop_policy == "operator_no_stop":
+                if position.should_take_profit(current_price):
                     to_close.append((symbol, "TAKE-PROFIT triggered"))
                 continue
 

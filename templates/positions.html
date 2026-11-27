@@ -125,11 +125,11 @@
             const resultPct = position.estimated_net_pnl_pct;
             const resultLabel = `${money(result)}${resultPct === null || resultPct === undefined ? '' : ` (${Number(resultPct).toFixed(2)}%)`}`;
             cell(row, resultLabel, result >= 0 ? 'positive' : 'negative');
-            cell(row, priceText(position.stop_loss_price));
+            cell(row, position.stop_policy === 'operator_no_stop' ? 'None · manual monitoring' : priceText(position.stop_loss_price));
             cell(row, position.take_profit_price === null
               ? (position.exit_policy === 'ema36_signal' ? 'EMA36 close' : 'EMA72 close')
               : `${priceText(position.take_profit_price)}${position.exit_policy === 'ema72_signal' ? ' / EMA72 exit' : position.exit_policy === 'ema36_signal' ? ' / EMA36 exit' : ''}`);
-            cell(row, position.break_even_activated ? 'Trailing' : 'Initial');
+            cell(row, position.stop_policy === 'operator_no_stop' ? 'Not set' : position.break_even_activated ? 'Trailing' : 'Initial');
             const action = row.insertCell();
             const button = document.createElement('button');
             button.type = 'button';

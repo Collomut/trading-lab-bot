@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <title>Trade desk · Trading Lab</title>
-  <link rel="stylesheet" href="/assets/app.css?v=m13">
+  <link rel="stylesheet" href="/assets/app.css?v=m14">
   <script src="/assets/app.js?v=m13" defer></script>
 </head>
 <body>
@@ -23,10 +23,12 @@
 
     <aside class="card trade-order-card">
       <div class="eyebrow">Manual order</div><h2 id="desk-action-title">Buy or close</h2>
-      <p class="help">A buy uses the bot’s normal sizing, protective stop, position limit, and account checks. A close uses the existing guarded exit flow. Both are recorded as manual actions in Logs.</p>
+      <p class="help">A buy uses the bot’s normal sizing, position limit, and account checks. Choose whether this manual Demo position has an automatic stop loss. A close uses the guarded exit flow. All actions are recorded in Logs.</p>
       <div class="trade-facts"><div><span>Available funds</span><strong id="desk-cash">—</strong></div><div><span>Open positions</span><strong id="desk-positions">—</strong></div><div><span>Account check</span><strong id="desk-account-state">Checking…</strong></div></div>
       <div id="desk-safety" class="notice compact" role="status" aria-live="polite">Checking account safeguards…</div>
       <a id="desk-review-link" class="button secondary trade-manage" href="/#trading-controls" hidden>Review account status</a>
+      <label class="manual-stop-choice"><input id="desk-use-stop" type="checkbox" checked> Use protective stop loss</label>
+      <div id="desk-no-stop-warning" class="notice compact warning" role="note" hidden>No stop loss means a falling price can keep increasing your loss. The bot will not auto-close this manual position on a stop; monitor it and close it yourself. The configured take-profit and account safety limits still apply.</div>
       <button id="desk-buy" class="button trade-buy" type="button" disabled>Buy with bot sizing</button>
       <button id="desk-close" class="button trade-close" type="button" hidden disabled>Close position</button>
       <a class="button secondary trade-manage" href="/positions">Manage or close a position</a>
@@ -100,6 +102,9 @@
       const selectedPosition=(d.positions||{})[select.value],atPos=Boolean(selectedPosition);
       $('desk-action-title').textContent=atPos?'Close '+select.value:'Buy '+select.value;
       $('desk-buy').hidden=atPos;
+      $('desk-use-stop').disabled=atPos;
+      $('desk-use-stop').parentElement.hidden=atPos;
+      $('desk-no-stop-warning').hidden=atPos||$('desk-use-stop').checked;
       $('desk-close').hidden=!atPos;
       $('desk-buy').disabled=!d.manual_demo_available||!pairs.includes(select.value);
       $('desk-close').disabled=!d.manual_close_available;
@@ -117,12 +122,15 @@
   }
   $('desk-symbol').addEventListener('change',()=>{loadCandles();refreshStatus();});
   $('desk-timeframe').addEventListener('change',loadCandles);
+  $('desk-use-stop').addEventListener('change',()=>{$('desk-no-stop-warning').hidden=$('desk-use-stop').checked;});
   $('desk-buy').addEventListener('click',async()=>{
     const symbol=$('desk-symbol').value;if(!status?.manual_demo_available||!symbol)return;
-    const confirmed=confirm(`Buy ${symbol} on Binance Demo using the bot's normal risk-based size? This counts toward the position limit and will use the configured protective stop. Strategy sell signals will not close this manual position. Fees, slippage, and outages can cause losses. No real funds will be used.`);
+    const useStopLoss=$('desk-use-stop').checked;
+    const stopText=useStopLoss?'A Binance Demo protective stop will be placed.':'NO STOP LOSS: losses can continue to grow without an automatic stop exit. You must monitor and close this position yourself.';
+    const confirmed=confirm(`Buy ${symbol} on Binance Demo using the bot's normal risk-based size? ${stopText} The position counts toward the configured position and account risk limits. Strategy sell signals will not close this manual position; the configured take-profit remains active. Fees, slippage, and outages can cause losses. No real funds will be used.`);
     if(!confirmed)return;
     const btn=$('desk-buy'),out=$('desk-order-status');btn.disabled=true;out.textContent=`Checking account and submitting Demo buy for ${symbol}…`;
-    try{const r=await fetch('/api/manual-demo-buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,confirmed:true,request_id:crypto.randomUUID().replaceAll('-','')})});const d=await r.json();out.textContent=d.message||(r.ok?'Demo order completed.':'No order was completed.');out.className='help '+(d.success?'positive':'negative');await refreshStatus();await loadCandles();}
+    try{const r=await fetch('/api/manual-demo-buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,confirmed:true,use_stop_loss:useStopLoss,request_id:crypto.randomUUID().replaceAll('-','')})});const d=await r.json();out.textContent=d.message||(r.ok?'Demo order completed.':'No order was completed.');out.className='help '+(d.success?'positive':'negative');await refreshStatus();await loadCandles();}
     catch(_){out.textContent='Order result could not be confirmed. Do not retry yet; check Positions, Logs, and Binance Demo order history.';out.className='help negative';}
     finally{await refreshStatus();}
   });

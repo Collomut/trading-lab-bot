@@ -2135,6 +2135,10 @@ nav {
 .trade-facts span { color:var(--muted); }
 .trade-facts strong { text-align:right; }
 .trade-order-card .notice { margin:14px 0; }
+.manual-stop-choice { display:flex; align-items:center; gap:9px; margin:16px 0 8px; font-weight:650; cursor:pointer; }
+.manual-stop-choice input { width:18px; height:18px; accent-color:var(--accent); }
+.trade-order-card .notice.warning { display:block; border-color:#b88428; }
+.trade-order-card .notice.warning[hidden] { display:none; }
 .trade-buy,.trade-manage { width:100%; justify-content:center; margin-top:8px; }
 .trade-caution { margin:14px 0 0; color:var(--muted); font-size:12px; }
 .trade-order-card #desk-order-status:empty { display:none; }
