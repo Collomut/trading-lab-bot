@@ -844,19 +844,31 @@ class RiskManager:
         self.store.write_state("entry_mode", "EXIT_ONLY")
         self.store.append_event("mode_changed", {"mode": "EXIT_ONLY"})
 
-    def acknowledge_manual_halt_review(self, *, rolling_drawdown_rebase_equity: float | None = None) -> bool:
+    def acknowledge_manual_halt_review(
+        self, *, rolling_drawdown_rebase_equity: float | None = None,
+        allow_operator_managed_positions: bool = False,
+    ) -> bool:
         """Clear a reviewed halt after the operator confirms the account is safe.
 
         Only halt reasons in REVIEWED_CLEAR_HALT_PREFIXES may be cleared here;
         state-integrity and other halts remain hard latches. Callers
         (resume_entries) must already have verified a clean, reconciled, flat
-        account with no unresolved orders before invoking this method.
+        account with no unresolved orders before invoking this method. The one
+        exception is a stale exit-policy mismatch halt on explicitly
+        operator-managed positions, which may remain open after reconciliation.
         """
         if not self._is_halted:
             return False
         reason = self._halt_reason
         if not self.is_reviewed_clear_halt(reason):
             return False
+        if self.open_positions:
+            if not allow_operator_managed_positions or any(
+                    getattr(position, "route", "") != "manual_operator"
+                    for position in self.open_positions.values()):
+                return False
+            if not reason.startswith("Existing position uses a different exit policy"):
+                return False
         loss_limit_halt = reason.startswith(("Consecutive loss limit reached", "Consecutive loss limit persists"))
         rolling_drawdown_halt = self.is_rolling_drawdown_halt(reason)
         protective_stop_halt = reason.startswith("Exchange stop filled")

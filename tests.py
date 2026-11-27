@@ -2711,6 +2711,49 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertNotIn("protective stop restored", bot.risk_manager._halt_reason)
             bot.exchange.place_native_stop_loss.assert_not_called()
 
+    def test_dynamic_profile_does_not_halt_for_operator_managed_manual_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            config = BotConfig(dashboard_token="test_token", data_dir=persistence_dir)
+            config.strategy.name = "dynamic_regime"
+            saved = RiskManager(config.risk, persistence_dir=persistence_dir)
+            saved.open_position(
+                "BTC/USDT", 50000.0, 0.01, route="manual_operator",
+                stop_policy="operator_no_stop",
+            )
+
+            with patch("bot_engine.ExchangeConnector"), \
+                 patch.object(TradingBot, "_setup_logging"), \
+                 patch.object(TradingBot, "_setup_trade_log"):
+                bot = TradingBot(config)
+
+            self.assertIn("BTC/USDT", bot.risk_manager.open_positions)
+            self.assertFalse(bot.risk_manager._is_halted)
+
+    def test_reviewed_stale_policy_halt_can_resume_with_reconciled_manual_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            risk = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            risk.open_position(
+                "BTC/USDT", 50000.0, 0.01, route="manual_operator",
+                stop_policy="operator_no_stop",
+            )
+            risk.halt(
+                "Existing position uses a different exit policy; keep its matching profile active or close and reconcile the Demo sell before reviewing and resuming"
+            )
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = risk
+            bot._cycle_lock = threading.Lock()
+            bot._last_account_error = ""
+            bot._pending_unbaselined_stop_review = Mock(return_value=None)
+            bot._reconcile_exchange_state = Mock(return_value=True)
+
+            success, message = bot.resume_entries(acknowledge_manual_halt=True)
+
+            self.assertTrue(success, message)
+            self.assertFalse(risk._is_halted)
+            self.assertIn("BTC/USDT", risk.open_positions)
+            self.assertEqual(risk.open_positions["BTC/USDT"].stop_policy, "operator_no_stop")
+            bot._reconcile_exchange_state.assert_called_once()
+
     def test_no_stop_position_does_not_claim_native_stop_placement(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)

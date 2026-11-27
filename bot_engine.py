@@ -71,7 +71,8 @@ class TradingBot:
         self.risk_manager.on_halt = self._notify_safety_halt
         self.shadow_ledger = ShadowLedger(self.risk_manager.store)
         if (config.strategy.name in {"macro_donchian_ema72", "dynamic_regime", "macro_trend_pullback"} and any(
-                position.exit_policy not in {"ema72_signal", "downtrend_rsi_recovery", "ema36_signal"}
+                position.route != "manual_operator"
+                and position.exit_policy not in {"ema72_signal", "downtrend_rsi_recovery", "ema36_signal"}
                 for position in self.risk_manager.open_positions.values()
         )):
             self.risk_manager.halt(
@@ -3904,6 +3905,12 @@ class TradingBot:
             return False, "The trading worker is busy. Wait for the current account check and try again."
         try:
             halt_reason = self.risk_manager._halt_reason
+            stale_policy_halt = halt_reason.startswith("Existing position uses a different exit policy")
+            operator_managed_positions_only = bool(self.risk_manager.open_positions) and all(
+                getattr(position, "route", "") == "manual_operator"
+                for position in self.risk_manager.open_positions.values()
+            )
+            allow_operator_managed_positions = stale_policy_halt and operator_managed_positions_only
             reviewable_halt = (
                 self.risk_manager._is_halted
                 and self.risk_manager.is_reviewed_clear_halt(halt_reason)
@@ -3914,7 +3921,8 @@ class TradingBot:
             if self.risk_manager.entry_mode() != "EXIT_ONLY" and not reviewable_halt:
                 return False, "New entries are not paused."
             if acknowledge_manual_halt and reviewable_halt and (
-                    self.risk_manager.open_positions or self.risk_manager.store.unresolved_orders()):
+                    (self.risk_manager.open_positions and not allow_operator_managed_positions)
+                    or self.risk_manager.store.unresolved_orders()):
                 return False, "Manual recovery is blocked while positions or unresolved orders remain. Inspect the configured Demo account."
             if not self._reconcile_exchange_state(
                     allow_manual_review_rebaseline=bool(acknowledge_manual_halt and reviewable_halt)):
@@ -3934,10 +3942,12 @@ class TradingBot:
             if self.risk_manager._is_halted:
                 if not (acknowledge_manual_halt and reviewable_halt):
                     return False, f"Cannot resume while a safety halt is active: {self.risk_manager._halt_reason}"
-                if self.risk_manager.open_positions or self.risk_manager.store.unresolved_orders():
+                if ((self.risk_manager.open_positions and not allow_operator_managed_positions)
+                        or self.risk_manager.store.unresolved_orders()):
                     return False, "Manual recovery is blocked while positions or unresolved orders remain. Inspect the Testnet account."
                 if not self.risk_manager.acknowledge_manual_halt_review(
-                        rolling_drawdown_rebase_equity=rolling_rebase_equity):
+                        rolling_drawdown_rebase_equity=rolling_rebase_equity,
+                        allow_operator_managed_positions=allow_operator_managed_positions):
                     return False, "The safety-halt review could not be saved; trading remains halted."
             self.risk_manager.store.write_state("entry_mode", "ACTIVE")
             self.risk_manager.store.append_event("mode_changed", {"mode": "ACTIVE", "source": "operator_resume"})
