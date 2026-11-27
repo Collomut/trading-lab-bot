@@ -4888,6 +4888,37 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(len(bot.risk_manager.store.list_trades()), 1)
             bot.exchange.place_market_sell.assert_not_called()
 
+    def test_reconciliation_recovers_applied_marker_only_from_matching_durable_sell(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            store = bot.risk_manager.store
+            store.create_order_intent("sell-client", "BTC/USDT", "sell", "1", {
+                "symbol": "BTC/USDT", "side": "sell", "amount": "1",
+            })
+            store.update_order("sell-client", "SUBMITTED")
+            store.update_order("sell-client", "FILLED", exchange_order_id="sell-123",
+                               filled="1", average="110", response={"id": "sell-123"})
+            bot.exchange = Mock()
+            bot.exchange.fetch_order.return_value = {
+                "id": "sell-123", "symbol": "BTC/USDT", "side": "sell",
+                "status": "closed", "filled": "1",
+            }
+
+            # A durable close row is necessary evidence to repair an interrupted
+            # applied-marker write. The matching exchange fill must agree too.
+            bot._reconcile_terminal_filled_order_intents()
+            self.assertEqual(len(store.unresolved_orders()), 1)
+
+            store.append_trade({"action": "SELL", "symbol": "BTC/USDT",
+                                "order_id": "sell-123", "amount": 1.0,
+                                "price": 110.0, "timestamp": "2026-11-27T00:00:00+00:00"})
+            bot._reconcile_terminal_filled_order_intents()
+
+            self.assertEqual(store.unresolved_orders(), [])
+            self.assertEqual(len(store.list_events(10, event_type="filled_order_application_recovered")), 1)
+            bot.exchange.fetch_order.assert_called_with("sell-123", "BTC/USDT")
+
     def test_closed_demo_dust_trade_is_available_for_self_service_fee_review(self):
         with TemporaryDirectory() as persistence_dir:
             cfg = BotConfig(dashboard_token="test_token")

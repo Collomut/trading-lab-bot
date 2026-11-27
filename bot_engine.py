@@ -1479,6 +1479,64 @@ class TradingBot:
                 "orders_found": len(found_orders),
             })
 
+    def _reconcile_terminal_filled_order_intents(self) -> None:
+        """Repair a lost applied marker only when exchange and durable state agree.
+
+        A process can stop after persisting a filled trade or position but
+        before setting the intent's applied bit. Never infer success from the
+        balance alone: require the exact terminal exchange order and its
+        corresponding durable BUY position or SELL ledger row.
+        """
+        list_intents = getattr(self.risk_manager.store, "list_order_intents", None)
+        list_trades = getattr(self.risk_manager.store, "list_trades", None)
+        if not callable(list_intents) or not callable(list_trades):
+            return
+        intents = list_intents(5000)
+        trades = list_trades(20000)
+        for intent in intents:
+            if (not isinstance(intent, dict) or intent.get("applied")
+                    or str(intent.get("state", "")).upper() not in {"FILLED", "PARTIAL_CLOSED"}):
+                continue
+            symbol = str(intent.get("symbol") or "")
+            side = str(intent.get("side") or "").lower()
+            order_id = str(intent.get("exchange_order_id") or "")
+            if not symbol or side not in {"buy", "sell"} or not order_id:
+                continue
+            order = self.exchange.fetch_order(order_id, symbol)
+            if (not isinstance(order, dict) or str(order.get("id") or "") != order_id
+                    or str(order.get("symbol") or "") != symbol
+                    or str(order.get("side") or "").lower() != side
+                    or str(order.get("status") or "").lower() != "closed"):
+                continue
+            try:
+                exchange_filled = Decimal(str(order.get("filled")))
+                journal_filled = Decimal(str(intent.get("filled")))
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+            if (not exchange_filled.is_finite() or not journal_filled.is_finite()
+                    or exchange_filled <= 0 or exchange_filled != journal_filled):
+                continue
+            if side == "buy":
+                position_matches = any(
+                    str(getattr(position, "order_id", "") or "") == order_id
+                    for position in self.risk_manager.open_positions.values()
+                )
+                trade_matches = False
+            else:
+                matches = [trade for trade in trades if isinstance(trade, dict)
+                           and str(trade.get("action", "")).upper() == "SELL"
+                           and str(trade.get("symbol") or "") == symbol
+                           and str(trade.get("order_id") or "") == order_id]
+                position_matches = False
+                trade_matches = len(matches) == 1
+            if position_matches or trade_matches:
+                self.risk_manager.store.mark_order_applied(str(intent.get("client_order_id") or ""))
+                self.risk_manager.store.append_event("filled_order_application_recovered", {
+                    "symbol": symbol, "side": side, "order_id": order_id,
+                    "evidence": "exchange_order_and_durable_position" if side == "buy"
+                    else "exchange_order_and_unique_durable_sell_row",
+                })
+
     def _reconcile_exchange_state(
         self, *, allow_manual_review_rebaseline: bool = False,
         allow_demo_reset_rebaseline: bool = False,
@@ -1744,6 +1802,7 @@ class TradingBot:
                             "difference": str(excess),
                             "below_minimum_notional": True,
                         })
+            self._reconcile_terminal_filled_order_intents()
             self._reconcile_terminal_no_fill_order_intents()
             if self.risk_manager.store.unresolved_orders():
                 raise ValueError("unresolved local order intent exists")
@@ -2799,6 +2858,10 @@ class TradingBot:
             )
 
             if record:
+                self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
+                # The terminal order is not fully applied until its close row
+                # is durable. If ledger persistence fails, leave the intent
+                # unresolved so the next account check cannot silently resume.
                 self.risk_manager.store.mark_order_applied(client_order_id)
                 pnl_text = (
                     f"${record.pnl:+,.2f} ({record.pnl_pct:+.2f}%)"
@@ -2814,7 +2877,6 @@ class TradingBot:
                 )
                 subject_pnl = f"${record.pnl:+,.2f}" if record.accounting_complete else "pending reconciliation"
                 self.send_notification(msg, subject=f"🔴 Bot SELL: {symbol} (P&L: {subject_pnl})")
-                self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
 
     def manual_demo_buy(self, symbol: str, request_id: str, use_stop_loss: bool = True) -> dict:
         """Open one operator-requested Demo position through normal risk and fill handling."""
@@ -3025,6 +3087,10 @@ class TradingBot:
                 record = self.risk_manager.close_position(symbol, fill_price, reason, fee_cost=fee_cost)
 
                 if record:
+                    self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
+                    # Keep the order journal open until the realized trade is
+                    # in the durable ledger; reconciliation can then recover
+                    # a failed applied-marker write from that ledger row.
                     self.risk_manager.store.mark_order_applied(client_order_id)
                     pnl_text = (
                         f"${record.pnl:+,.2f} ({record.pnl_pct:+.2f}%)"
@@ -3037,7 +3103,6 @@ class TradingBot:
                         f"P&L: {pnl_text}"
                     )
                     self.send_notification(msg, subject=f"🛡️ Position Closed: {symbol} ({reason})")
-                    self._log_closed_trade(record, record.reason, fill_price, str(order.get("id", "")))
 
     def print_status(self):
         """Print current bot status including open positions and P&L."""
