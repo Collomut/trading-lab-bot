@@ -1491,12 +1491,14 @@ class TradingBot:
         list_trades = getattr(self.risk_manager.store, "list_trades", None)
         if not callable(list_intents) or not callable(list_trades):
             return
-        intents = list_intents(5000)
-        trades = list_trades(20000)
+        intents = [intent for intent in list_intents(5000)
+                   if isinstance(intent, dict) and not intent.get("applied")
+                   and str(intent.get("state", "")).upper() in {"FILLED", "PARTIAL_CLOSED"}]
+        # Avoid loading the full history on routine account checks when only
+        # BUY intents need recovery (their position is already the evidence).
+        needs_sell_ledger = any(str(intent.get("side", "")).lower() == "sell" for intent in intents)
+        trades = list_trades(20000) if needs_sell_ledger else []
         for intent in intents:
-            if (not isinstance(intent, dict) or intent.get("applied")
-                    or str(intent.get("state", "")).upper() not in {"FILLED", "PARTIAL_CLOSED"}):
-                continue
             symbol = str(intent.get("symbol") or "")
             side = str(intent.get("side") or "").lower()
             order_id = str(intent.get("exchange_order_id") or "")
@@ -1518,8 +1520,9 @@ class TradingBot:
                 continue
             if side == "buy":
                 position_matches = any(
+                    position_symbol == symbol and
                     str(getattr(position, "order_id", "") or "") == order_id
-                    for position in self.risk_manager.open_positions.values()
+                    for position_symbol, position in self.risk_manager.open_positions.items()
                 )
                 trade_matches = False
             else:
