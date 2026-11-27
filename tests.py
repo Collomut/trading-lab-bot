@@ -1922,7 +1922,7 @@ class TestStateStoreAndPersistence(unittest.TestCase):
                 "pnl": 10.0, "pnl_pct": 10.0, "fee": 0.1, "accounting_complete": True,
                 "reason": "Test", "strategy": "macro_donchian_ema72",
                 "route": "macro_donchian_ema72", "regime": "uptrend",
-                "r_multiple": 1.0, "order_id": "buy-1", "simulated": False,
+                "r_multiple": 1.0, "order_id": "sell-1", "simulated": False,
                 "timestamp": "2026-11-15T01:00:00+00:00",
             })
             restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
@@ -1932,7 +1932,9 @@ class TestStateStoreAndPersistence(unittest.TestCase):
             self.assertEqual(record.route, "macro_donchian_ema72")
             self.assertEqual(record.regime, "uptrend")
             self.assertEqual(record.r_multiple, 1.0)
-            self.assertEqual(record.order_id, "buy-1")
+            self.assertEqual(record.order_id, "sell-1")
+            restored._load_trade_history()
+            self.assertEqual(len(restored.trade_history), 1)
 
     def test_order_intent_is_unique_and_unresolved_until_applied(self):
         with TemporaryDirectory() as persistence_dir:
@@ -4700,6 +4702,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(bot.risk_manager.store.get_order("sell-intent")["state"], "REJECTED")
             self.assertEqual(bot.risk_manager.store.read_state("baseline_asset_balances")["BNB"], "0.00030850")
             self.assertTrue(bot.risk_manager.trade_history[-1].accounting_complete)
+            self.assertEqual(bot.risk_manager.trade_history[-1].order_id, "9504747443")
             self.assertAlmostEqual(
                 bot.risk_manager.trade_history[-1].fee,
                 (0.0006915 * 539.13) * 0.921 / 0.9213085 + 0.48602091,
@@ -4873,7 +4876,7 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             })
             bot.risk_manager.store.write_state("baseline_asset_balances", {"BNB": "0.00030850"})
             bot.risk_manager._load_trade_history()
-            bot.risk_manager._load_trade_history()  # Simulate duplicate cache hydration.
+            bot.risk_manager.trade_history.append(bot.risk_manager.trade_history[0])  # Simulate a stale duplicate cache object.
             self.assertEqual(len(bot.risk_manager.trade_history), 2)
             bot._cycle_lock = threading.Lock()
 

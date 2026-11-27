@@ -530,7 +530,11 @@ class RiskManager:
 
     def _load_trade_history(self):
         """Hydrate in-memory TradeRecords from the durable store so performance
-        reporting matches the dashboard across restarts on both backends."""
+        reporting matches the dashboard across restarts on both backends.
+
+        Replacing the cache makes this safe to call more than once; otherwise a
+        repeated refresh could leave duplicate in-memory copies of each trade.
+        """
         try:
             list_trades = getattr(self.store, "list_trades", None)
             if callable(list_trades):
@@ -549,6 +553,7 @@ class RiskManager:
                             except (ValueError, TypeError):
                                 continue
             rows = normalize_trade_records(rows)
+            loaded_records = []
             for trade in rows:
                 if not isinstance(trade, dict) or trade.get("action") != "SELL":
                     continue
@@ -576,7 +581,8 @@ class RiskManager:
                 except (TypeError, ValueError, KeyError):
                     continue
                 if record.symbol and record.entry_price > 0 and record.exit_price > 0 and record.amount > 0:
-                    self.trade_history.append(record)
+                    loaded_records.append(record)
+            self.trade_history = loaded_records
         except Exception as exc:
             logger.warning("Could not hydrate trade history from durable store: %s", type(exc).__name__)
 

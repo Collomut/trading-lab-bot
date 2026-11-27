@@ -142,6 +142,7 @@ class TradingBot:
         """Persist every confirmed position close with full attribution."""
         if not record:
             return
+        exit_order_id = str(order_id or "").strip()
         self._log_trade({
             "action": "SELL",
             "symbol": record.symbol,
@@ -153,7 +154,10 @@ class TradingBot:
             "pnl_pct": record.pnl_pct,
             "fee": record.fee,
             "accounting_complete": record.accounting_complete,
-            "order_id": str(order_id or record.order_id or ""),
+            # Closed-trade rows are keyed by the closing order. The TradeRecord
+            # can still hold the opening order ID until this confirmed exit is
+            # durably logged; keep the runtime cache consistent with that row.
+            "order_id": exit_order_id or str(record.order_id or ""),
             "reason": reason,
             "strategy": record.strategy,
             "route": record.route,
@@ -161,6 +165,8 @@ class TradingBot:
             "r_multiple": record.r_multiple,
             "simulated": record.simulated,
         })
+        if exit_order_id:
+            record.order_id = exit_order_id
 
     def _send_telegram_notification(self, message: str):
         """Send notification to Telegram bot."""
