@@ -750,10 +750,20 @@ class TradingBot:
         if not amount_decimal.is_finite() or amount_decimal <= 0:
             raise ValueError("Order amount must be a finite positive decimal")
         client_id = self._client_order_id(symbol, side, str(decision_key))
+        request = {"symbol": symbol, "side": side, "amount": format(amount_decimal, "f"),
+                   "source": "manual" if str(decision_key).startswith("dashboard-manual-") else "bot"}
+        if side == "sell":
+            position = self.risk_manager.open_positions.get(symbol)
+            if position is not None:
+                # Durable entry context lets recovery rebuild a confirmed close
+                # if the worker stops after saving position removal but before
+                # its SELL ledger row. This snapshot is evidence only; recovery
+                # still requires an exact terminal Binance order and an account
+                # balance check.
+                request["position_snapshot"] = position.to_dict()
         self.risk_manager.store.create_order_intent(
             client_id, symbol, side, format(amount_decimal, "f"),
-            {"symbol": symbol, "side": side, "amount": format(amount_decimal, "f"),
-             "source": "manual" if str(decision_key).startswith("dashboard-manual-") else "bot"},
+            request,
         )
         self.risk_manager.store.update_order(client_id, "SUBMITTED")
         try:
@@ -1263,7 +1273,10 @@ class TradingBot:
                     or str(order.get("side", "")).lower() != "sell"
                     or str(order.get("status", "")).lower() not in {"closed", "canceled", "rejected", "expired"}):
                 return {"success": False, "message": "Binance does not confirm this saved sell as terminal. No records were changed."}
-            exchange_client_id = str(order.get("clientOrderId") or (order.get("info") or {}).get("clientOrderId") or "")
+            order_info = order.get("info")
+            exchange_client_id = str(order.get("clientOrderId") or (
+                order_info.get("clientOrderId") if isinstance(order_info, dict) else ""
+            ) or "")
             if exchange_client_id and exchange_client_id != str(intent.get("client_order_id")):
                 return {"success": False, "message": "The Binance sell belongs to a different order request. No records were changed."}
             try:
@@ -1532,13 +1545,96 @@ class TradingBot:
                            and str(trade.get("order_id") or "") == order_id]
                 position_matches = False
                 trade_matches = len(matches) == 1
+                if not matches and symbol not in self.risk_manager.open_positions:
+                    trade_matches = self._recover_missing_filled_sell_trade(intent, order)
+                    if trade_matches:
+                        trades = list_trades(20000)
             if position_matches or trade_matches:
                 self.risk_manager.store.mark_order_applied(str(intent.get("client_order_id") or ""))
                 self.risk_manager.store.append_event("filled_order_application_recovered", {
                     "symbol": symbol, "side": side, "order_id": order_id,
                     "evidence": "exchange_order_and_durable_position" if side == "buy"
-                    else "exchange_order_and_unique_durable_sell_row",
+                    else "exchange_order_and_durable_sell_row",
                 })
+
+    def _recover_missing_filled_sell_trade(self, intent: dict, order: dict) -> bool:
+        """Rebuild a full SELL row after a crash between position save and ledger write.
+
+        Partial exits and ambiguous snapshots stay unresolved for operator
+        review. A reconstructed row requires a terminal full fill whose order
+        identity, quantity precision, market, and saved entry snapshot agree.
+        """
+        symbol = str(intent.get("symbol") or "")
+        order_id = str(intent.get("exchange_order_id") or "")
+        request = intent.get("request_json") or {}
+        if isinstance(request, str):
+            try:
+                request = json.loads(request)
+            except json.JSONDecodeError:
+                return False
+        snapshot = request.get("position_snapshot") if isinstance(request, dict) else None
+        if not isinstance(snapshot, dict) or str(snapshot.get("symbol") or "") != symbol:
+            return False
+        try:
+            snapshot_amount = Decimal(str(snapshot.get("amount")))
+            requested_amount = Decimal(str(intent.get("amount")))
+            order_amount = Decimal(str(order.get("amount")))
+            filled = Decimal(str(order.get("filled")))
+            entry_price = Decimal(str(snapshot.get("entry_price")))
+            entry_fee = Decimal(str(snapshot.get("entry_fee_quote", 0)))
+            precise_amount = Decimal(str(self.exchange.amount_to_precision(symbol, snapshot_amount)))
+            fill_price = float(order.get("average") or order.get("price") or 0)
+            if (not all(value.is_finite() for value in (
+                    snapshot_amount, requested_amount, order_amount, filled,
+                    entry_price, entry_fee, precise_amount))
+                    or snapshot_amount <= 0 or requested_amount != snapshot_amount
+                    or order_amount != precise_amount or filled != order_amount
+                    or entry_price <= 0 or entry_fee < 0
+                    or not math.isfinite(fill_price) or fill_price <= 0):
+                return False
+            client_id = str(intent.get("client_order_id") or "")
+            exchange_client_id = str(order.get("clientOrderId") or (order.get("info") or {}).get("clientOrderId") or "")
+            if exchange_client_id and exchange_client_id != client_id:
+                return False
+            sell_fee = self._resolve_fee_quote_cost(order, symbol, fill_price)
+        except (InvalidOperation, TypeError, ValueError, ArithmeticError):
+            return False
+        if filled > snapshot_amount:
+            return False
+        entry_fee_allocated = entry_fee * filled / snapshot_amount
+        accounting_complete = bool(snapshot.get("accounting_complete", True)) and sell_fee is not None
+        if accounting_complete:
+            fee_total = float(entry_fee_allocated) + float(sell_fee)
+            pnl = (fill_price - float(entry_price)) * float(filled) - fee_total
+            pnl_pct = pnl / (float(entry_price) * float(filled)) * 100
+        else:
+            fee_total = pnl = pnl_pct = None
+        exit_time = datetime.now(timezone.utc).isoformat()
+        exit_policy = str(snapshot.get("exit_policy") or "risk_managed")
+        strategy = {
+            "ema72_signal": "macro_donchian_ema72",
+            "downtrend_rsi_recovery": "downtrend_rsi_recovery_testnet",
+            "risk_managed": "risk_managed",
+        }.get(exit_policy, exit_policy)
+        distance = float(entry_price) - float(snapshot.get("stop_loss_price") or 0)
+        payload = {
+            "action": "SELL", "symbol": symbol, "price": fill_price,
+            "amount": float(filled), "entry_price": float(entry_price),
+            "entry_time": str(snapshot.get("entry_time") or ""),
+            "entry_order_id": str(snapshot.get("order_id") or ""),
+            "timestamp": exit_time, "pnl": pnl, "pnl_pct": pnl_pct,
+            "fee": fee_total, "accounting_complete": accounting_complete,
+            "order_id": order_id,
+            "reason": "Recovered confirmed Binance sell after worker restart",
+            "strategy": strategy, "route": str(snapshot.get("route") or ""),
+            "regime": str(snapshot.get("regime") or ""),
+            "r_multiple": ((fill_price - float(entry_price)) / distance
+                           if distance > 0 else None),
+            "simulated": bool(snapshot.get("simulated", False)),
+        }
+        self.risk_manager.store.append_trade(payload)
+        self.risk_manager._load_trade_history()
+        return True
 
     def _reconcile_exchange_state(
         self, *, allow_manual_review_rebaseline: bool = False,
@@ -1750,6 +1846,11 @@ class TradingBot:
                         self._last_account_balance = balance
                         return False
                 raise ValueError(f"persisted exchange stop for {symbol} is missing or not fully filled")
+            # Repair a crash-interrupted trade row before inventory checks so
+            # the reconstructed exit can be included in the same account
+            # reconciliation pass. Any balance mismatch below still fails
+            # closed and keeps trading halted.
+            self._reconcile_terminal_filled_order_intents()
             for symbol, base in configured.items():
                 reported = Decimal(str(totals.get(base) or 0))
                 local = Decimal(str(self.risk_manager.open_positions[symbol].amount if symbol in self.risk_manager.open_positions else 0))
@@ -1805,7 +1906,6 @@ class TradingBot:
                             "difference": str(excess),
                             "below_minimum_notional": True,
                         })
-            self._reconcile_terminal_filled_order_intents()
             self._reconcile_terminal_no_fill_order_intents()
             if self.risk_manager.store.unresolved_orders():
                 raise ValueError("unresolved local order intent exists")

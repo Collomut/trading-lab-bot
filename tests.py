@@ -4919,6 +4919,43 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(len(store.list_events(10, event_type="filled_order_application_recovered")), 1)
             bot.exchange.fetch_order.assert_called_with("sell-123", "BTC/USDT")
 
+    def test_reconciliation_rebuilds_missing_full_sell_row_from_durable_entry_snapshot(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            position = bot.risk_manager.open_position(
+                "BTC/USDT", 100.0, 1.0, entry_fee_quote=1.0, order_id="buy-123",
+            )
+            snapshot = position.to_dict()
+            bot.risk_manager.open_positions.pop("BTC/USDT")
+            self.assertTrue(bot.risk_manager._save_positions())  # Simulate restart after position removal.
+            store = bot.risk_manager.store
+            store.create_order_intent("sell-recovery-client", "BTC/USDT", "sell", "1", {
+                "symbol": "BTC/USDT", "side": "sell", "amount": "1",
+                "position_snapshot": snapshot,
+            })
+            store.update_order("sell-recovery-client", "SUBMITTED")
+            store.update_order("sell-recovery-client", "FILLED", exchange_order_id="sell-recovery-123",
+                               filled="1", average="110", response={"id": "sell-recovery-123"})
+            bot.exchange = Mock()
+            bot.exchange.fetch_order.return_value = {
+                "id": "sell-recovery-123", "symbol": "BTC/USDT", "side": "sell",
+                "status": "closed", "amount": "1", "filled": "1", "average": "110",
+                "fees": [{"currency": "USDT", "cost": "0.1"}],
+            }
+            bot.exchange.amount_to_precision.return_value = "1"
+
+            bot._reconcile_terminal_filled_order_intents()
+
+            self.assertEqual(store.unresolved_orders(), [])
+            rows = store.list_trades()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["order_id"], "sell-recovery-123")
+            self.assertEqual(rows[0]["entry_order_id"], "buy-123")
+            self.assertTrue(rows[0]["accounting_complete"])
+            self.assertAlmostEqual(rows[0]["pnl"], 8.9)
+            self.assertEqual(len(bot.risk_manager.trade_history), 1)
+
     def test_closed_demo_dust_trade_is_available_for_self_service_fee_review(self):
         with TemporaryDirectory() as persistence_dir:
             cfg = BotConfig(dashboard_token="test_token")
