@@ -513,7 +513,7 @@ class RiskManager:
                             position.stop_policy not in {"exchange", "operator_no_stop"} or
                             (position.stop_policy == "operator_no_stop" and
                              (position.route != "manual_operator" or position.stop_order_id or position.stop_client_order_id)) or
-                            not valid_target or position.exit_policy not in {"risk_managed", "ema72_signal", "downtrend_rsi_recovery"}):
+                            not valid_target or position.exit_policy not in {"risk_managed", "ema72_signal", "ema36_signal", "downtrend_rsi_recovery"}):
                         raise ValueError(f"invalid persisted position for {sym}")
                     self.open_positions[sym] = position
                 if self.open_positions:
@@ -1244,7 +1244,7 @@ class RiskManager:
 
             # Signal-managed trend positions keep their strategy stop and use
             # completed-candle exits; do not add an untested break-even/trail.
-            if position.exit_policy in {"ema72_signal", "downtrend_rsi_recovery"}:
+            if position.exit_policy in {"ema72_signal", "ema36_signal", "downtrend_rsi_recovery"}:
                 if position.should_stop_loss(current_price):
                     to_close.append((symbol, "STOP-LOSS triggered"))
                 elif position.should_take_profit(current_price):

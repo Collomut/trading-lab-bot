@@ -1261,6 +1261,20 @@ class TestRiskManagementAndExecutionLimits(unittest.TestCase):
             self.assertFalse(persisted.break_even_activated)
             self.assertEqual(restored.check_positions(lambda _: 95.0), [("BTC/USDT", "STOP-LOSS triggered")])
 
+    def test_ema36_positions_restore_with_their_existing_exit_policy(self):
+        with TemporaryDirectory() as persistence_dir:
+            rm = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            rm.open_position(
+                "BTC/USDT", 100.0, 1.0, stop_loss_override=96.0,
+                take_profit_override=150.0, exit_policy="ema36_signal",
+            )
+            restored = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            self.assertEqual(restored.open_positions["BTC/USDT"].exit_policy, "ema36_signal")
+            self.assertEqual(restored.open_positions["BTC/USDT"].stop_loss_price, 96.0)
+            self.assertEqual(restored.check_positions(lambda _symbol: 106.0), [])
+            self.assertFalse(restored.open_positions["BTC/USDT"].break_even_activated)
+            self.assertEqual(restored.open_positions["BTC/USDT"].stop_loss_price, 96.0)
+
     def test_break_even_protection_one_way_ratchet(self):
         with TemporaryDirectory() as tmpdir:
             rm = RiskManager(RiskConfig(stop_loss_pct=2.0, take_profit_pct=20.0), persistence_dir=tmpdir)
@@ -2677,6 +2691,67 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertFalse(saved.should_stop_loss(1.0))
             saved.take_profit_price = 110.0
             self.assertEqual(bot.risk_manager.check_positions(lambda _symbol: 110.0), [("BTC/USDT", "TAKE-PROFIT triggered")])
+
+    def test_explicit_no_stop_is_not_misreported_as_a_restored_exchange_stop(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            position = bot.risk_manager.open_position(
+                "BTC/USDT", 100.0, 1.0, route="manual_operator",
+                stop_policy="operator_no_stop", take_profit_override=105.0,
+            )
+            bot.exchange = Mock()
+            bot.exchange.get_current_price.return_value = 106.0
+            bot._submit_market_order = Mock(side_effect=RuntimeError("network unavailable"))
+            bot._sell_was_not_submitted = Mock(return_value=True)
+
+            bot.check_stop_loss_take_profit()
+
+            self.assertIn("no stop loss is active, as selected", bot.risk_manager._halt_reason)
+            self.assertNotIn("protective stop restored", bot.risk_manager._halt_reason)
+            bot.exchange.place_native_stop_loss.assert_not_called()
+
+    def test_no_stop_position_does_not_claim_native_stop_placement(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.risk_manager.open_position(
+                "BTC/USDT", 100.0, 1.0, route="manual_operator",
+                stop_policy="operator_no_stop",
+            )
+            bot.exchange = Mock()
+
+            result = bot._place_and_persist_native_stop("BTC/USDT", "buy-1")
+
+            self.assertFalse(result)
+            bot.exchange.place_native_stop_loss.assert_not_called()
+
+    def test_zero_fill_exit_reports_no_stop_for_operator_managed_position(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_current_price.return_value = 101.0
+            bot._submit_market_order = Mock(return_value=(
+                {"id": "cancelled-sell", "status": "canceled", "filled": "0"},
+                "cancelled-sell-client",
+            ))
+            bot.risk_manager.store.mark_order_applied = Mock()
+            bot._cycle_lock = threading.Lock()
+            position = bot.risk_manager.open_position(
+                "BTC/USDT", 100.0, 1.0, route="manual_operator",
+                stop_policy="operator_no_stop",
+            )
+
+            bot._handle_sell_signal(TradeSignal(Signal.SELL, "BTC/USDT", 1.0, "manual close", {
+                "manual_operator": True,
+            }))
+
+            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertIn("no stop loss is active, as selected", bot.risk_manager._halt_reason)
+            self.assertNotIn("protective stop restored", bot.risk_manager._halt_reason)
+            self.assertEqual(position.stop_policy, "operator_no_stop")
+            bot.exchange.place_native_stop_loss.assert_not_called()
 
     def test_no_stop_policy_is_rejected_for_non_manual_positions_and_persists_for_manual(self):
         with TemporaryDirectory() as persistence_dir:
@@ -4252,6 +4327,38 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(call_args[0], "BTC/USDT")
             self.assertEqual(call_args[1], 0.01)
 
+    def test_manual_no_stop_is_overridden_if_filled_position_cannot_be_persisted(self):
+        with TemporaryDirectory() as persistence_dir:
+            bot = object.__new__(TradingBot)
+            bot.config = BotConfig(dashboard_token="test_token")
+            bot.config.strategy.name = "combined"
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.get_usdt_balance.return_value = 10000.0
+            bot.exchange.get_current_price.return_value = 50000.0
+            bot.exchange.amount_to_precision.return_value = "0.01"
+            bot.exchange.get_market_limits.return_value = {"min_amount": 0.001, "min_cost": 10.0, "active": True}
+            bot.exchange.get_order_book.return_value = {"bids": [[49990.0, 1.0]], "asks": [[50000.0, 1.0]]}
+            bot._has_correlated_open_position = lambda _symbol: (False, "")
+            bot._submit_market_order = Mock(return_value=(
+                {"id": "manual-no-stop-f02", "status": "closed", "filled": "0.01",
+                 "average": "50000.0", "fees": [{"currency": "USDT", "cost": "0.5"}]},
+                "cb-manual-no-stop-f02",
+            ))
+
+            bot.risk_manager.store.write_positions = Mock(side_effect=RuntimeError("disk full"))
+            place_stop = Mock(return_value={"id": "stop-fallback", "status": "open"})
+            with patch.object(bot.exchange, "place_native_stop_loss", place_stop):
+                bot._handle_buy_signal(TradeSignal(
+                    Signal.BUY, "BTC/USDT", 1.0, "Manual Demo test",
+                    {"manual_operator": True, "strategy": "manual_demo",
+                     "route": "manual_operator", "use_stop_loss": False},
+                ))
+
+            self.assertTrue(bot.risk_manager._is_halted)
+            place_stop.assert_called()
+            self.assertEqual(bot.risk_manager.open_positions["BTC/USDT"].stop_policy, "exchange")
+
     def test_initial_stop_recovers_if_exchange_accepted_before_timeout(self):
         with TemporaryDirectory() as persistence_dir:
             bot = object.__new__(TradingBot)
@@ -5657,7 +5764,11 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("Manual Demo", positions)
         self.assertIn("handle_manual_demo_buy", dashboard)
         self.assertIn("Manual buys are available only on Binance Demo", engine)
+        self.assertIn('id="desk-use-stop" type="checkbox" checked', trade_desk)
+        self.assertIn("NO STOP LOSS: losses can continue to grow", trade_desk)
+        self.assertIn("use_stop_loss:useStopLoss", trade_desk)
         self.assertIn("operator-managed Demo position", engine)
+        self.assertIn("None · manual monitoring", positions)
         self.assertIn("The exchange protective stop and configured target remain active", positions)
 
     def test_mobile_overflow_protection_in_css(self):
