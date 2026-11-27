@@ -794,6 +794,13 @@ class WebDashboard:
                 exchange_reconciled=self.bot._last_reconciliation_ok,
                 unresolved_orders=unresolved_orders,
             ),
+            "manual_position_policy_recovery_available": bool(
+                risk._is_halted
+                and self._manual_policy_position_review(risk, positions)
+                and account_available
+                and self.bot._last_reconciliation_ok
+                and not unresolved_orders
+            ),
             "demo_reset_review_available": bool(
                 self.config.exchange.paper_trading
                 and self.config.exchange.paper_environment == "demo"
@@ -1061,17 +1068,36 @@ class WebDashboard:
         return {}
 
     @staticmethod
+    def _manual_policy_position_review(risk, positions):
+        """Whether the stale strategy-profile halt concerns manual positions only."""
+        reason = getattr(risk, "_halt_reason", "")
+        position_values = positions.values() if isinstance(positions, dict) else positions
+        position_values = list(position_values or [])
+        return bool(
+            reason.startswith("Existing position uses a different exit policy")
+            and position_values
+            and all(
+                (position.get("route", "") if isinstance(position, dict)
+                 else getattr(position, "route", "")) == "manual_operator"
+                for position in position_values
+            )
+        )
+
+    @staticmethod
     def _manual_resume_available(risk, positions, *, account_available, exchange_reconciled, unresolved_orders):
-        """Keep protective-stop review reachable when that review must repair reconciliation."""
+        """Expose review only when its guarded recovery conditions are met."""
         reason = getattr(risk, "_halt_reason", "")
         # A stop-fill review is specifically the guarded path for reconciling
         # its final account balance; it must be available when that balance
         # currently fails the ordinary readiness check.
         stop_review = reason.startswith("Exchange stop filled")
+        position_values = positions.values() if isinstance(positions, dict) else positions
+        position_values = list(position_values or [])
+        manual_policy_review = WebDashboard._manual_policy_position_review(risk, positions)
         return bool(
             getattr(risk, "_is_halted", False)
             and RiskManager.is_reviewed_clear_halt(reason)
-            and not positions
+            and (not position_values or manual_policy_review)
             and not unresolved_orders
             and account_available
             and (exchange_reconciled or stop_review)

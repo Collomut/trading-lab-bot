@@ -5673,6 +5673,29 @@ class TestDashboardAuthMiddleware(unittest.TestCase):
             risk, [], account_available=False, exchange_reconciled=True, unresolved_orders=[]
         ))
 
+    def test_stale_exit_policy_review_is_available_for_manual_positions_only_after_reconciliation(self):
+        risk = SimpleNamespace(
+            _is_halted=True,
+            _halt_reason="Existing position uses a different exit policy; review required",
+        )
+        manual_position = {"route": "manual_operator", "stop_policy": "operator_no_stop"}
+        self.assertTrue(WebDashboard._manual_resume_available(
+            risk, {"BTC/USDT": manual_position}, account_available=True,
+            exchange_reconciled=True, unresolved_orders=[]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, {"BTC/USDT": manual_position}, account_available=True,
+            exchange_reconciled=False, unresolved_orders=[]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, {"BTC/USDT": manual_position}, account_available=True,
+            exchange_reconciled=True, unresolved_orders=[object()]
+        ))
+        self.assertFalse(WebDashboard._manual_resume_available(
+            risk, {"BTC/USDT": {"route": "uptrend"}}, account_available=True,
+            exchange_reconciled=True, unresolved_orders=[]
+        ))
+
 class TestTemplatesWordingAndMobileUx(unittest.TestCase):
     """Verifies plain-English wording, absence of misleading claims, glossary clarity, and mobile UI responsiveness."""
 
@@ -5813,6 +5836,8 @@ class TestTemplatesWordingAndMobileUx(unittest.TestCase):
         self.assertIn("operator-managed Demo position", engine)
         self.assertIn("None · manual monitoring", positions)
         self.assertIn("The exchange protective stop and configured target remain active", positions)
+        self.assertIn("manual_position_policy_recovery_available", dashboard)
+        self.assertIn("Your manual position will stay open with its selected stop-loss setting", overview)
 
     def test_mobile_overflow_protection_in_css(self):
         """Verify CSS contains mobile overflow prevention rules and responsive layouts."""
