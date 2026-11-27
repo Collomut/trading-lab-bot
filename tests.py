@@ -4955,6 +4955,8 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertTrue(rows[0]["accounting_complete"])
             self.assertAlmostEqual(rows[0]["pnl"], 8.9)
             self.assertEqual(len(bot.risk_manager.trade_history), 1)
+            self.assertTrue(bot.risk_manager._is_halted)
+            self.assertIn("rebuilt after restart", bot.risk_manager._halt_reason)
 
     def test_closed_demo_dust_trade_is_available_for_self_service_fee_review(self):
         with TemporaryDirectory() as persistence_dir:

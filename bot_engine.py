@@ -1634,6 +1634,12 @@ class TradingBot:
         }
         self.risk_manager.store.append_trade(payload)
         self.risk_manager._load_trade_history()
+        # The original close may have stopped before daily risk counters were
+        # persisted. Keep the account halted for an explicit review instead
+        # of clearing a reconciliation halt and silently resuming entries.
+        self.risk_manager.halt(
+            f"Confirmed sell for {symbol} was rebuilt after restart; review trade accounting and risk state before resuming"
+        )
         return True
 
     def _reconcile_exchange_state(
