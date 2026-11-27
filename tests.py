@@ -93,6 +93,17 @@ from shadow_strategy import evaluate_shadow_candidate
 from regime_router import REGIME_ROUTE_POLICY, evaluate_regime_router
 
 
+def _run_immediate_async_handler(coro):
+    """Run a no-await dashboard handler without opening OS event-loop sockets."""
+    try:
+        coro.send(None)
+    except StopIteration as completed:
+        return completed.value
+    finally:
+        coro.close()
+    raise AssertionError("Expected this dashboard handler to complete without awaiting I/O")
+
+
 class TestShadowLogSafety(unittest.TestCase):
     def test_order_activity_log_exposes_origin_without_sensitive_fields(self):
         safe = WebDashboard._safe_log_details("order_status", {
@@ -4774,6 +4785,106 @@ class TestBotEngineOrderLifecycle(unittest.TestCase):
             self.assertEqual(bot.risk_manager.entry_mode(), "EXIT_ONLY")
             self.assertEqual(bot.exchange.place_market_sell.call_count, 0)
 
+    def test_closed_demo_trade_review_recovers_when_runtime_history_is_missing(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.exchange.paper_trading = True
+            cfg.exchange.paper_environment = "demo"
+            cfg.strategy.trading_pairs = ["BNB/USDT"]
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BNB": "0.00030850"}}, [])
+            bot.exchange.fetch_order.side_effect = [
+                {"id": "9493199775", "symbol": "BNB/USDT", "side": "buy", "status": "closed",
+                 "amount": "0.922", "filled": "0.922", "average": "539.13", "timestamp": 1795220012000},
+                {"id": "9504747443", "symbol": "BNB/USDT", "side": "sell", "status": "closed",
+                 "amount": "0.921", "filled": "0.921", "average": "527.71", "timestamp": 1795226741000},
+            ]
+            bot.exchange.fetch_order_trades.side_effect = [
+                [{"order": "9493199775", "symbol": "BNB/USDT", "amount": "0.922",
+                  "fees": [{"currency": "BNB", "cost": "0.0006915"}]}],
+                [{"order": "9504747443", "symbol": "BNB/USDT", "amount": "0.921",
+                  "fees": [{"currency": "USDT", "cost": "0.48602091"}]}],
+            ]
+            bot.risk_manager.store.append_trade({
+                "action": "SELL", "symbol": "BNB/USDT", "price": 527.71,
+                "amount": 0.921, "entry_price": 539.13,
+                "entry_time": "2026-11-20T22:00:13.665576+00:00",
+                "timestamp": "2026-11-21T08:42:25.860151+00:00", "pnl": None,
+                "pnl_pct": None, "fee": None, "accounting_complete": False,
+                "order_id": "9504747443", "reason": "Closed manually on Binance Demo",
+            })
+            bot.risk_manager.store.append_event("external_close_reconciled", {
+                "symbol": "BNB/USDT", "buy_order_id": "9493199775", "sell_order_id": "9504747443",
+                "remaining_dust": "0.00030850", "accounting_complete": False,
+            })
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BNB": "0.00030850"})
+            bot.risk_manager.trade_history.clear()  # Simulate a stale or empty runtime cache.
+            bot._cycle_lock = threading.Lock()
+
+            result = bot.reconcile_closed_external_trade()
+
+            self.assertTrue(result["success"], result["message"])
+            self.assertTrue(bot.risk_manager.store.list_trades()[0]["accounting_complete"])
+            self.assertEqual(len(bot.risk_manager.trade_history), 1)
+            self.assertEqual(bot.risk_manager.trade_history[0].order_id, "9504747443")
+            self.assertTrue(bot.risk_manager.trade_history[0].accounting_complete)
+            bot.exchange.place_market_sell.assert_not_called()
+
+    def test_closed_demo_trade_review_collapses_duplicate_runtime_cache_records(self):
+        with TemporaryDirectory() as persistence_dir:
+            cfg = BotConfig(dashboard_token="test_token")
+            cfg.exchange.paper_trading = True
+            cfg.exchange.paper_environment = "demo"
+            cfg.strategy.trading_pairs = ["BNB/USDT"]
+            bot = object.__new__(TradingBot)
+            bot.config = cfg
+            bot.risk_manager = RiskManager(RiskConfig(), persistence_dir=persistence_dir)
+            bot.exchange = Mock()
+            bot.exchange.is_fallback_simulated = False
+            bot.exchange.fetch_account_snapshot.return_value = ({"total": {"BNB": "0.00030850"}}, [])
+            bot.exchange.fetch_order.side_effect = [
+                {"id": "9493199775", "symbol": "BNB/USDT", "side": "buy", "status": "closed",
+                 "amount": "0.922", "filled": "0.922", "average": "539.13", "timestamp": 1795220012000},
+                {"id": "9504747443", "symbol": "BNB/USDT", "side": "sell", "status": "closed",
+                 "amount": "0.921", "filled": "0.921", "average": "527.71", "timestamp": 1795226741000},
+            ]
+            bot.exchange.fetch_order_trades.side_effect = [
+                [{"order": "9493199775", "symbol": "BNB/USDT", "amount": "0.922",
+                  "fees": [{"currency": "BNB", "cost": "0.0006915"}]}],
+                [{"order": "9504747443", "symbol": "BNB/USDT", "amount": "0.921",
+                  "fees": [{"currency": "USDT", "cost": "0.48602091"}]}],
+            ]
+            incomplete = {
+                "action": "SELL", "symbol": "BNB/USDT", "price": 527.71,
+                "amount": 0.921, "entry_price": 539.13,
+                "entry_time": "2026-11-20T22:00:13.665576+00:00",
+                "timestamp": "2026-11-21T08:42:25.860151+00:00", "pnl": None,
+                "pnl_pct": None, "fee": None, "accounting_complete": False,
+                "order_id": "9504747443", "reason": "Closed manually on Binance Demo",
+            }
+            bot.risk_manager.store.append_trade(incomplete)
+            bot.risk_manager.store.append_event("external_close_reconciled", {
+                "symbol": "BNB/USDT", "buy_order_id": "9493199775", "sell_order_id": "9504747443",
+                "remaining_dust": "0.00030850", "accounting_complete": False,
+            })
+            bot.risk_manager.store.write_state("baseline_asset_balances", {"BNB": "0.00030850"})
+            bot.risk_manager._load_trade_history()
+            bot.risk_manager._load_trade_history()  # Simulate duplicate cache hydration.
+            self.assertEqual(len(bot.risk_manager.trade_history), 2)
+            bot._cycle_lock = threading.Lock()
+
+            result = bot.reconcile_closed_external_trade()
+
+            self.assertTrue(result["success"], result["message"])
+            self.assertEqual(len(bot.risk_manager.trade_history), 1)
+            self.assertTrue(bot.risk_manager.trade_history[0].accounting_complete)
+            self.assertEqual(len(bot.risk_manager.store.list_trades()), 1)
+            bot.exchange.place_market_sell.assert_not_called()
+
     def test_closed_demo_dust_trade_is_available_for_self_service_fee_review(self):
         with TemporaryDirectory() as persistence_dir:
             cfg = BotConfig(dashboard_token="test_token")
@@ -5454,14 +5565,9 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
     """Verifies authentication, CSRF origin checking, health probes, and cache-control headers."""
 
     def setUp(self):
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
         with patch("exchange.ExchangeConnector._create_exchange"):
             self.dashboard = WebDashboard(port=8080)
             self.dashboard.config.dashboard_token = "secret123"
-
-    def tearDown(self):
-        self.loop.close()
 
     def test_verify_token_mechanisms(self):
         # 1. Bearer Token
@@ -5511,7 +5617,7 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
             self.dashboard.bot.risk_manager.trade_history = [record]
 
             req = make_mocked_request("GET", "/api/trades/summary")
-            resp = self.loop.run_until_complete(self.dashboard.handle_trades_summary(req))
+            resp = _run_immediate_async_handler(self.dashboard.handle_trades_summary(req))
             self.assertEqual(resp.status, 200)
             body = json.loads(resp.text)
             self.assertEqual(body["summary"]["total_fees"], 3.0)
@@ -5520,7 +5626,7 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
             self.assertEqual(body["by_symbol"]["BTC/USDT"]["fees"], 3.0)
 
             req_csv = make_mocked_request("GET", "/api/trades/export.csv")
-            resp_csv = self.loop.run_until_complete(self.dashboard.handle_trades_export(req_csv))
+            resp_csv = _run_immediate_async_handler(self.dashboard.handle_trades_export(req_csv))
             self.assertEqual(resp_csv.status, 200)
             self.assertIn("text/csv", resp_csv.headers["Content-Type"])
             self.assertIn("BTC/USDT", resp_csv.text)
@@ -5528,7 +5634,7 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
 
     def test_liveness_and_readiness_probes(self):
         req_live = make_mocked_request("GET", "/api/health/liveness")
-        resp_live = self.loop.run_until_complete(self.dashboard.handle_liveness(req_live))
+        resp_live = _run_immediate_async_handler(self.dashboard.handle_liveness(req_live))
         self.assertEqual(resp_live.status, 200)
         self.assertIn('"status": "alive"', resp_live.text)
 
@@ -5568,13 +5674,13 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
 
     def test_asset_serving_and_cache_control(self):
         req_css = make_mocked_request("GET", "/assets/app.css", match_info={"name": "app.css"})
-        resp_css = self.loop.run_until_complete(self.dashboard.handle_asset(req_css))
+        resp_css = _run_immediate_async_handler(self.dashboard.handle_asset(req_css))
         self.assertEqual(resp_css.status, 200)
         self.assertIn("no-cache", resp_css.headers.get("Cache-Control", ""))
 
         req_missing = make_mocked_request("GET", "/assets/unknown.txt", match_info={"name": "unknown.txt"})
         with self.assertRaises(HTTPNotFound):
-            self.loop.run_until_complete(self.dashboard.handle_asset(req_missing))
+            _run_immediate_async_handler(self.dashboard.handle_asset(req_missing))
 
     def test_f16_healthcheck_handlers(self):
         """F-16: Liveness and readiness probes respond with clean status without secrets."""
@@ -5592,14 +5698,14 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
         dash._worker_last_error = ""
 
         req = Mock()
-        resp = asyncio.run(dash.handle_liveness(req))
+        resp = _run_immediate_async_handler(dash.handle_liveness(req))
         self.assertEqual(resp.status, 200)
 
         dash.bot._last_reconciliation_ok = True
         dash.bot.risk_manager._is_halted = False
         dash.bot.risk_manager.entry_mode.return_value = "ACTIVE"
         dash.bot.exchange.is_fallback_simulated = False
-        resp_ready = asyncio.run(dash.handle_readiness(req))
+        resp_ready = _run_immediate_async_handler(dash.handle_readiness(req))
         self.assertEqual(resp_ready.status, 200)
         ready_body = json.loads(resp_ready.text)
         self.assertEqual(ready_body["worker"]["state"], "running")
@@ -5607,19 +5713,19 @@ class TestDashboardApiAndSecurity(unittest.TestCase):
         self.assertTrue(ready_body["worker"]["last_cycle_ok"])
 
         dash._worker_cycle_completed_at = time.time() - 301
-        resp_stale = asyncio.run(dash.handle_readiness(req))
+        resp_stale = _run_immediate_async_handler(dash.handle_readiness(req))
         self.assertEqual(resp_stale.status, 503)
         self.assertEqual(json.loads(resp_stale.text)["worker"]["state"], "stale")
         dash._worker_cycle_completed_at = time.time() - 5
 
         dash.bg_task.done.return_value = True
-        resp_stopped = asyncio.run(dash.handle_readiness(req))
+        resp_stopped = _run_immediate_async_handler(dash.handle_readiness(req))
         self.assertEqual(resp_stopped.status, 503)
         self.assertFalse(json.loads(resp_stopped.text)["worker"]["task_alive"])
         dash.bg_task.done.return_value = False
 
         dash.bot.risk_manager._is_halted = True
-        resp_halted = asyncio.run(dash.handle_readiness(req))
+        resp_halted = _run_immediate_async_handler(dash.handle_readiness(req))
         self.assertEqual(resp_halted.status, 503)
 
 

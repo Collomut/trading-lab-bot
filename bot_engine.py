@@ -33,7 +33,7 @@ from strategies import (
     DowntrendRsiRecoveryTestnetStrategy, MacroTrendPullbackStrategy, get_strategy, ohlcv_to_dataframe,
     Signal, TradeSignal,
 )
-from risk_manager import RiskManager
+from risk_manager import RiskManager, TradeRecord
 from shadow_strategy import CANDIDATE_ID, evaluate_shadow_candidate
 from regime_router import evaluate_regime_router
 from shadow_ledger import ShadowLedger
@@ -3499,22 +3499,36 @@ class TradingBot:
                 logger.warning("Closed Demo trade review failed for %s (%s)", symbol, type(exc).__name__)
                 return {"success": False, "message": "The saved trade, private Binance fills, commissions, or dust did not reconcile exactly. No trade record was changed."}
 
-            memory_matches = [record for record in self.risk_manager.trade_history
-                              if record.symbol == symbol and str(record.order_id) == sell_order_id
-                              and not record.accounting_complete]
-            if len(memory_matches) != 1:
-                return {"success": False, "message": "Runtime trade history did not uniquely match the saved record. No record was changed."}
             update_trade = getattr(self.risk_manager.store, "update_trade_by_order_id", None)
             if not callable(update_trade) or not update_trade(sell_order_id, symbol, updated):
                 return {"success": False, "message": "The saved trade was not uniquely matched in durable storage. No record was changed."}
-            record = memory_matches[0]
-            record.entry_price = float(buy_avg)
-            record.exit_price = float(sell_avg)
-            record.amount = float(sold)
-            record.fee = float(total_fee)
-            record.pnl = float(net_pnl)
-            record.pnl_pct = float(pnl_pct)
-            record.accounting_complete = True
+            # The uniquely matched durable ledger row is authoritative. Runtime
+            # history can be empty after a cache refresh or contain stale duplicate
+            # objects; neither should prevent a verified exchange close from being
+            # recorded or leave performance metrics inconsistent with the ledger.
+            record = TradeRecord(
+                symbol=symbol, side="long", entry_price=float(buy_avg),
+                exit_price=float(sell_avg), amount=float(sold),
+                entry_time=str(updated.get("entry_time") or ""),
+                exit_time=str(updated.get("timestamp") or ""),
+                pnl=float(net_pnl), pnl_pct=float(pnl_pct),
+                reason=str(updated.get("reason") or ""), fee=float(total_fee),
+                accounting_complete=True, strategy=str(updated.get("strategy") or ""),
+                route=str(updated.get("route") or ""), regime=str(updated.get("regime") or ""),
+                r_multiple=(float(updated["r_multiple"]) if updated.get("r_multiple") is not None else None),
+                order_id=sell_order_id, simulated=bool(updated.get("simulated", False)),
+            )
+            matching_indices = [index for index, cached in enumerate(self.risk_manager.trade_history)
+                                if cached.symbol == symbol and str(cached.order_id) == sell_order_id]
+            if matching_indices:
+                first = matching_indices[0]
+                self.risk_manager.trade_history = [
+                    cached for index, cached in enumerate(self.risk_manager.trade_history)
+                    if index not in matching_indices
+                ]
+                self.risk_manager.trade_history.insert(min(first, len(self.risk_manager.trade_history)), record)
+            else:
+                self.risk_manager.trade_history.append(record)
             # Rebuild today's realized daily counter from the now-complete ledger.
             # This is idempotent across retries/restarts and includes any other
             # completed trades from the same UTC day.
